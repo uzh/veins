@@ -6,7 +6,8 @@
       (* 1. Define a config module *)
       module Cfg = struct
         let database =
-          Vena.Entity.(create root (Url.create (Sys.getenv "DATABASE_URL")))
+          let url = Vena.Url.create (Sys.getenv "DATABASE_URL") in
+          Vena.Database.create (Vena.Label.create "root") url
         let database_pool_size = 10
         let expected_databases = 1
         module Dialect = Vena.Dialect.Mariadb
@@ -21,7 +22,7 @@
       (* 4. Register migrations (at module init time) *)
       let () =
         Vena.Migration.register
-          ~for_database:Vena.Entity.root
+          ~for_database:(Vena.Label.create "root")
           Vena.Migration.(
             empty "my_app"
             |> add_step
@@ -37,16 +38,17 @@
 
       (* 5. Initialize pool and run migrations *)
       let () =
+        let root = Vena.Label.create "root" in
         Db.Pool.initialize ();
         Lwt_main.run
-          (match%lwt M.run_all Vena.Entity.root () with
+          (match%lwt M.run_all root () with
            | Ok () -> Lwt.return_unit
            | Error e -> failwith (Vena.Error.show e))
     ]}
 *)
 
-(** Core domain types (labels, URLs, statuses). *)
-module Entity = Entity
+(** Include core domain types (labels, URLs, statuses). *)
+include Entity
 
 (** Error types and exception used throughout the library. *)
 module Error = Error
@@ -64,3 +66,7 @@ module Pools = Pools
 (** Standalone migration module.  Types and registry at the top level;
     apply [Migration.Make(Db)] to get a runner for a specific pool. *)
 module Migration = Migration
+
+(** Global in-process registry of named {!Database.t} entries.
+    Register databases at startup, retrieve them by label anywhere. *)
+module Databases = Databases

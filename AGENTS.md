@@ -50,7 +50,7 @@ make test
 
 ```ocaml
 module type ConfigSig = sig
-  val database : Entity.t          (* primary DB — label becomes key *)
+  val database : Entity.Database.t (* primary DB — label becomes key *)
   val database_pool_size : int
   val expected_databases : int
   module Dialect : Dialect.Sig     (* not required with vena-mariadb/postgresql *)
@@ -61,7 +61,7 @@ Prefer the dialect packages for end users — they remove the `Dialect` field:
 
 ```ocaml
 module Db = Vena_mariadb.Pools.Make (struct
-  let database = Entity.create (Entity.Label.create "root") url
+  let database = Database.create (Label.create "root") url
   (* pool_size defaults to 10, expected_databases to 5 *)
 end)
 ```

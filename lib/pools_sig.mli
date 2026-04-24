@@ -8,7 +8,7 @@ module type ConfigSig = sig
   (** The primary database for this pool instance.
       Its label becomes the canonical name used throughout the pool and serves
       as the default target for query helpers. *)
-  val database : Entity.t
+  val database : Entity.Database.t
 
   (** Maximum number of open connections Caqti will maintain per pool.
       Tune this to match the connection limit of the database server. *)
@@ -39,15 +39,15 @@ module type Sig = sig
     (** Register the primary database from [Config] and any
         [additional_pools] so they are available via [fetch].
         Idempotent: labels already present in the cache are skipped. *)
-    val initialize : ?additional_pools:Entity.t list -> unit -> unit
+    val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit
 
     (** Register a new pool entry.
         Logs a warning and is a no-op if the label is already registered. *)
-    val add : ?required:bool -> Entity.t -> unit
+    val add : ?required:bool -> Entity.Database.t -> unit
 
     (** Drain the existing pool for [database.label] and open a fresh one.
         Useful after a credential rotation. *)
-    val reset : ?required:bool -> Entity.t -> unit Lwt.t
+    val reset : ?required:bool -> Entity.Database.t -> unit Lwt.t
 
     (** Drain and remove a pool from the cache.  Safe to call even if the
         label is not registered (logged as info and ignored). *)
@@ -84,7 +84,7 @@ module type Sig = sig
     val reset_label
       :  ?required:bool
       -> Entity.Label.t
-      -> Entity.t
+      -> Entity.Database.t
       -> unit Lwt.t
 
     (** All databases currently registered in the cache, optionally
@@ -93,7 +93,7 @@ module type Sig = sig
       :  ?allowed_status:Entity.Status.t list
       -> ?exclude:Entity.Label.t list
       -> unit
-      -> Entity.t list
+      -> Entity.Database.t list
 
     (** Raise a human-readable {!Error.Exn} for a Caqti error.
         Also marks the affected pool as [Fail] so the next [fetch] will

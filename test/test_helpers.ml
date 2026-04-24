@@ -3,10 +3,10 @@
 open Vena
 open Caqti_request.Infix
 
-(** Build an [Entity.t] from an environment variable, falling back to [default].*)
+(** Build a [Database.t] from an environment variable, falling back to [default].*)
 let db_of_env_or var default =
   let raw = match Sys.getenv_opt var with Some s when s <> "" -> s | _ -> default in
-  Entity.(create root (Url.create raw))
+  Database.(create (Label.create "root") (Url.create raw))
 ;;
 
 (** Simple query: return [1] from the database to verify connectivity. *)
@@ -17,7 +17,7 @@ let ping_request =
 
 (** Create a trivial test table, insert a row, query it back, then drop it. *)
 let roundtrip_test (module Db : Pools_sig.Sig) () =
-  let label = Entity.root in
+  let label = Label.create "root" in
   (* Create table *)
   let create_req =
     Caqti_type.(unit ->. unit) ~oneshot:true
@@ -49,7 +49,7 @@ let roundtrip_test (module Db : Pools_sig.Sig) () =
 
 (** Insert two rows, then read them back inside a transaction. *)
 let transaction_test (module Db : Pools_sig.Sig) () =
-  let label = Entity.root in
+  let label = Label.create "root" in
   let create_req =
     Caqti_type.(unit ->. unit) ~oneshot:true
       {|CREATE TABLE IF NOT EXISTS vena_test_tx (
@@ -84,7 +84,7 @@ let transaction_test (module Db : Pools_sig.Sig) () =
 
 (** Verify that a failed transaction is rolled back. *)
 let rollback_test (module Db : Pools_sig.Sig) () =
-  let label = Entity.root in
+  let label = Label.create "root" in
   let create_req =
     Caqti_type.(unit ->. unit) ~oneshot:true
       {|CREATE TABLE IF NOT EXISTS vena_test_rb (
@@ -122,7 +122,7 @@ let rollback_test (module Db : Pools_sig.Sig) () =
 
 (** Register a two-step migration, run it, verify the state, test down. *)
 let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) () =
-  let label = Entity.root in
+  let label = Label.create "root" in
   let ns = Migration.Namespace.create ("vena_test_mig_" ^ string_of_int (Random.int 100000)) in
   (* Drop leftover tables so we always start from a clean slate. *)
   let drop_state =
@@ -183,3 +183,109 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
   let%lwt () = Db.exec label drop_tbl () in
   Lwt.return_unit
 ;;
+
+(* ------------------------------------------------------------------ *)
+(* Performance helpers                                                  *)
+(* ------------------------------------------------------------------ *)
+
+(** Fire [n] concurrent pings against the pool and assert all return 1.
+    Exercises pool borrowing under concurrency. *)
+let concurrent_queries_test ?(n = 20) (module Db : Pools_sig.Sig) () =
+  let label = Label.create "root" in
+  let tasks = List.init n (fun _ -> Db.find label ping_request ()) in
+  let%lwt results = Lwt.all tasks in
+  assert (List.for_all (fun r -> r = 1) results);
+  Lwt.return_unit
+;;
+
+(** Insert [n] rows sequentially and verify the count matches. *)
+let bulk_insert_test ?(n = 100) (module Db : Pools_sig.Sig) () =
+  let label = Label.create "root" in
+  let create_req =
+    Caqti_type.(unit ->. unit) ~oneshot:true
+      {|CREATE TABLE IF NOT EXISTS vena_test_bulk (
+          id  INTEGER PRIMARY KEY,
+          val INTEGER NOT NULL
+        )|}
+  in
+  let insert_req =
+    Caqti_type.(t2 int int ->. unit) ~oneshot:true
+      {|INSERT INTO vena_test_bulk (id, val) VALUES (?, ?)|}
+  in
+  let count_req =
+    Caqti_type.(unit ->! int) ~oneshot:true {|SELECT COUNT(*) FROM vena_test_bulk|}
+  in
+  let drop_req =
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_bulk|}
+  in
+  let%lwt () = Db.exec label create_req () in
+  let%lwt () =
+    Lwt_list.iter_s (fun i -> Db.exec label insert_req (i, i * 2)) (List.init n Fun.id)
+  in
+  let%lwt count = Db.find label count_req () in
+  let%lwt () = Db.exec label drop_req () in
+  assert (count = n);
+  Lwt.return_unit
+;;
+
+(* ------------------------------------------------------------------ *)
+(* Resilience helpers                                                   *)
+(* ------------------------------------------------------------------ *)
+
+(** Disconnect the pool then issue a query — the pool must auto-reconnect. *)
+let disconnect_reconnect_test (module Db : Pools_sig.Sig) () =
+  let label = Label.create "root" in
+  let%lwt () = Db.Pool.disconnect label in
+  let%lwt result = Db.find label ping_request () in
+  assert (result = 1);
+  Lwt.return_unit
+;;
+
+(** Querying an unknown label must raise [Error.Exn (Database_not_registered _)]. *)
+let unregistered_label_test (module Db : Pools_sig.Sig) () =
+  let unknown = Label.create "vena_nonexistent_________label" in
+  Lwt.catch
+    (fun () ->
+      let%lwt _ = Db.find unknown ping_request () in
+      Lwt.fail_with "expected Database_not_registered but query succeeded")
+    (function
+      | Error.Exn (Error.Database_not_registered _) -> Lwt.return_unit
+      | exn -> Lwt.fail exn)
+;;
+
+(** Reset the pool entry for [db] then verify queries still work. *)
+let pool_reset_test (module Db : Pools_sig.Sig) db () =
+  let label = Label.create "root" in
+  let%lwt () = Db.Pool.reset db in
+  let%lwt result = Db.find label ping_request () in
+  assert (result = 1);
+  Lwt.return_unit
+;;
+
+(** Register two extra pools pointing to [url], disconnect them both, then
+    verify each auto-reconnects independently and the primary pool is
+    unaffected throughout. *)
+let multi_disconnect_reconnect_test (module Db : Pools_sig.Sig) url () =
+  let lbl_a = Label.create "vena_extra_a" in
+  let lbl_b = Label.create "vena_extra_b" in
+  let db_a = Database.create lbl_a (Url.create url) in
+  let db_b = Database.create lbl_b (Url.create url) in
+  Db.Pool.add db_a;
+  Db.Pool.add db_b;
+  (* Disconnect both extra pools *)
+  let%lwt () = Db.Pool.disconnect lbl_a in
+  let%lwt () = Db.Pool.disconnect lbl_b in
+  (* Each should auto-reconnect on the next query *)
+  let%lwt r_a = Db.find lbl_a ping_request () in
+  let%lwt r_b = Db.find lbl_b ping_request () in
+  assert (r_a = 1);
+  assert (r_b = 1);
+  (* Primary pool must still be healthy *)
+  let%lwt r_root = Db.find (Label.create "root") ping_request () in
+  assert (r_root = 1);
+  (* Clean up *)
+  let%lwt () = Db.Pool.drop lbl_a in
+  let%lwt () = Db.Pool.drop lbl_b in
+  Lwt.return_unit
+;;
+

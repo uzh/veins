@@ -23,13 +23,13 @@ module MigMariaDb = Migration.Make (MariaDb)
 
 let setup () =
   MariaDb.Pool.initialize ();
-  match MariaDb.Pool.connect Entity.root with
+  match MariaDb.Pool.connect (Label.create "root") with
   | Ok () -> ()
   | Error e -> failwith (Error.show e)
 ;;
 
 let test_ping () =
-  let%lwt result = MariaDb.find Entity.root Test_helpers.ping_request () in
+  let%lwt result = MariaDb.find (Label.create "root") Test_helpers.ping_request () in
   assert (result = 1);
   Lwt.return_unit
 ;;
@@ -39,13 +39,22 @@ let test_transaction () = Test_helpers.transaction_test (module MariaDb) ()
 let test_rollback () = Test_helpers.rollback_test (module MariaDb) ()
 let test_migration () = Test_helpers.migration_test (module MariaDb) (module MigMariaDb) ()
 
+let test_concurrent_queries () = Test_helpers.concurrent_queries_test (module MariaDb) ()
+let test_bulk_insert () = Test_helpers.bulk_insert_test (module MariaDb) ()
+let test_disconnect_reconnect () = Test_helpers.disconnect_reconnect_test (module MariaDb) ()
+let test_unregistered_label () = Test_helpers.unregistered_label_test (module MariaDb) ()
+let test_pool_reset () = Test_helpers.pool_reset_test (module MariaDb) MariaDb.Config.database ()
+
+let test_multi_disconnect_reconnect () =
+  Test_helpers.multi_disconnect_reconnect_test (module MariaDb) default_url ()
+
 let test_pool_add_and_drop () =
   let extra_url = default_url in
   let extra_db =
-    Entity.(create (Label.create "mariadb_extra") (Url.create extra_url))
+    Database.(create (Label.create "mariadb_extra") (Url.create extra_url))
   in
   MariaDb.Pool.add extra_db;
-  let%lwt () = MariaDb.Pool.drop (Entity.Label.create "mariadb_extra") in
+  let%lwt () = MariaDb.Pool.drop (Label.create "mariadb_extra") in
   Lwt.return_unit
 ;;
 
@@ -65,5 +74,16 @@ let () =
            ] )
        ; ( "migrations"
          , [ test_case "run_all" `Quick (fun _ () -> test_migration ()) ] )
+       ; ( "performance"
+         , [ test_case "concurrent_queries" `Slow (fun _ () -> test_concurrent_queries ())
+           ; test_case "bulk_insert" `Slow (fun _ () -> test_bulk_insert ())
+           ] )
+       ; ( "resilience"
+         , [ test_case "disconnect_reconnect" `Quick (fun _ () -> test_disconnect_reconnect ())
+           ; test_case "unregistered_label" `Quick (fun _ () -> test_unregistered_label ())
+           ; test_case "pool_reset" `Quick (fun _ () -> test_pool_reset ())
+           ; test_case "multi_disconnect_reconnect" `Quick
+               (fun _ () -> test_multi_disconnect_reconnect ())
+           ] )
        ]
 ;;

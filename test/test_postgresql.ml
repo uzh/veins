@@ -23,13 +23,13 @@ module MigPostgres = Migration.Make (PostgresDb)
 
 let setup () =
   PostgresDb.Pool.initialize ();
-  match PostgresDb.Pool.connect Entity.root with
+  match PostgresDb.Pool.connect (Label.create "root") with
   | Ok () -> ()
   | Error e -> failwith (Error.show e)
 ;;
 
 let test_ping () =
-  let%lwt result = PostgresDb.find Entity.root Test_helpers.ping_request () in
+  let%lwt result = PostgresDb.find (Label.create "root") Test_helpers.ping_request () in
   assert (result = 1);
   Lwt.return_unit
 ;;
@@ -39,14 +39,23 @@ let test_transaction () = Test_helpers.transaction_test (module PostgresDb) ()
 let test_rollback () = Test_helpers.rollback_test (module PostgresDb) ()
 let test_migration () = Test_helpers.migration_test (module PostgresDb) (module MigPostgres) ()
 
+let test_concurrent_queries () = Test_helpers.concurrent_queries_test (module PostgresDb) ()
+let test_bulk_insert () = Test_helpers.bulk_insert_test (module PostgresDb) ()
+let test_disconnect_reconnect () = Test_helpers.disconnect_reconnect_test (module PostgresDb) ()
+let test_unregistered_label () = Test_helpers.unregistered_label_test (module PostgresDb) ()
+let test_pool_reset () = Test_helpers.pool_reset_test (module PostgresDb) PostgresDb.Config.database ()
+
+let test_multi_disconnect_reconnect () =
+  Test_helpers.multi_disconnect_reconnect_test (module PostgresDb) default_url ()
+
 let test_multi_pool () =
   (* Second pool with its own label pointing to the same DB *)
   let alt_url = default_url in
   let alt_db =
-    Entity.(create (Label.create "pg_alt") (Url.create alt_url))
+    Database.(create (Label.create "pg_alt") (Url.create alt_url))
   in
   PostgresDb.Pool.add alt_db;
-  let alt_label = Entity.Label.create "pg_alt" in
+  let alt_label = Label.create "pg_alt" in
   let%lwt result = PostgresDb.find alt_label Test_helpers.ping_request () in
   assert (result = 1);
   let%lwt () = PostgresDb.Pool.drop alt_label in
@@ -69,5 +78,16 @@ let () =
            ] )
        ; ( "migrations"
          , [ test_case "run_all" `Quick (fun _ () -> test_migration ()) ] )
+       ; ( "performance"
+         , [ test_case "concurrent_queries" `Slow (fun _ () -> test_concurrent_queries ())
+           ; test_case "bulk_insert" `Slow (fun _ () -> test_bulk_insert ())
+           ] )
+       ; ( "resilience"
+         , [ test_case "disconnect_reconnect" `Quick (fun _ () -> test_disconnect_reconnect ())
+           ; test_case "unregistered_label" `Quick (fun _ () -> test_unregistered_label ())
+           ; test_case "pool_reset" `Quick (fun _ () -> test_pool_reset ())
+           ; test_case "multi_disconnect_reconnect" `Quick
+               (fun _ () -> test_multi_disconnect_reconnect ())
+           ] )
        ]
 ;;

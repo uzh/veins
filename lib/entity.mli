@@ -40,17 +40,18 @@ module Status : sig
   val pp : Format.formatter -> t -> unit
 end
 
-type t =
-  { label : Label.t
-  ; url : Url.t
-  ; status : Status.t
-  }
+module Database: sig
+  type t =
+    { label : Label.t
+    ; url : Url.t
+    ; status : Status.t
+    }
 
-val create : ?status:Status.t -> Label.t -> Url.t -> t
-val label : t -> Label.t
-val url : t -> Url.t
-val status : t -> Status.t
-val root : Label.t
+  val create : ?status:Status.t -> Label.t -> Url.t -> t
+  val label : t -> Label.t
+  val url : t -> Url.t
+  val status : t -> Status.t
+end
 
 module Dynparam : sig
   type t = Pack : 'a Caqti_type.t * 'a -> t

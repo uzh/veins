@@ -6,7 +6,7 @@
 (** Configuration required to instantiate a connection pool. *)
 module type ConfigSig = sig
   (** The primary database for this pool instance (its label and URL). *)
-  val database : Entity.t
+  val database : Entity.Database.t
 
   (** Maximum number of open connections per pool (default: 10). *)
   val database_pool_size : int
@@ -33,15 +33,15 @@ module type Sig = sig
     (** Register the primary database and any [additional_pools] so they are
         available for [fetch].  Idempotent: already-registered labels are
         skipped. *)
-    val initialize : ?additional_pools:Entity.t list -> unit -> unit
+    val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit
 
     (** Register a new pool.  Logs a warning and skips if the label already
         exists. *)
-    val add : ?required:bool -> Entity.t -> unit
+    val add : ?required:bool -> Entity.Database.t -> unit
 
     (** Drain and reconnect an existing pool.  Useful after a credential
         rotation. *)
-    val reset : ?required:bool -> Entity.t -> unit Lwt.t
+    val reset : ?required:bool -> Entity.Database.t -> unit Lwt.t
 
     (** Drain and remove a pool from the cache. *)
     val drop : Entity.Label.t -> unit Lwt.t
@@ -71,7 +71,7 @@ module type Sig = sig
     val reset_label
       :  ?required:bool
       -> Entity.Label.t
-      -> Entity.t
+      -> Entity.Database.t
       -> unit Lwt.t
 
     (** All registered pool entries, optionally filtered by status. *)
@@ -79,7 +79,7 @@ module type Sig = sig
       :  ?allowed_status:Entity.Status.t list
       -> ?exclude:Entity.Label.t list
       -> unit
-      -> Entity.t list
+      -> Entity.Database.t list
 
     (** Raise a human-readable [Error.Exn] for a Caqti error, also
         disconnecting the affected pool so it can reconnect on next use. *)

@@ -98,7 +98,7 @@ let add_step s m = { m with steps = m.steps @ [ s ] }
 
 let registry : (Entity.Label.t * t) list ref = ref []
 
-let register ?(for_database = Entity.root) migration =
+let register ?(for_database = Entity.Label.create "root") migration =
   registry := !registry @ [ (for_database, migration) ]
 ;;
 

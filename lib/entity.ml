@@ -110,19 +110,18 @@ end = struct
 end
 
 (** A registered database entry. *)
-type t =
-  { label : Label.t
-  ; url : Url.t
-  ; status : Status.t
-  }
+module Database = struct
+  type t =
+    { label : Label.t
+    ; url : Url.t
+    ; status : Status.t
+    }
 
-let create ?(status = Status.Active) label url = { label; url; status }
-let label { label; _ } = label
-let url { url; _ } = url
-let status { status; _ } = status
-
-(** The conventional label for the primary / root database. *)
-let root = Label.create "root"
+  let create ?(status = Status.Active) label url = { label; url; status }
+  let label { label; _ } = label
+  let url { url; _ } = url
+  let status { status; _ } = status
+end
 
 (** Dynamic parameter accumulator for queries whose arity is not known at
     compile time (e.g. variable-length [IN (…)] clauses). *)

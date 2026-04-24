@@ -28,8 +28,8 @@ Both pull in `vena` and the appropriate Caqti driver automatically. There is no 
 open Vena
 
 (* The URL is typically read from an environment variable. *)
-let url = Entity.Url.create (Sys.getenv "DATABASE_URL")
-let db  = Entity.create (Entity.Label.create "root") url
+let url = Url.create (Sys.getenv "DATABASE_URL")
+let db  = Database.create (Label.create "root") url
 
 module Db = Vena_mariadb.Pools.Make (struct
   let database = db
@@ -142,12 +142,12 @@ The `vena-gen` executable is installed as part of the `vena` package.
 ## Multiple databases
 
 ```ocaml
-let analytics = Entity.create (Entity.Label.create "analytics") analytics_url
+let analytics = Database.create (Label.create "analytics") analytics_url
 
 let () =
   Db.Pool.initialize ~additional_pools:[ analytics ] ();
   (* later: *)
-  let%lwt rows = Db.collect (Entity.Label.create "analytics") req () in
+  let%lwt rows = Db.collect (Label.create "analytics") req () in
   ...
 ```
 

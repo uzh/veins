@@ -24,7 +24,7 @@ struct
 
   module Pool_entry = struct
     type t =
-      { database : Entity.t
+      { database : Entity.Database.t
       ; required : bool
       ; connection : connection_state
       ; n_retries : int
@@ -34,8 +34,8 @@ struct
       { database; required; connection = Close; n_retries = 0 }
     ;;
 
-    let database_label { database; _ } = Entity.label database
-    let database_url { database; _ } = Entity.url database
+    let database_label { database; _ } = Entity.Database.label database
+    let database_url { database; _ } = Entity.Database.url database
     let increment_retry p = { p with n_retries = p.n_retries + 1 }
     let reset_retry p = { p with n_retries = 0 }
     let mark_fail msg p = { p with connection = Fail msg }
@@ -120,7 +120,7 @@ struct
     let initialize ?(additional_pools = []) () =
       CCList.iter
         (fun db ->
-          let label = Entity.label db in
+          let label = Entity.Database.label db in
           if CCOption.is_none (Cache.find_opt label)
           then
             Pool_entry.make ~required:true db
@@ -130,7 +130,7 @@ struct
     ;;
 
     let add ?required database =
-      let label = Entity.label database in
+      let label = Entity.Database.label database in
       match Cache.find_opt label with
       | Some _ ->
         Log.warn (fun m ->
@@ -154,7 +154,7 @@ struct
     ;;
 
     let reset ?required database =
-      let%lwt () = drop (Entity.label database) in
+      let%lwt () = drop (Entity.Database.label database) in
       Pool_entry.make ?required database
       |> Pool_entry.connect_base
       |> Cache.replace;
@@ -209,7 +209,7 @@ struct
       Cache.all ()
       |> CCList.filter (fun (e : Pool_entry.t) ->
         let lbl = Pool_entry.database_label e in
-        let st = Entity.status e.database in
+        let st = Entity.Database.status e.database in
         CCList.mem ~eq:Entity.Status.equal st allowed_status
         && not (CCList.mem ~eq:Entity.Label.equal lbl exclude))
       |> CCList.map (fun (e : Pool_entry.t) -> e.database)

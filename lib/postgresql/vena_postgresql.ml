@@ -5,7 +5,7 @@
 
     {[
       module Db = Vena_postgresql.Pools.Make (struct
-        let database = Entity.create (Entity.Label.create "root") url
+        let database = Vena.Database.create (Vena.Label.create "root") url
       end)
     ]}
 
@@ -24,7 +24,7 @@ module Dialect = Vena.Dialect.Postgresql
 
     {[
       module Db = Vena_postgresql.Pools.Make (struct
-        let database = Entity.create (Entity.Label.create "root") url
+        let database = Vena.Database.create (Vena.Label.create "root") url
       end)
     ]}
 
@@ -35,7 +35,7 @@ module Dialect = Vena.Dialect.Postgresql
     use {!Vena.Dialect.of_url} to validate this at runtime if needed. *)
 module Pools = struct
   module Make (C : sig
-    val database : Vena.Entity.t
+    val database : Vena.Database.t
   end) =
     Vena.Pools.Make (struct
       let database = C.database

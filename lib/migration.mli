@@ -17,7 +17,7 @@
        steps at the end).}
     {- Migrations can target different databases.  Use [~for_database] to
        associate a migration with a specific {!Entity.Label.t}.  Omitting the
-       argument targets {!Entity.root}.}
+       argument defaults to [Label.create "root"].}
     {- Down migrations are optional.  A step whose [~down] is absent is
        irreversible; {!RunnerSig.down} will log a warning and skip it.}}
 
@@ -28,7 +28,7 @@
 
       let () =
         Vena.Migration.register
-          ~for_database:Vena.Entity.root
+          ~for_database:(Vena.Label.create "root")
           Vena.Migration.(
             empty
               (Namespace.create "my_app")
@@ -47,9 +47,9 @@
       let () =
         Db.Pool.initialize ();
         Lwt_main.run
-          (let%lwt drifts = M.check Vena.Entity.root () in
+          (let%lwt drifts = M.check (Vena.Label.create "root") () in
            (* drifts is [] when the DB is fully up to date *)
-           match%lwt M.run_all Vena.Entity.root () with
+           match%lwt M.run_all (Vena.Label.create "root") () with
            | Ok ()   -> Lwt.return_unit
            | Error e -> failwith (Vena.Error.show e))
     ]}
@@ -166,7 +166,7 @@ val add_step : step -> t -> t
     {!RunnerSig.run_all} is next called for that label.
 
     @param for_database  The database label this migration targets.
-                         Defaults to {!Entity.root}. *)
+                         Defaults to [Entity.Label.create "root"]. *)
 val register : ?for_database:Entity.Label.t -> t -> unit
 
 (* ------------------------------------------------------------------ *)

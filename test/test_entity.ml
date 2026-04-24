@@ -4,22 +4,22 @@ open Vena
 
 let test_label_roundtrip () =
   let s = "my_tenant" in
-  let l = Entity.Label.create s in
-  assert (Entity.Label.value l = s);
-  assert (Entity.Label.equal l (Entity.Label.create s));
-  assert (Entity.Label.show l = s)
+  let l = Label.create s in
+  assert (Label.value l = s);
+  assert (Label.equal l (Label.create s));
+  assert (Label.show l = s)
 ;;
 
 let test_url_uri () =
   let raw = "mariadb://user:pass@host/db" in
-  let u = Entity.Url.create raw in
-  assert (Entity.Url.value u = raw);
-  let uri = Entity.Url.to_uri u in
+  let u = Url.create raw in
+  assert (Url.value u = raw);
+  let uri = Url.to_uri u in
   assert (Uri.scheme uri = Some "mariadb")
 ;;
 
 let test_status_roundtrip () =
-  let open Entity.Status in
+  let open Status in
   CCList.iter
     (fun st ->
       match of_string (show st) with
@@ -29,7 +29,7 @@ let test_status_roundtrip () =
 ;;
 
 let test_dynparam () =
-  let open Entity.Dynparam in
+  let open Dynparam in
   let (Pack (t, v)) =
     empty
     |> add Caqti_type.int 42
