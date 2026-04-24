@@ -1,0 +1,9 @@
+(library
+ (name vena)
+ (public_name vena)
+ (libraries containers caqti caqti-lwt.unix lwt lwt.unix logs fmt uri ptime)
+ (wrapped true)
+ (preprocess
+  (pps lwt_ppx)))
+
+(include_subdirs unqualified)

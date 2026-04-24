@@ -1,0 +1,13 @@
+(executables
+ (names test_entity test_mariadb test_postgresql)
+ (libraries
+  vena
+  caqti-driver-mariadb
+  caqti-driver-postgresql
+  lwt
+  lwt.unix
+  alcotest
+  alcotest-lwt
+  containers)
+ (preprocess
+  (pps lwt_ppx)))

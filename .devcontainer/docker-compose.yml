@@ -1,0 +1,53 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # default user is "opam"
+      - ..:/workspace:cached
+      - opam:/home/opam/.opam:cached
+      - build:/workspace/_build:cached
+      # Add database folders to dev container
+      - db-mariadb:/databases/db-mariadb/:ro
+      - db-postgres:/databases/db-postgres/:ro
+    environment:
+      - OPAMSOLVERTIMEOUT=180
+    depends_on:
+      - database-mariadb
+      - database-postgres
+    command: sleep infinity
+
+  database-mariadb:
+    image: mariadb:10.6
+    restart: unless-stopped
+    command: --max_allowed_packet=629145600
+    ports: [ 3344:3306 ]
+    environment:
+      TZ: UTC
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: password
+      MYSQL_DATABASE: development
+      MYSQL_ROOT_PASSWORD: password
+    volumes:
+      - db-mariadb:/var/lib/mysql
+      - ./init-mariadb:/docker-entrypoint-initdb.d/:ro
+
+  database-postgres:
+    image: postgres:18
+    restart: unless-stopped
+    ports: [ 3345:5432 ]
+    environment:
+      TZ: UTC
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: root
+      POSTGRES_DB: development
+    volumes:
+      - db-postgres:/var/lib/postgresql
+      - ./init-postgres:/docker-entrypoint-initdb.d/:ro
+
+volumes:
+  opam:
+  build:
+  db-mariadb:
+  db-postgres:

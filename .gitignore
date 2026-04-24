@@ -1,0 +1,26 @@
+# OCaml build artifacts
+_build/
+*.byte
+*.native
+*.annot
+*.cmo
+*.cmi
+*.cmt
+*.cmx
+*.cmxa
+*.cma
+*.o
+*.a
+
+# opam
+*.opam.locked
+_opam/
+
+# Editor artifacts
+.merlin
+.vscode/settings.json
+*.bak
+*~
+
+# macOS
+.DS_Store
