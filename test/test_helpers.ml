@@ -256,7 +256,7 @@ let unregistered_label_test (module Db : Pools_sig.Sig) () =
     (fun () ->
        let%lwt _ = Db.find unknown ping_request () in
        Lwt.fail_with "expected Database_not_registered but query succeeded")
-    (function
+    (function[@warning "-4"]
       | Error.Exn (Error.Database_not_registered _) -> Lwt.return_unit
       | exn -> Lwt.fail exn)
 ;;

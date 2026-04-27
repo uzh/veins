@@ -106,11 +106,11 @@ struct
 
   module Pool = struct
     let drain_if_open (entry : Pool_entry.t) =
-      match entry.connection with
+      match entry.Pool_entry.connection with
       | Open pool ->
         let%lwt () = Caqti_lwt_unix.Pool.drain pool in
         Lwt.return_unit
-      | _ -> Lwt.return_unit
+      | Close | Fail _ -> Lwt.return_unit
     ;;
 
     let initialize ?(additional_pools = []) () =
@@ -164,7 +164,7 @@ struct
       | None -> Error (Error.Database_not_registered (Entity.Label.show label))
       | Some entry ->
         let rec try_connect (e : Pool_entry.t) =
-          match e.connection with
+          match e.Pool_entry.connection with
           | Fail msg -> Error (Error.Connection_failed msg)
           | Close ->
             let e2 = Pool_entry.connect_base e in
@@ -197,10 +197,10 @@ struct
       Cache.all ()
       |> CCList.filter (fun (e : Pool_entry.t) ->
         let lbl = Pool_entry.database_label e in
-        let st = Entity.Database.status e.database in
+        let st = Entity.Database.status e.Pool_entry.database in
         CCList.mem ~eq:Entity.Status.equal st allowed_status
         && not (CCList.mem ~eq:Entity.Label.equal lbl exclude))
-      |> CCList.map (fun (e : Pool_entry.t) -> e.database)
+      |> CCList.map (fun (e : Pool_entry.t) -> e.Pool_entry.database)
     ;;
 
     let fetch ?(retries = 2) label =
@@ -209,14 +209,15 @@ struct
         | None ->
           raise (Error.Exn (Error.Database_not_registered (Entity.Label.show label)))
         | Some entry ->
-          (match entry.connection with
+          (match entry.Pool_entry.connection with
            | Open pool ->
-             if entry.n_retries > 0 then Cache.replace (Pool_entry.reset_retry entry);
+             if entry.Pool_entry.n_retries > 0
+             then Cache.replace (Pool_entry.reset_retry entry);
              Lwt.return pool
            | Close ->
              Cache.replace (Pool_entry.connect_base entry);
              go ()
-           | Fail _ when entry.n_retries >= retries ->
+           | Fail _ when entry.Pool_entry.n_retries >= retries ->
              raise
                (Error.Exn
                   (Error.Connection_failed
