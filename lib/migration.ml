@@ -14,7 +14,7 @@ module Id = struct
   let create s = s
   let value s = s
   let equal = String.equal
-  let pp fmt s = Format.pp_print_string fmt s
+  let pp = Format.pp_print_string
   let show s = s
 end
 
@@ -28,7 +28,7 @@ module Namespace = struct
   let create s = s
   let value s = s
   let equal = String.equal
-  let pp fmt s = Format.pp_print_string fmt s
+  let pp = Format.pp_print_string
   let show s = s
 end
 

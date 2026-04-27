@@ -1,7 +1,18 @@
 (library
  (name veins)
  (public_name veins)
- (libraries containers caqti caqti-lwt.unix lwt lwt.unix logs fmt uri ptime)
+ (libraries
+  containers
+  caqti
+  caqti-lwt
+  caqti-lwt.unix
+  lwt
+  lwt.unix
+  unix
+  logs
+  fmt
+  uri
+  ptime)
  (wrapped true)
  (preprocess
   (pps lwt_ppx)))

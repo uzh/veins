@@ -9,7 +9,7 @@ module Tbl = CCHashtbl.Make (LabelHash)
 
 let store : Entity.Database.t Tbl.t = Tbl.create 8
 let register db = Tbl.replace store (Entity.Database.label db) db
-let find label = Tbl.find_opt store label
+let find = Tbl.find_opt store
 
 let find_exn label =
   match Tbl.find_opt store label with

@@ -2,10 +2,14 @@
  (names test_entity test_migration test_mariadb test_postgresql)
  (libraries
   veins
+  caqti
+  caqti-lwt
+  caqti-lwt.unix
   caqti-driver-mariadb
   caqti-driver-postgresql
   lwt
   lwt.unix
+  uri
   alcotest
   alcotest-lwt
   containers)

@@ -1,5 +1,7 @@
 (lang dune 3.17)
 
+(implicit_transitive_deps false)
+
 (name veins)
 
 (version 0.1.0)

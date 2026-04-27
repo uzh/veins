@@ -6,7 +6,7 @@ module Label = struct
   let equal = String.equal
   let compare = String.compare
   let hash = Hashtbl.hash
-  let pp fmt s = Format.pp_print_string fmt s
+  let pp = Format.pp_print_string
   let show s = s
 end
 
@@ -15,9 +15,9 @@ module Url = struct
 
   let create s = s
   let value s = s
-  let to_uri s = Uri.of_string s
+  let to_uri = Uri.of_string
   let equal = String.equal
-  let pp fmt s = Format.pp_print_string fmt s
+  let pp = Format.pp_print_string
   let show s = s
 end
 
