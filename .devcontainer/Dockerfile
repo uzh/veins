@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential \
   curl \
   git \
+  libgmp-dev \
+  libmariadb-dev \
+  libpq-dev \
+  pkg-config \
   wget \
   zsh \
   && rm -rf /var/lib/apt/lists/*

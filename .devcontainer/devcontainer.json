@@ -13,6 +13,9 @@
     "database-postgres"
   ],
   "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=${localEnv:HOME}/.gitconfig,target=/home/opam/.gitconfig,type=bind,consistency=cached,readonly"
+  ],
   "postCreateCommand": ".devcontainer/post-create.sh",
   // Use 'settings' to set *default* container specific settings.json values on container create.
   // You can edit these settings after create using File > Preferences > Settings > Remote.
@@ -34,7 +37,7 @@
         },
         "ocaml.sandbox": {
           "kind": "opam",
-          "switch": "5.4.0"
+          "switch": "5.4"
         }
       },
       // Add the IDs of extensions you want installed when the container is created in the array below.
