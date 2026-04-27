@@ -1,4 +1,4 @@
-(** Error types and exception raised by Vena query helpers. *)
+(** Error types and exception raised by Veins query helpers. *)
 
 (** Errors that can occur during pool operations, queries, and migrations. *)
 type t =

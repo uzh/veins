@@ -4,7 +4,7 @@
     - [POSTGRES_URL]  e.g. [postgresql://root:root@database-postgres/development]
 *)
 
-open Vena
+open Veins
 
 let default_url = "postgresql://root:root@database-postgres/development"
 
@@ -66,7 +66,7 @@ let () =
   setup ();
   let open Alcotest_lwt in
   Lwt_main.run
-  @@ run "Vena PostgreSQL"
+  @@ run "Veins PostgreSQL"
        [ ( "connectivity"
          , [ test_case "ping" `Quick (fun _ () -> test_ping ())
            ; test_case "roundtrip" `Quick (fun _ () -> test_roundtrip ())

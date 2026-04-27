@@ -1,6 +1,6 @@
-(** Unit tests for {!Vena.Entity} that require no database. *)
+(** Unit tests for {!Veins.Entity} that require no database. *)
 
-open Vena
+open Veins
 
 let test_label_roundtrip () =
   let s = "my_tenant" in

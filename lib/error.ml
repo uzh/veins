@@ -1,4 +1,4 @@
-(** Error types for the Vena database library. *)
+(** Error types for the Veins database library. *)
 
 type t =
   | Connection_failed of string

@@ -1,16 +1,16 @@
 (lang dune 3.17)
 
-(name vena)
+(name veins)
 
 (version 0.1.0)
 
 (generate_opam_files true)
 
 (package
- (name vena)
+ (name veins)
  (synopsis "Database connection pooling and migration library for OCaml")
  (description
-  "Vena provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The vena-gen tool generates migration file boilerplate.")
+  "Veins provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The veins-gen tool generates migration file boilerplate.")
  (depends
   (ocaml
    (>= 5.0.0))
@@ -52,27 +52,27 @@
     (>= 2.1.0)))))
 
 (package
- (name vena-mariadb)
- (synopsis "MariaDB driver convenience package for Vena")
+ (name veins-mariadb)
+ (synopsis "MariaDB driver convenience package for Veins")
  (description
-  "Depends on vena and caqti-driver-mariadb. Provides Vena_mariadb.Dialect for use in pool configs. Adding (vena-mariadb ...) to your opam deps is all you need for a MariaDB-backed Vena application.")
+  "Depends on veins and caqti-driver-mariadb. Provides Veins_mariadb.Dialect for use in pool configs. Adding (veins-mariadb ...) to your opam deps is all you need for a MariaDB-backed Veins application.")
  (depends
   (ocaml
    (>= 5.0.0))
-  (vena
+  (veins
    (= :version))
   (caqti-driver-mariadb
    (>= 2.1.0))))
 
 (package
- (name vena-postgresql)
- (synopsis "PostgreSQL driver convenience package for Vena")
+ (name veins-postgresql)
+ (synopsis "PostgreSQL driver convenience package for Veins")
  (description
-  "Depends on vena and caqti-driver-postgresql. Provides Vena_postgresql.Dialect for use in pool configs. Adding (vena-postgresql ...) to your opam deps is all you need for a PostgreSQL-backed Vena application.")
+  "Depends on veins and caqti-driver-postgresql. Provides Veins_postgresql.Dialect for use in pool configs. Adding (veins-postgresql ...) to your opam deps is all you need for a PostgreSQL-backed Veins application.")
  (depends
   (ocaml
    (>= 5.0.0))
-  (vena
+  (veins
    (= :version))
   (caqti-driver-postgresql
    (>= 2.1.0))))

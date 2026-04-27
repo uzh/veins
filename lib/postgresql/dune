@@ -1,6 +1,6 @@
 (include_subdirs no)
 
 (library
- (name vena_postgresql)
- (public_name vena-postgresql)
- (libraries vena caqti-driver-postgresql))
+ (name veins_postgresql)
+ (public_name veins-postgresql)
+ (libraries veins caqti-driver-postgresql))

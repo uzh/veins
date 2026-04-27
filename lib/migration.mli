@@ -23,13 +23,13 @@
 
     {b Quick-start}
     {[
-      module Db = Vena.Pools.Make (MyCfg)
-      module M  = Vena.Migration.Make (Db)
+      module Db = Veins.Pools.Make (MyCfg)
+      module M  = Veins.Migration.Make (Db)
 
       let () =
-        Vena.Migration.register
-          ~for_database:(Vena.Label.create "root")
-          Vena.Migration.(
+        Veins.Migration.register
+          ~for_database:(Veins.Label.create "root")
+          Veins.Migration.(
             empty
               (Namespace.create "my_app")
               ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
@@ -47,11 +47,11 @@
       let () =
         Db.Pool.initialize ();
         Lwt_main.run
-          (let%lwt drifts = M.check (Vena.Label.create "root") () in
+          (let%lwt drifts = M.check (Veins.Label.create "root") () in
            (* drifts is [] when the DB is fully up to date *)
-           match%lwt M.run_all (Vena.Label.create "root") () with
+           match%lwt M.run_all (Veins.Label.create "root") () with
            | Ok ()   -> Lwt.return_unit
-           | Error e -> failwith (Vena.Error.show e))
+           | Error e -> failwith (Veins.Error.show e))
     ]}
 *)
 
@@ -242,8 +242,8 @@ end
 (** Instantiate a migration runner backed by [Db].
 
     {[
-      module Db = Vena.Pools.Make (MyCfg)
-      module M  = Vena.Migration.Make (Db)
+      module Db = Veins.Pools.Make (MyCfg)
+      module M  = Veins.Migration.Make (Db)
     ]}
 *)
 module Make : functor (_ : Pools_sig.Sig) -> RunnerSig

@@ -30,7 +30,7 @@ let template ~module_name ~namespace ~written_at ~uuid1 ~uuid2 =
   Printf.sprintf
     {|(** Migration: %s *)
 
-open Vena
+open Veins
 
 let migration =
   Migration.(

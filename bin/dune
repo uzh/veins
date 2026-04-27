@@ -1,5 +1,5 @@
 (executable
- (name vena_gen)
- (public_name vena-gen)
- (package vena)
+ (name veins_gen)
+ (public_name veins-gen)
+ (package veins)
  (libraries unix))

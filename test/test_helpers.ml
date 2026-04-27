@@ -1,6 +1,6 @@
 (** Shared test helpers for both MariaDB and PostgreSQL integration tests. *)
 
-open Vena
+open Veins
 open Caqti_request.Infix
 
 (** Build a [Database.t] from an environment variable, falling back to [default].*)

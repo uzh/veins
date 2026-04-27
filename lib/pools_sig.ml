@@ -1,4 +1,4 @@
-(** Module-type signatures for the Vena pool functor.
+(** Module-type signatures for the Veins pool functor.
 
     Application code creates a concrete pool by applying [Pools.Make] to a
     module satisfying {!ConfigSig}. *)

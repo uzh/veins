@@ -2,7 +2,7 @@
 
 open Caqti_request.Infix
 
-let src = Logs.Src.create "vena.pools"
+let src = Logs.Src.create "veins.pools"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 

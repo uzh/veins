@@ -1,4 +1,4 @@
-(** Core domain types for Vena database entries. *)
+(** Core domain types for Veins database entries. *)
 
 (** A short, human-readable identifier for a database connection.
     Typically something like ["root"], ["tenant_acme"], or ["analytics"]. *)

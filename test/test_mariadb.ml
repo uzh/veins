@@ -4,7 +4,7 @@
     - [MARIADB_URL]  e.g. [mariadb://admin:password@database-mariadb/development]
 *)
 
-open Vena
+open Veins
 
 let default_url = "mariadb://admin:password@database-mariadb/development"
 
@@ -62,7 +62,7 @@ let () =
   setup ();
   let open Alcotest_lwt in
   Lwt_main.run
-  @@ run "Vena MariaDB"
+  @@ run "Veins MariaDB"
        [ ( "connectivity"
          , [ test_case "ping" `Quick (fun _ () -> test_ping ())
            ; test_case "roundtrip" `Quick (fun _ () -> test_roundtrip ())

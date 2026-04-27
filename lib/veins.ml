@@ -1,4 +1,4 @@
-(** Vena — database connection pooling for OCaml.
+(** Veins — database connection pooling for OCaml.
 
     {b Quick-start}
 
@@ -6,24 +6,24 @@
       (* 1. Define a config module *)
       module Cfg = struct
         let database =
-          let url = Vena.Url.create (Sys.getenv "DATABASE_URL") in
-          Vena.Database.create (Vena.Label.create "root") url
+          let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
+          Veins.Database.create (Veins.Label.create "root") url
         let database_pool_size = 10
         let expected_databases = 1
-        module Dialect = Vena.Dialect.Mariadb
+        module Dialect = Veins.Dialect.Mariadb
       end
 
       (* 2. Instantiate the pool *)
-      module Db = Vena.Pools.Make (Cfg)
+      module Db = Veins.Pools.Make (Cfg)
 
       (* 3. Instantiate the migration runner *)
-      module M = Vena.Migration.Make (Db)
+      module M = Veins.Migration.Make (Db)
 
       (* 4. Register migrations (at module init time) *)
       let () =
-        Vena.Migration.register
-          ~for_database:(Vena.Label.create "root")
-          Vena.Migration.(
+        Veins.Migration.register
+          ~for_database:(Veins.Label.create "root")
+          Veins.Migration.(
             empty "my_app"
             |> add_step
                  (step
@@ -38,12 +38,12 @@
 
       (* 5. Initialize pool and run migrations *)
       let () =
-        let root = Vena.Label.create "root" in
+        let root = Veins.Label.create "root" in
         Db.Pool.initialize ();
         Lwt_main.run
           (match%lwt M.run_all root () with
            | Ok () -> Lwt.return_unit
-           | Error e -> failwith (Vena.Error.show e))
+           | Error e -> failwith (Veins.Error.show e))
     ]}
 *)
 

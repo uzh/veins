@@ -1,7 +1,7 @@
-# Vena — Agent Guidelines
+# Veins — Agent Guidelines
 
 Database connection-pooling and migration library for OCaml (OCaml 5, Lwt, Caqti).
-Three opam packages: `vena` (core), `vena-mariadb`, `vena-postgresql`.
+Three opam packages: `veins` (core), `veins-mariadb`, `veins-postgresql`.
 
 ## Build & Test
 
@@ -35,10 +35,10 @@ make test
 
 | Path | Purpose |
 |------|---------|
-| `lib/` | Core library (`vena` package); `include_subdirs unqualified` |
-| `lib/mariadb/` | `vena-mariadb` package — dialect + pre-configured `Pools.Make` |
-| `lib/postgresql/` | `vena-postgresql` package — dialect + pre-configured `Pools.Make` |
-| `bin/vena_gen.ml` | `vena-gen` CLI — generates migration file boilerplate |
+| `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
+| `lib/mariadb/` | `veins-mariadb` package — dialect + pre-configured `Pools.Make` |
+| `lib/postgresql/` | `veins-postgresql` package — dialect + pre-configured `Pools.Make` |
+| `bin/vena_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
 | `test/` | Alcotest integration tests (MariaDB + PostgreSQL) |
 | `dune-project` | Source of truth for all three packages and their dependencies |
 
@@ -46,21 +46,21 @@ make test
 
 ### Connection pools
 
-`Vena.Pools.Make` is a functor over `Pools_sig.ConfigSig`:
+`Veins.Pools.Make` is a functor over `Pools_sig.ConfigSig`:
 
 ```ocaml
 module type ConfigSig = sig
   val database : Entity.Database.t (* primary DB — label becomes key *)
   val database_pool_size : int
   val expected_databases : int
-  module Dialect : Dialect.Sig     (* not required with vena-mariadb/postgresql *)
+  module Dialect : Dialect.Sig     (* not required with veins-mariadb/postgresql *)
 end
 ```
 
 Prefer the dialect packages for end users — they remove the `Dialect` field:
 
 ```ocaml
-module Db = Vena_mariadb.Pools.Make (struct
+module Db = Veins_mariadb.Pools.Make (struct
   let database = Database.create (Label.create "root") url
   (* pool_size defaults to 10, expected_databases to 5 *)
 end)
@@ -77,7 +77,7 @@ module Runner = Migration.Make (Db)
 (* then: Runner.run_all, Runner.up, Runner.down, Runner.check, Runner.status, Runner.pending *)
 ```
 
-Generate boilerplate with `vena-gen "label text"` → `migration_<timestamp>_<slug>.ml`.
+Generate boilerplate with `veins-gen "label text"` → `migration_<timestamp>_<slug>.ml`.
 New migration files call `Migration.register` — no explicit list to maintain.
 
 ### Dialects
@@ -100,7 +100,7 @@ Query helpers raise `Error.Exn` on failure (not `result` returns). Wrap explicit
 ## Generating Migrations
 
 ```bash
-vena-gen "create orders table"
+veins-gen "create orders table"
 # → migration_20260424T143000_create_orders_table.ml
 ```
 

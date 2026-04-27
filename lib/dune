@@ -1,6 +1,6 @@
 (library
- (name vena)
- (public_name vena)
+ (name veins)
+ (public_name veins)
  (libraries containers caqti caqti-lwt.unix lwt lwt.unix logs fmt uri ptime)
  (wrapped true)
  (preprocess

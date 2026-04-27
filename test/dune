@@ -1,7 +1,7 @@
 (executables
  (names test_entity test_mariadb test_postgresql)
  (libraries
-  vena
+  veins
   caqti-driver-mariadb
   caqti-driver-postgresql
   lwt

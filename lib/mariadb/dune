@@ -1,6 +1,6 @@
 (include_subdirs no)
 
 (library
- (name vena_mariadb)
- (public_name vena-mariadb)
- (libraries vena caqti-driver-mariadb))
+ (name veins_mariadb)
+ (public_name veins-mariadb)
+ (libraries veins caqti-driver-mariadb))
