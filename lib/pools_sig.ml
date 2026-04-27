@@ -68,11 +68,7 @@ module type Sig = sig
     val disconnect : Entity.Label.t -> unit Lwt.t
 
     (** Disconnect then recreate a pool entry with fresh connection params. *)
-    val reset_label
-      :  ?required:bool
-      -> Entity.Label.t
-      -> Entity.Database.t
-      -> unit Lwt.t
+    val reset_label : ?required:bool -> Entity.Label.t -> Entity.Database.t -> unit Lwt.t
 
     (** All registered pool entries, optionally filtered by status. *)
     val find_all
@@ -83,10 +79,7 @@ module type Sig = sig
 
     (** Raise a human-readable [Error.Exn] for a Caqti error, also
         disconnecting the affected pool so it can reconnect on next use. *)
-    val raise_caqti_error
-      :  Entity.Label.t
-      -> ('a, Caqti_error.t) Lwt_result.t
-      -> 'a Lwt.t
+    val raise_caqti_error : Entity.Label.t -> ('a, Caqti_error.t) Lwt_result.t -> 'a Lwt.t
   end
 
   (** {1 Query helpers}
@@ -101,11 +94,7 @@ module type Sig = sig
     -> 'a Lwt.t
 
   (** Execute a statement with no result rows. *)
-  val exec
-    :  Entity.Label.t
-    -> ('a, unit, [ `Zero ]) Caqti_request.t
-    -> 'a
-    -> unit Lwt.t
+  val exec : Entity.Label.t -> ('a, unit, [ `Zero ]) Caqti_request.t -> 'a -> unit Lwt.t
 
   (** Collect all result rows into a list. *)
   val collect
@@ -116,11 +105,7 @@ module type Sig = sig
 
   (** Return exactly one row; raise if the query returns zero or more than
       one row. *)
-  val find
-    :  Entity.Label.t
-    -> ('a, 'b, [< `One ]) Caqti_request.t
-    -> 'a
-    -> 'b Lwt.t
+  val find : Entity.Label.t -> ('a, 'b, [< `One ]) Caqti_request.t -> 'a -> 'b Lwt.t
 
   (** Return at most one row, or [None]. *)
   val find_opt
@@ -160,5 +145,4 @@ module type Sig = sig
     :  Entity.Label.t
     -> (Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
     -> unit Lwt.t
-
 end

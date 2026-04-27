@@ -5,15 +5,15 @@
     threading configuration through the call stack.
 
     {[
-      (* Register databases once at startup *)
-      let () =
-        let url = Entity.Url.create (Sys.getenv "DATABASE_URL") in
-        Databases.register (Entity.Database.create (Entity.Label.create "root") url)
+    (* Register databases once at startup *)
+    let () =
+      let url = Entity.Url.create (Sys.getenv "DATABASE_URL") in
+      Databases.register (Entity.Database.create (Entity.Label.create "root") url)
+    ;;
 
-      (* Retrieve later by label *)
-      let db = Databases.find_exn (Entity.Label.create "root")
-    ]}
-*)
+    (* Retrieve later by label *)
+    let db = Databases.find_exn (Entity.Label.create "root")
+    ]} *)
 
 (** Register [db] in the global cache, keyed by [Entity.Database.label db].
     Silently replaces any existing entry with the same label. *)

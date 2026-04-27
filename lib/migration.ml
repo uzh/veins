@@ -2,8 +2,7 @@
 
     Types and the global registry live at the top level.  Apply [Make] to a
     pool module ([Pools.Make] output) to get [run_all], [up], [down],
-    [status], [pending], and [check].  See [migration.mli] for full docs.
-*)
+    [status], [pending], and [check].  See [migration.mli] for full docs. *)
 
 open Caqti_request.Infix
 
@@ -81,12 +80,12 @@ type t =
 
 let step ~id ~label ?(check_fk = true) ?down up = { id; label; up; down; check_fk }
 
-
 let ptime_of_string s =
   match Ptime.of_rfc3339 s with
   | Ok (t, _, _) -> t
   | Error _ ->
-    invalid_arg (Printf.sprintf "Migration.ptime_of_string: invalid RFC 3339 string: %S" s)
+    invalid_arg
+      (Printf.sprintf "Migration.ptime_of_string: invalid RFC 3339 string: %S" s)
 ;;
 
 let empty namespace ~written_at = { namespace; written_at; steps = [] }
@@ -99,7 +98,7 @@ let add_step s m = { m with steps = m.steps @ [ s ] }
 let registry : (Entity.Label.t * t) list ref = ref []
 
 let register ?(for_database = Entity.Label.create "root") migration =
-  registry := !registry @ [ (for_database, migration) ]
+  registry := !registry @ [ for_database, migration ]
 ;;
 
 (* ------------------------------------------------------------------ *)
@@ -170,7 +169,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let sql = Db.Config.Dialect.insert_applied_step ~table:(table_name ()) in
     let req =
       (Caqti_type.(t2 (t3 string string string) (t2 ptime ptime)) ->. Caqti_type.unit)
-        ~oneshot:true sql
+        ~oneshot:true
+        sql
     in
     Db.exec db_label req ((Id.value s.id, Namespace.value namespace, s.label), (n, n))
   ;;
@@ -233,26 +233,30 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     in
     if CCList.is_empty pending_steps
     then (
-      Log.info (fun m -> m "No pending steps for migration '%s'" (Namespace.show mig.namespace));
+      Log.info (fun m ->
+        m "No pending steps for migration '%s'" (Namespace.show mig.namespace));
       Lwt_result.return ())
     else (
       Log.info (fun m ->
-        m "Applying %d step(s) for migration '%s'" (CCList.length pending_steps) (Namespace.show mig.namespace));
+        m
+          "Applying %d step(s) for migration '%s'"
+          (CCList.length pending_steps)
+          (Namespace.show mig.namespace));
       (Lwt.catch
          (fun () ->
-           let%lwt () =
-             Lwt_list.iter_s (run_step_up db_label mig.namespace) pending_steps
-           in
-           Lwt_result.return ())
+            let%lwt () =
+              Lwt_list.iter_s (run_step_up db_label mig.namespace) pending_steps
+            in
+            Lwt_result.return ())
          (fun exn ->
-           let msg =
-             Printf.sprintf
-               "Migration '%s' failed: %s"
-               (Namespace.show mig.namespace)
-               (Printexc.to_string exn)
-           in
-           Log.err (fun m -> m "%s" msg);
-           Lwt_result.fail (Error.Migration_failed msg))
+            let msg =
+              Printf.sprintf
+                "Migration '%s' failed: %s"
+                (Namespace.show mig.namespace)
+                (Printexc.to_string exn)
+            in
+            Log.err (fun m -> m "%s" msg);
+            Lwt_result.fail (Error.Migration_failed msg))
        : (unit, Error.t) Lwt_result.t))
   ;;
 
@@ -260,9 +264,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let%lwt () = setup db_label in
     let%lwt applied_ids = get_applied_ids db_label in
     let applied =
-      CCList.filter
-        (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
-        mig.steps
+      CCList.filter (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids) mig.steps
     in
     let to_revert = CCList.rev applied in
     if CCList.is_empty to_revert
@@ -278,25 +280,24 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
           (Namespace.show mig.namespace));
       (Lwt.catch
          (fun () ->
-           let%lwt () = Lwt_list.iter_s (run_step_down db_label) to_revert in
-           Lwt_result.return ())
+            let%lwt () = Lwt_list.iter_s (run_step_down db_label) to_revert in
+            Lwt_result.return ())
          (fun exn ->
-           let msg =
-             Printf.sprintf
-               "Migration '%s' revert failed: %s"
-               (Namespace.show mig.namespace)
-               (Printexc.to_string exn)
-           in
-           Log.err (fun m -> m "%s" msg);
-           Lwt_result.fail (Error.Migration_failed msg))
+            let msg =
+              Printf.sprintf
+                "Migration '%s' revert failed: %s"
+                (Namespace.show mig.namespace)
+                (Printexc.to_string exn)
+            in
+            Log.err (fun m -> m "%s" msg);
+            Lwt_result.fail (Error.Migration_failed msg))
        : (unit, Error.t) Lwt_result.t))
   ;;
 
   let run_all db_label () =
     let migrations_for_label =
       CCList.filter_map
-        (fun (lbl, mig) ->
-          if Entity.Label.equal lbl db_label then Some mig else None)
+        (fun (lbl, mig) -> if Entity.Label.equal lbl db_label then Some mig else None)
         !registry
       |> CCList.sort (fun a b -> Ptime.compare a.written_at b.written_at)
     in
@@ -315,21 +316,20 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let%lwt applied_ids = get_applied_ids db_label in
     let migrations_for_label =
       CCList.filter_map
-        (fun (lbl, mig) ->
-          if Entity.Label.equal lbl db_label then Some mig else None)
+        (fun (lbl, mig) -> if Entity.Label.equal lbl db_label then Some mig else None)
         !registry
     in
     Lwt.return
     @@ CCList.map
          (fun (mig : t) ->
-           let total = CCList.length mig.steps in
-           let applied =
-             CCList.length
-               (CCList.filter
-                  (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
-                  mig.steps)
-           in
-           (mig.namespace, applied, total))
+            let total = CCList.length mig.steps in
+            let applied =
+              CCList.length
+                (CCList.filter
+                   (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
+                   mig.steps)
+            in
+            mig.namespace, applied, total)
          migrations_for_label
   ;;
 
@@ -338,26 +338,23 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     Lwt.return
     @@ CCList.filter_map
          (fun (ns, applied, total) ->
-           let n = total - applied in
-           if n > 0 then Some (ns, n) else None)
+            let n = total - applied in
+            if n > 0 then Some (ns, n) else None)
          statuses
   ;;
 
   let check db_label () =
     let%lwt () = setup db_label in
     let sql = Db.Config.Dialect.select_applied_rows ~table:(table_name ()) in
-    let req =
-      (Caqti_type.unit ->* Caqti_type.(t2 string string)) ~oneshot:true sql
-    in
+    let req = (Caqti_type.unit ->* Caqti_type.(t2 string string)) ~oneshot:true sql in
     let%lwt raw_rows = Db.collect db_label req () in
     let applied_rows =
-      CCList.map (fun (id, ns) -> (Id.create id, Namespace.create ns)) raw_rows
+      CCList.map (fun (id, ns) -> Id.create id, Namespace.create ns) raw_rows
     in
     let applied_ids = CCList.map fst applied_rows in
     let migrations_for_label =
       CCList.filter_map
-        (fun (lbl, mig) ->
-          if Entity.Label.equal lbl db_label then Some mig else None)
+        (fun (lbl, mig) -> if Entity.Label.equal lbl db_label then Some mig else None)
         !registry
     in
     (* All step IDs currently in the registry for this label *)
@@ -370,25 +367,27 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let pending_drifts =
       CCList.filter_map
         (fun (mig : t) ->
-          let total = CCList.length mig.steps in
-          let applied_count =
-            CCList.length
-              (CCList.filter
-                 (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
-                 mig.steps)
-          in
-          let n = total - applied_count in
-          if n > 0
-          then (
-            Log.warn (fun m ->
-              m
-                "[check] Migration '%s' on '%s': %d/%d step(s) pending"
-                (Namespace.show mig.namespace)
-                (Entity.Label.show db_label)
-                n
-                total);
-            Some (Pending { namespace = mig.namespace; pending_steps = n; total_steps = total }))
-          else None)
+           let total = CCList.length mig.steps in
+           let applied_count =
+             CCList.length
+               (CCList.filter
+                  (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
+                  mig.steps)
+           in
+           let n = total - applied_count in
+           if n > 0
+           then (
+             Log.warn (fun m ->
+               m
+                 "[check] Migration '%s' on '%s': %d/%d step(s) pending"
+                 (Namespace.show mig.namespace)
+                 (Entity.Label.show db_label)
+                 n
+                 total);
+             Some
+               (Pending
+                  { namespace = mig.namespace; pending_steps = n; total_steps = total }))
+           else None)
         migrations_for_label
     in
     (* Orphaned: applied IDs not in any registered migration *)
@@ -402,23 +401,26 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       let tbl = Hashtbl.create 4 in
       CCList.iter
         (fun (id, ns) ->
-          let prev = try Hashtbl.find tbl ns with Not_found -> [] in
-          Hashtbl.replace tbl ns (id :: prev))
+           let prev =
+             try Hashtbl.find tbl ns with
+             | Not_found -> []
+           in
+           Hashtbl.replace tbl ns (id :: prev))
         rows;
       Hashtbl.fold (fun ns ids acc -> (ns, ids) :: acc) tbl []
     in
     let orphan_drifts =
       CCList.map
         (fun (ns, ids) ->
-          Log.warn (fun m ->
-            m
-              "[check] Database '%s' has %d orphaned step(s) in namespace '%s' \
-               not found in registry: [%s]"
-              (Entity.Label.show db_label)
-              (CCList.length ids)
-              (Namespace.show ns)
-              (CCString.concat ", " (CCList.map Id.show ids)));
-          Orphaned { namespace = ns; step_ids = ids })
+           Log.warn (fun m ->
+             m
+               "[check] Database '%s' has %d orphaned step(s) in namespace '%s' not \
+                found in registry: [%s]"
+               (Entity.Label.show db_label)
+               (CCList.length ids)
+               (Namespace.show ns)
+               (CCString.concat ", " (CCList.map Id.show ids)));
+           Orphaned { namespace = ns; step_ids = ids })
         (group_by_ns orphaned_rows)
     in
     Lwt.return (pending_drifts @ orphan_drifts)

@@ -40,7 +40,7 @@ module Status : sig
   val pp : Format.formatter -> t -> unit
 end
 
-module Database: sig
+module Database : sig
   type t =
     { label : Label.t
     ; url : Url.t

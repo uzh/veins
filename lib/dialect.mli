@@ -13,9 +13,10 @@ module type Sig = sig
   (** DDL to create (or ensure the existence of) the migration-state tracking
       table.
 
-      @param table  Fully-qualified table name, e.g.
-                    ["vena_migration_state"].  May be overridden at runtime
-                    via the [VENA_MIGRATION_TABLE] environment variable. *)
+      @param table
+        Fully-qualified table name, e.g.
+        ["vena_migration_state"].  May be overridden at runtime
+        via the [VENA_MIGRATION_TABLE] environment variable. *)
   val create_migration_table : table:string -> string
 
   (** Whether [SET FOREIGN_KEY_CHECKS = 0 / 1] is supported by this
@@ -33,7 +34,8 @@ module type Sig = sig
   val select_applied_rows : table:string -> string
 
   (** [INSERT INTO <table> (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?)]
-      — records a newly-applied step.  Placeholders: id, namespace, label, created_at, updated_at. *)
+      — records a newly-applied step.  Placeholders: id, namespace, label, created_at, updated_at.
+  *)
   val insert_applied_step : table:string -> string
 
   (** [DELETE FROM <table> WHERE id = ?] — removes a step record during a

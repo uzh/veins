@@ -1,23 +1,19 @@
 (** Integration tests against a live MariaDB instance.
 
     Environment variables (all optional, fall back to Docker-compose defaults):
-    - [MARIADB_URL]  e.g. [mariadb://admin:password@database-mariadb/development]
-*)
+    - [MARIADB_URL]  e.g. [mariadb://admin:password@database-mariadb/development] *)
 
 open Veins
 
 let default_url = "mariadb://admin:password@database-mariadb/development"
 
 module MariaDb = Pools.Make (struct
-  let database =
-    Test_helpers.db_of_env_or "MARIADB_URL" default_url
-  ;;
+    let database = Test_helpers.db_of_env_or "MARIADB_URL" default_url
+    let database_pool_size = 5
+    let expected_databases = 1
 
-  let database_pool_size = 5
-  let expected_databases = 1
-
-  module Dialect = Dialect.Mariadb
-end)
+    module Dialect = Dialect.Mariadb
+  end)
 
 module MigMariaDb = Migration.Make (MariaDb)
 
@@ -37,16 +33,27 @@ let test_ping () =
 let test_roundtrip () = Test_helpers.roundtrip_test (module MariaDb) ()
 let test_transaction () = Test_helpers.transaction_test (module MariaDb) ()
 let test_rollback () = Test_helpers.rollback_test (module MariaDb) ()
-let test_migration () = Test_helpers.migration_test (module MariaDb) (module MigMariaDb) ()
+
+let test_migration () =
+  Test_helpers.migration_test (module MariaDb) (module MigMariaDb) ()
+;;
 
 let test_concurrent_queries () = Test_helpers.concurrent_queries_test (module MariaDb) ()
 let test_bulk_insert () = Test_helpers.bulk_insert_test (module MariaDb) ()
-let test_disconnect_reconnect () = Test_helpers.disconnect_reconnect_test (module MariaDb) ()
+
+let test_disconnect_reconnect () =
+  Test_helpers.disconnect_reconnect_test (module MariaDb) ()
+;;
+
 let test_unregistered_label () = Test_helpers.unregistered_label_test (module MariaDb) ()
-let test_pool_reset () = Test_helpers.pool_reset_test (module MariaDb) MariaDb.Config.database ()
+
+let test_pool_reset () =
+  Test_helpers.pool_reset_test (module MariaDb) MariaDb.Config.database ()
+;;
 
 let test_multi_disconnect_reconnect () =
   Test_helpers.multi_disconnect_reconnect_test (module MariaDb) default_url ()
+;;
 
 let test_pool_add_and_drop () =
   let extra_url = default_url in
@@ -62,7 +69,8 @@ let () =
   setup ();
   let open Alcotest_lwt in
   Lwt_main.run
-  @@ run "Veins MariaDB"
+  @@ run
+       "Veins MariaDB"
        [ ( "connectivity"
          , [ test_case "ping" `Quick (fun _ () -> test_ping ())
            ; test_case "roundtrip" `Quick (fun _ () -> test_roundtrip ())
@@ -72,18 +80,19 @@ let () =
          , [ test_case "commit" `Quick (fun _ () -> test_transaction ())
            ; test_case "rollback" `Quick (fun _ () -> test_rollback ())
            ] )
-       ; ( "migrations"
-         , [ test_case "run_all" `Quick (fun _ () -> test_migration ()) ] )
+       ; "migrations", [ test_case "run_all" `Quick (fun _ () -> test_migration ()) ]
        ; ( "performance"
          , [ test_case "concurrent_queries" `Slow (fun _ () -> test_concurrent_queries ())
            ; test_case "bulk_insert" `Slow (fun _ () -> test_bulk_insert ())
            ] )
        ; ( "resilience"
-         , [ test_case "disconnect_reconnect" `Quick (fun _ () -> test_disconnect_reconnect ())
-           ; test_case "unregistered_label" `Quick (fun _ () -> test_unregistered_label ())
+         , [ test_case "disconnect_reconnect" `Quick (fun _ () ->
+               test_disconnect_reconnect ())
+           ; test_case "unregistered_label" `Quick (fun _ () ->
+               test_unregistered_label ())
            ; test_case "pool_reset" `Quick (fun _ () -> test_pool_reset ())
-           ; test_case "multi_disconnect_reconnect" `Quick
-               (fun _ () -> test_multi_disconnect_reconnect ())
+           ; test_case "multi_disconnect_reconnect" `Quick (fun _ () ->
+               test_multi_disconnect_reconnect ())
            ] )
        ]
 ;;

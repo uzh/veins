@@ -4,7 +4,7 @@
     [caqti-driver-mariadb] transitively — no other dependency entry needed.
 
     {[
-      module Db = Veins_mariadb.Pools.Make (struct
+    module Db = Veins_mariadb.Pools.Make (struct
         let database = Veins.Database.create (Veins.Label.create "root") url
       end)
     ]}
@@ -23,7 +23,7 @@ module Dialect = Veins.Dialect.Mariadb
     to avoid specifying the dialect manually:
 
     {[
-      module Db = Veins_mariadb.Pools.Make (struct
+    module Db = Veins_mariadb.Pools.Make (struct
         let database = Veins.Database.create (Veins.Label.create "root") url
       end)
     ]}
@@ -35,12 +35,13 @@ module Dialect = Veins.Dialect.Mariadb
     use {!Veins.Dialect.of_url} to validate this at runtime if needed. *)
 module Pools = struct
   module Make (C : sig
-    val database : Veins.Database.t
-  end) =
-    Veins.Pools.Make (struct
+      val database : Veins.Database.t
+    end) =
+  Veins.Pools.Make (struct
       let database = C.database
       let database_pool_size = 10
       let expected_databases = 5
+
       module Dialect = Veins.Dialect.Mariadb
     end)
 end

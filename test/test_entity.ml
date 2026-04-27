@@ -22,19 +22,15 @@ let test_status_roundtrip () =
   let open Status in
   CCList.iter
     (fun st ->
-      match of_string (show st) with
-      | Ok s -> assert (equal s st)
-      | Error e -> failwith e)
+       match of_string (show st) with
+       | Ok s -> assert (equal s st)
+       | Error e -> failwith e)
     all
 ;;
 
 let test_dynparam () =
   let open Dynparam in
-  let (Pack (t, v)) =
-    empty
-    |> add Caqti_type.int 42
-    |> add Caqti_type.string "hello"
-  in
+  let (Pack (t, v)) = empty |> add Caqti_type.int 42 |> add Caqti_type.string "hello" in
   ignore (t, v)
 ;;
 

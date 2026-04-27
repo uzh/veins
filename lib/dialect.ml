@@ -8,7 +8,7 @@
 
 module type Sig = sig
   (** DDL for the migration-state tracking table.
-      @param table  fully-qualified table name, e.g. ["vena_migration_state"] *)
+      @param table fully-qualified table name, e.g. ["vena_migration_state"] *)
   val create_migration_table : table:string -> string
 
   (** Whether [SET FOREIGN_KEY_CHECKS = 0/1] is supported.
@@ -46,20 +46,16 @@ module Mariadb : Sig = struct
 
   let fk_checks_supported = true
   let select_applied_ids ~table = Printf.sprintf "SELECT id FROM %s" table
-
-  let select_applied_rows ~table =
-    Printf.sprintf "SELECT id, namespace FROM %s" table
-  ;;
+  let select_applied_rows ~table = Printf.sprintf "SELECT id, namespace FROM %s" table
 
   let insert_applied_step ~table =
     Printf.sprintf
-      "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, \
+       ?)"
       table
   ;;
 
-  let delete_applied_step ~table =
-    Printf.sprintf "DELETE FROM %s WHERE id = ?" table
-  ;;
+  let delete_applied_step ~table = Printf.sprintf "DELETE FROM %s WHERE id = ?" table
 end
 
 (** PostgreSQL dialect. *)
@@ -79,20 +75,16 @@ module Postgresql : Sig = struct
 
   let fk_checks_supported = false
   let select_applied_ids ~table = Printf.sprintf "SELECT id FROM %s" table
-
-  let select_applied_rows ~table =
-    Printf.sprintf "SELECT id, namespace FROM %s" table
-  ;;
+  let select_applied_rows ~table = Printf.sprintf "SELECT id, namespace FROM %s" table
 
   let insert_applied_step ~table =
     Printf.sprintf
-      "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, \
+       ?)"
       table
   ;;
 
-  let delete_applied_step ~table =
-    Printf.sprintf "DELETE FROM %s WHERE id = ?" table
-  ;;
+  let delete_applied_step ~table = Printf.sprintf "DELETE FROM %s WHERE id = ?" table
 end
 
 (** Infer the dialect from a connection URL's scheme.

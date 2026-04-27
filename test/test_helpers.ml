@@ -5,7 +5,11 @@ open Caqti_request.Infix
 
 (** Build a [Database.t] from an environment variable, falling back to [default].*)
 let db_of_env_or var default =
-  let raw = match Sys.getenv_opt var with Some s when s <> "" -> s | _ -> default in
+  let raw =
+    match Sys.getenv_opt var with
+    | Some s when s <> "" -> s
+    | _ -> default
+  in
   Database.(create (Label.create "root") (Url.create raw))
 ;;
 
@@ -20,23 +24,25 @@ let roundtrip_test (module Db : Pools_sig.Sig) () =
   let label = Label.create "root" in
   (* Create table *)
   let create_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
+    Caqti_type.(unit ->. unit)
+      ~oneshot:true
       {|CREATE TABLE IF NOT EXISTS vena_test_roundtrip (
           id   INTEGER PRIMARY KEY,
           name VARCHAR(64) NOT NULL
         )|}
   in
   let insert_req =
-    Caqti_type.(t2 int string ->. unit) ~oneshot:true
+    Caqti_type.(t2 int string ->. unit)
+      ~oneshot:true
       {|INSERT INTO vena_test_roundtrip (id, name) VALUES (?, ?)|}
   in
   let select_req =
-    Caqti_type.(unit ->* t2 int string) ~oneshot:true
+    Caqti_type.(unit ->* t2 int string)
+      ~oneshot:true
       {|SELECT id, name FROM vena_test_roundtrip ORDER BY id|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
-      {|DROP TABLE IF EXISTS vena_test_roundtrip|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_roundtrip|}
   in
   let%lwt () = Db.exec label create_req () in
   let%lwt () = Db.exec label insert_req (1, "alice") in
@@ -51,23 +57,23 @@ let roundtrip_test (module Db : Pools_sig.Sig) () =
 let transaction_test (module Db : Pools_sig.Sig) () =
   let label = Label.create "root" in
   let create_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
+    Caqti_type.(unit ->. unit)
+      ~oneshot:true
       {|CREATE TABLE IF NOT EXISTS vena_test_tx (
           id   INTEGER PRIMARY KEY,
           val  INTEGER NOT NULL
         )|}
   in
   let insert_req =
-    Caqti_type.(t2 int int ->. unit) ~oneshot:true
+    Caqti_type.(t2 int int ->. unit)
+      ~oneshot:true
       {|INSERT INTO vena_test_tx (id, val) VALUES (?, ?)|}
   in
   let select_req =
-    Caqti_type.(unit ->* int) ~oneshot:true
-      {|SELECT val FROM vena_test_tx ORDER BY id|}
+    Caqti_type.(unit ->* int) ~oneshot:true {|SELECT val FROM vena_test_tx ORDER BY id|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
-      {|DROP TABLE IF EXISTS vena_test_tx|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_tx|}
   in
   let%lwt () = Db.exec label create_req () in
   let%lwt () =
@@ -86,32 +92,31 @@ let transaction_test (module Db : Pools_sig.Sig) () =
 let rollback_test (module Db : Pools_sig.Sig) () =
   let label = Label.create "root" in
   let create_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
+    Caqti_type.(unit ->. unit)
+      ~oneshot:true
       {|CREATE TABLE IF NOT EXISTS vena_test_rb (
           id  INTEGER PRIMARY KEY,
           val INTEGER NOT NULL
         )|}
   in
   let insert_req =
-    Caqti_type.(t2 int int ->. unit) ~oneshot:true
+    Caqti_type.(t2 int int ->. unit)
+      ~oneshot:true
       {|INSERT INTO vena_test_rb (id, val) VALUES (?, ?)|}
   in
   let count_req =
-    Caqti_type.(unit ->! int) ~oneshot:true
-      {|SELECT COUNT(*) FROM vena_test_rb|}
+    Caqti_type.(unit ->! int) ~oneshot:true {|SELECT COUNT(*) FROM vena_test_rb|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
-      {|DROP TABLE IF EXISTS vena_test_rb|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_rb|}
   in
   let%lwt () = Db.exec label create_req () in
   (* This transaction intentionally fails mid-way. *)
   (try%lwt
-    Db.transaction label (fun conn ->
-      let module C = (val conn : Caqti_lwt.CONNECTION) in
-      let open Lwt_result.Infix in
-      C.exec insert_req (1, 1)
-      >>= fun () -> Lwt.fail (Failure "forced failure"))
+     Db.transaction label (fun conn ->
+       let module C = (val conn : Caqti_lwt.CONNECTION) in
+       let open Lwt_result.Infix in
+       C.exec insert_req (1, 1) >>= fun () -> Lwt.fail (Failure "forced failure"))
    with
    | _ -> Lwt.return_unit);%lwt
   let%lwt count = Db.find label count_req () in
@@ -123,7 +128,9 @@ let rollback_test (module Db : Pools_sig.Sig) () =
 (** Register a two-step migration, run it, verify the state, test down. *)
 let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) () =
   let label = Label.create "root" in
-  let ns = Migration.Namespace.create ("vena_test_mig_" ^ string_of_int (Random.int 100000)) in
+  let ns =
+    Migration.Namespace.create ("vena_test_mig_" ^ string_of_int (Random.int 100000))
+  in
   (* Drop leftover tables so we always start from a clean slate. *)
   let drop_state =
     Caqti_type.(unit ->. unit) ~oneshot:true "DROP TABLE IF EXISTS vena_migration_state"
@@ -147,8 +154,7 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
               ~id:(Migration.Id.create "a1b2c3d4-0001-0001-0001-000000000002")
               ~label:"insert row"
               ~down:"DELETE FROM vena_test_mig_tbl WHERE id = 42"
-              {|INSERT INTO vena_test_mig_tbl (id) VALUES (42)|})
-    )
+              {|INSERT INTO vena_test_mig_tbl (id) VALUES (42)|}))
   in
   Migration.register ~for_database:label mig;
   (* Test up: both steps applied *)
@@ -158,7 +164,7 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
     | Error e -> failwith (Error.show e)
   in
   let%lwt statuses = M.status label () in
-  let (_, applied, total) =
+  let _, applied, total =
     CCList.find (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses
   in
   assert (applied = 2 && total = 2);
@@ -175,7 +181,7 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
     | Error e -> failwith ("down failed: " ^ Error.show e)
   in
   let%lwt statuses2 = M.status label () in
-  let (_, applied2, _) =
+  let _, applied2, _ =
     CCList.find (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses2
   in
   assert (applied2 = 0);
@@ -202,14 +208,16 @@ let concurrent_queries_test ?(n = 20) (module Db : Pools_sig.Sig) () =
 let bulk_insert_test ?(n = 100) (module Db : Pools_sig.Sig) () =
   let label = Label.create "root" in
   let create_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true
+    Caqti_type.(unit ->. unit)
+      ~oneshot:true
       {|CREATE TABLE IF NOT EXISTS vena_test_bulk (
           id  INTEGER PRIMARY KEY,
           val INTEGER NOT NULL
         )|}
   in
   let insert_req =
-    Caqti_type.(t2 int int ->. unit) ~oneshot:true
+    Caqti_type.(t2 int int ->. unit)
+      ~oneshot:true
       {|INSERT INTO vena_test_bulk (id, val) VALUES (?, ?)|}
   in
   let count_req =
@@ -246,8 +254,8 @@ let unregistered_label_test (module Db : Pools_sig.Sig) () =
   let unknown = Label.create "vena_nonexistent_________label" in
   Lwt.catch
     (fun () ->
-      let%lwt _ = Db.find unknown ping_request () in
-      Lwt.fail_with "expected Database_not_registered but query succeeded")
+       let%lwt _ = Db.find unknown ping_request () in
+       Lwt.fail_with "expected Database_not_registered but query succeeded")
     (function
       | Error.Exn (Error.Database_not_registered _) -> Lwt.return_unit
       | exn -> Lwt.fail exn)
@@ -288,4 +296,3 @@ let multi_disconnect_reconnect_test (module Db : Pools_sig.Sig) url () =
   let%lwt () = Db.Pool.drop lbl_b in
   Lwt.return_unit
 ;;
-

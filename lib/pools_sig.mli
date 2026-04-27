@@ -61,9 +61,9 @@ module type Sig = sig
         when the connection is in a [Close] or [Fail] state.
 
         @raise Error.Exn (Database_not_registered _)  if [label] was never
-               added.
+                         added.
         @raise Error.Exn (Connection_failed _)         after all [retries]
-               are exhausted. *)
+                         are exhausted. *)
     val fetch
       :  ?retries:int
       -> Entity.Label.t
@@ -81,11 +81,7 @@ module type Sig = sig
     (** Drop [label], then register [database] under the same position in
         the cache.  Use when the connection parameters for a pool have
         changed. *)
-    val reset_label
-      :  ?required:bool
-      -> Entity.Label.t
-      -> Entity.Database.t
-      -> unit Lwt.t
+    val reset_label : ?required:bool -> Entity.Label.t -> Entity.Database.t -> unit Lwt.t
 
     (** All databases currently registered in the cache, optionally
         filtered to [allowed_status] and with [exclude]d labels removed. *)
@@ -98,10 +94,7 @@ module type Sig = sig
     (** Raise a human-readable {!Error.Exn} for a Caqti error.
         Also marks the affected pool as [Fail] so the next [fetch] will
         attempt to reconnect. *)
-    val raise_caqti_error
-      :  Entity.Label.t
-      -> ('a, Caqti_error.t) Lwt_result.t
-      -> 'a Lwt.t
+    val raise_caqti_error : Entity.Label.t -> ('a, Caqti_error.t) Lwt_result.t -> 'a Lwt.t
   end
 
   (** {1 Query helpers}
@@ -118,11 +111,7 @@ module type Sig = sig
     -> 'a Lwt.t
 
   (** Execute a statement that produces no result rows. *)
-  val exec
-    :  Entity.Label.t
-    -> ('a, unit, [ `Zero ]) Caqti_request.t
-    -> 'a
-    -> unit Lwt.t
+  val exec : Entity.Label.t -> ('a, unit, [ `Zero ]) Caqti_request.t -> 'a -> unit Lwt.t
 
   (** Collect all result rows into a list. *)
   val collect
@@ -133,11 +122,7 @@ module type Sig = sig
 
   (** Return exactly one row.
       @raise Error.Exn if the query returns zero or more than one row. *)
-  val find
-    :  Entity.Label.t
-    -> ('a, 'b, [< `One ]) Caqti_request.t
-    -> 'a
-    -> 'b Lwt.t
+  val find : Entity.Label.t -> ('a, 'b, [< `One ]) Caqti_request.t -> 'a -> 'b Lwt.t
 
   (** Return at most one row, or [None] if the query returns no rows. *)
   val find_opt
@@ -165,8 +150,9 @@ module type Sig = sig
 
   (** Run [f] inside a [BEGIN] / [COMMIT] block.
 
-      @param setup   List of statements run after [BEGIN] but before [f]
-                     (e.g. [SET TRANSACTION ISOLATION LEVEL …]).
+      @param setup
+        List of statements run after [BEGIN] but before [f]
+        (e.g. [SET TRANSACTION ISOLATION LEVEL …]).
       @param cleanup List of statements run after [f] but before [COMMIT]. *)
   val transaction
     :  ?setup:(Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list

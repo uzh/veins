@@ -14,8 +14,7 @@ struct
   (* Internal pool entry                                                  *)
   (* ------------------------------------------------------------------ *)
 
-  type caqti_pool =
-    (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t
+  type caqti_pool = (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t
 
   type connection_state =
     | Close
@@ -42,9 +41,7 @@ struct
     let mark_close p = { p with connection = Close }
 
     let make_caqti_pool url =
-      let pool_config =
-        Caqti_pool_config.create ~max_size:Config.database_pool_size ()
-      in
+      let pool_config = Caqti_pool_config.create ~max_size:Config.database_pool_size () in
       url |> Entity.Url.to_uri |> Caqti_lwt_unix.connect_pool ~pool_config
     ;;
 
@@ -92,7 +89,6 @@ struct
     module Tbl = CCHashtbl.Make (LabelHash)
 
     let pools : Pool_entry.t Tbl.t = Tbl.create (max 1 Config.expected_databases)
-
     let clear () = Tbl.clear pools
     let find_opt label = Tbl.find_opt pools label
     let remove label = Tbl.remove pools label
@@ -120,12 +116,10 @@ struct
     let initialize ?(additional_pools = []) () =
       CCList.iter
         (fun db ->
-          let label = Entity.Database.label db in
-          if CCOption.is_none (Cache.find_opt label)
-          then
-            Pool_entry.make ~required:true db
-            |> Pool_entry.connect_base
-            |> Cache.replace)
+           let label = Entity.Database.label db in
+           if CCOption.is_none (Cache.find_opt label)
+           then
+             Pool_entry.make ~required:true db |> Pool_entry.connect_base |> Cache.replace)
         (Config.database :: additional_pools)
     ;;
 
@@ -136,9 +130,7 @@ struct
         Log.warn (fun m ->
           m "Pool '%s' already registered; skipping add" (Entity.Label.show label))
       | None ->
-        Pool_entry.make ?required database
-        |> Pool_entry.connect_base
-        |> Cache.replace
+        Pool_entry.make ?required database |> Pool_entry.connect_base |> Cache.replace
     ;;
 
     let drop label =
@@ -155,17 +147,13 @@ struct
 
     let reset ?required database =
       let%lwt () = drop (Entity.Database.label database) in
-      Pool_entry.make ?required database
-      |> Pool_entry.connect_base
-      |> Cache.replace;
+      Pool_entry.make ?required database |> Pool_entry.connect_base |> Cache.replace;
       Lwt.return_unit
     ;;
 
     let reset_label ?required label database =
       let%lwt () = drop label in
-      Pool_entry.make ?required database
-      |> Pool_entry.connect_base
-      |> Cache.replace;
+      Pool_entry.make ?required database |> Pool_entry.connect_base |> Cache.replace;
       Lwt.return_unit
     ;;
 
@@ -237,8 +225,7 @@ struct
                         retries
                         (Entity.Label.show label))))
            | Fail _ ->
-             Cache.replace
-               (Pool_entry.connect_base entry |> Pool_entry.increment_retry);
+             Cache.replace (Pool_entry.connect_base entry |> Pool_entry.increment_retry);
              go ())
       in
       go ()
@@ -311,9 +298,9 @@ struct
   let exec_each connection requests =
     Lwt_list.fold_left_s
       (fun acc f ->
-        match acc with
-        | Error e -> Lwt.return (Error e)
-        | Ok () -> f connection)
+         match acc with
+         | Error e -> Lwt.return (Error e)
+         | Ok () -> f connection)
       (Ok ())
       requests
   ;;
@@ -323,8 +310,7 @@ struct
     let%lwt rollback_result = C.rollback () in
     (match rollback_result with
      | Ok () ->
-       Log.debug (fun m ->
-         m "Rolled back transaction on '%s'" (Entity.Label.show label))
+       Log.debug (fun m -> m "Rolled back transaction on '%s'" (Entity.Label.show label))
      | Error err ->
        Log.warn (fun m ->
          m "Rollback failed on '%s': %a" (Entity.Label.show label) Caqti_error.pp err));
@@ -339,13 +325,12 @@ struct
       >>= fun () ->
       Lwt.catch
         (fun () ->
-          exec_each connection setup
-          >>= fun () ->
-          f connection
-          >>= fun result ->
-          exec_each connection cleanup
-          >>= fun () ->
-          C.commit () >>= fun () -> Lwt_result.return result)
+           exec_each connection setup
+           >>= fun () ->
+           f connection
+           >>= fun result ->
+           exec_each connection cleanup
+           >>= fun () -> C.commit () >>= fun () -> Lwt_result.return result)
         (rollback label connection))
     |> Pool.map_fetched label
   ;;
