@@ -2,7 +2,7 @@ open Unix
 
 let iso8601_now () =
   let tm = Unix.gmtime (Unix.gettimeofday ()) in
-  Printf.sprintf
+  Format.asprintf
     "%04d-%02d-%02dT%02d:%02d:%02dZ"
     (tm.tm_year + 1900)
     (tm.tm_mon + 1)
@@ -28,7 +28,7 @@ let slugify s =
 ;;
 
 let template ~module_name ~namespace ~written_at ~uuid1 ~uuid2 =
-  Printf.sprintf
+  Format.asprintf
     {|(** Migration: %s *)
 
 open Veins
@@ -70,7 +70,7 @@ let uuid_v4 () =
     done;
     Bytes.to_string s
   in
-  Printf.sprintf
+  Format.asprintf
     "%s-%s-4%s-%x%s-%s"
     (hex 8)
     (hex 4)
@@ -82,7 +82,7 @@ let uuid_v4 () =
 
 let compact_timestamp () =
   let tm = Unix.gmtime (Unix.gettimeofday ()) in
-  Printf.sprintf
+  Format.asprintf
     "%04d%02d%02d%02d%02d%02d"
     (tm.tm_year + 1900)
     (tm.tm_mon + 1)
@@ -105,7 +105,7 @@ let () =
     | _ -> "."
   in
   let filename =
-    Filename.concat output_dir (Printf.sprintf "migration_%s_%s.ml" compact slug)
+    Filename.concat output_dir (Format.asprintf "migration_%s_%s.ml" compact slug)
   in
   let module_name =
     let cap s =

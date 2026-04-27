@@ -1,18 +1,4 @@
-(** Core domain types for Veins database entries. *)
-
-(** A short, human-readable identifier for a database connection.
-    Typically something like ["root"], ["tenant_acme"], or ["analytics"]. *)
-module Label : sig
-  type t
-
-  val create : string -> t
-  val value : t -> string
-  val equal : t -> t -> bool
-  val compare : t -> t -> int
-  val hash : t -> int
-  val pp : Format.formatter -> t -> unit
-  val show : t -> string
-end = struct
+module Label = struct
   type t = string
 
   let create s = s
@@ -24,18 +10,7 @@ end = struct
   let show s = s
 end
 
-(** A database connection URL, e.g.
-    [mariadb://user:pass@host/dbname] or [postgresql://…]. *)
-module Url : sig
-  type t
-
-  val create : string -> t
-  val value : t -> string
-  val to_uri : t -> Uri.t
-  val equal : t -> t -> bool
-  val pp : Format.formatter -> t -> unit
-  val show : t -> string
-end = struct
+module Url = struct
   type t = string
 
   let create s = s
@@ -46,23 +21,7 @@ end = struct
   let show s = s
 end
 
-(** Lifecycle status of a registered database connection pool. *)
-module Status : sig
-  type t =
-    | Active
-    | ConnectionIssue
-    | Disabled
-    | Maintenance
-    | MigrationsConnectionIssue
-    | MigrationsFailed
-    | MigrationsPending
-
-  val all : t list
-  val equal : t -> t -> bool
-  val show : t -> string
-  val of_string : string -> (t, string) result
-  val pp : Format.formatter -> t -> unit
-end = struct
+module Status = struct
   type t =
     | Active
     | ConnectionIssue
@@ -109,19 +68,7 @@ end = struct
   let pp fmt t = Format.pp_print_string fmt (show t)
 end
 
-(** A registered database entry. *)
-module Database : sig
-  type t =
-    { label : Label.t
-    ; url : Url.t
-    ; status : Status.t
-    }
-
-  val create : ?status:Status.t -> Label.t -> Url.t -> t
-  val label : t -> Label.t
-  val url : t -> Url.t
-  val status : t -> Status.t
-end = struct
+module Database = struct
   type t =
     { label : Label.t
     ; url : Url.t
@@ -134,15 +81,7 @@ end = struct
   let status { status; _ } = status
 end
 
-(** Dynamic parameter accumulator for queries whose arity is not known at
-    compile time (e.g. variable-length [IN (…)] clauses). *)
-module Dynparam : sig
-  type t = Pack : 'a Caqti_type.t * 'a -> t
-
-  val empty : t
-  val add : 'a Caqti_type.t -> 'a -> t -> t
-  val prefix : 'a Caqti_type.t -> 'a -> t -> t
-end = struct
+module Dynparam = struct
   type t = Pack : 'a Caqti_type.t * 'a -> t
 
   let empty = Pack (Caqti_type.unit, ())

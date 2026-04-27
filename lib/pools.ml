@@ -1,5 +1,3 @@
-(** Functor that creates a fully-featured connection-pool module. *)
-
 open Caqti_request.Infix
 
 let src = Logs.Src.create "veins.pools"
@@ -221,7 +219,7 @@ struct
              raise
                (Error.Exn
                   (Error.Connection_failed
-                     (Printf.sprintf
+                     (Format.asprintf
                         "All %d reconnect attempts exhausted for '%s'"
                         retries
                         (Entity.Label.show label))))
@@ -286,7 +284,7 @@ struct
       in
       let cols = CCString.concat ", " column_names in
       let sql =
-        Printf.sprintf "INSERT INTO %s (%s) VALUES (%s)" table cols placeholders
+        Format.asprintf "INSERT INTO %s (%s) VALUES (%s)" table cols placeholders
       in
       let req = (param_type ->. Caqti_type.unit) ~oneshot:true sql in
       Lwt_list.iter_s (exec label req) rows

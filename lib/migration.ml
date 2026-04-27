@@ -1,9 +1,3 @@
-(** Standalone migration module.
-
-    Types and the global registry live at the top level.  Apply [Make] to a
-    pool module ([Pools.Make] output) to get [run_all], [up], [down],
-    [status], [pending], and [check].  See [migration.mli] for full docs. *)
-
 open Caqti_request.Infix
 
 let src = Logs.Src.create "veins.migration"
@@ -14,15 +8,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 (* Id — opaque step identifier (UUID string)                          *)
 (* ------------------------------------------------------------------ *)
 
-module Id : sig
-  type t
-
-  val create : string -> t
-  val value : t -> string
-  val equal : t -> t -> bool
-  val pp : Format.formatter -> t -> unit
-  val show : t -> string
-end = struct
+module Id = struct
   type t = string
 
   let create s = s
@@ -36,15 +22,7 @@ end
 (* Namespace — opaque migration group identifier                       *)
 (* ------------------------------------------------------------------ *)
 
-module Namespace : sig
-  type t
-
-  val create : string -> t
-  val value : t -> string
-  val equal : t -> t -> bool
-  val pp : Format.formatter -> t -> unit
-  val show : t -> string
-end = struct
+module Namespace = struct
   type t = string
 
   let create s = s
@@ -58,7 +36,6 @@ end
 (* Types                                                               *)
 (* ------------------------------------------------------------------ *)
 
-(** A single, individually-trackable migration step. *)
 type step =
   { id : Id.t
   ; label : string
@@ -67,7 +44,6 @@ type step =
   ; check_fk : bool
   }
 
-(** A named group of steps applied as a logical unit. *)
 type t =
   { namespace : Namespace.t
   ; written_at : Ptime.t
@@ -85,7 +61,7 @@ let ptime_of_string s =
   | Ok (t, _, _) -> t
   | Error _ ->
     invalid_arg
-      (Printf.sprintf "Migration.ptime_of_string: invalid RFC 3339 string: %S" s)
+      (Format.asprintf "Migration.ptime_of_string: invalid RFC 3339 string: %S" s)
 ;;
 
 let empty namespace ~written_at = { namespace; written_at; steps = [] }
@@ -129,7 +105,7 @@ let table_name () =
   | _ -> "vena_migration_state"
 ;;
 
-(** Current wall-clock time as a [Ptime.t], safe for [Caqti_type.ptime]. *)
+(* Current wall-clock time as a Ptime.t, safe for Caqti_type.ptime. *)
 let now () =
   match Ptime.of_float_s (Unix.gettimeofday ()) with
   | Some p -> p
@@ -268,7 +244,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
             Lwt_result.return ())
          (fun exn ->
             let msg =
-              Printf.sprintf
+              Format.asprintf
                 "Migration '%s' failed: %s"
                 (Namespace.show mig.namespace)
                 (Printexc.to_string exn)
@@ -302,7 +278,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
             Lwt_result.return ())
          (fun exn ->
             let msg =
-              Printf.sprintf
+              Format.asprintf
                 "Migration '%s' revert failed: %s"
                 (Namespace.show mig.namespace)
                 (Printexc.to_string exn)
