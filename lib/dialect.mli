@@ -6,7 +6,9 @@
 
     Two implementations are provided out of the box:
     - {!Mariadb} — for MariaDB / MySQL
-    - {!Postgresql} — for PostgreSQL *)
+    - {!Postgresql} — for PostgreSQL
+
+    @canonical Veins.Dialect *)
 
 (** The interface a dialect module must satisfy. *)
 module type Sig = sig

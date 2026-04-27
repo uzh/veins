@@ -1,7 +1,9 @@
 (** Module-type signatures for the Veins pool functor.
 
     Application code instantiates a pool by applying {!Pools.Make} to a
-    module satisfying {!ConfigSig}.  The resulting module satisfies {!Sig}. *)
+    module satisfying {!ConfigSig}.  The resulting module satisfies {!Sig}.
+
+    @canonical Veins.Pools_sig *)
 
 (** Configuration required to instantiate a connection pool. *)
 module type ConfigSig = sig

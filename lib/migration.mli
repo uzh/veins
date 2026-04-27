@@ -52,7 +52,9 @@
          | Ok () -> Lwt.return_unit
          | Error e -> failwith (Veins.Error.show e))
     ;;
-    ]} *)
+    ]}
+
+    @canonical Veins.Migration *)
 
 (** Parse an RFC 3339 string into [Ptime.t].  Raises [Invalid_argument] if
     the string is malformed.  Use for static authoring timestamps:

@@ -13,7 +13,9 @@
 
     (* Retrieve later by label *)
     let db = Databases.find_exn (Entity.Label.create "root")
-    ]} *)
+    ]}
+
+    @canonical Veins.Databases *)
 
 (** Register [db] in the global cache, keyed by [Entity.Database.label db].
     Silently replaces any existing entry with the same label. *)

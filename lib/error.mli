@@ -1,4 +1,6 @@
-(** Error types and exception raised by Veins query helpers. *)
+(** Error types and exception raised by Veins query helpers.
+
+    @canonical Veins.Error *)
 
 (** Errors that can occur during pool operations, queries, and migrations. *)
 type t =
