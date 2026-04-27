@@ -15,5 +15,4 @@ else
   echo "✓ No git file changes detected"
 fi
 
-# opam install ocaml-lsp-server
-# opam install --working-dir --with-test --with-doc --deps-only --update-invariant -y .
+opam install --working-dir --with-test --with-doc --with-dev-setup --deps-only --update-invariant -y .

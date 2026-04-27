@@ -129,9 +129,9 @@ List.iter (fun d -> Printf.eprintf "drift: %s\n" (Migration.Id.value d.Migration
 
 ## Packages
 
-| Package           | Purpose                                                                                                 |
-|-------------------|---------------------------------------------------------------------------------------------------------|
-| `veins`            | Core library — pools, migrations, dialect abstraction                                                   |
+| Package            | Purpose                                                                                                   |
+|--------------------|-----------------------------------------------------------------------------------------------------------|
+| `veins`            | Core library — pools, migrations, dialect abstraction                                                     |
 | `veins-mariadb`    | Pulls in `caqti-driver-mariadb`; provides `Veins_mariadb.Pools.Make` and `Veins_mariadb.Dialect`          |
 | `veins-postgresql` | Pulls in `caqti-driver-postgresql`; provides `Veins_postgresql.Pools.Make` and `Veins_postgresql.Dialect` |
 

@@ -4,6 +4,11 @@ version: "0.1.0"
 synopsis: "PostgreSQL driver convenience package for Veins"
 description:
   "Depends on veins and caqti-driver-postgresql. Provides Veins_postgresql.Dialect for use in pool configs. Adding (veins-postgresql ...) to your opam deps is all you need for a PostgreSQL-backed Veins application."
+maintainer: ["Econ IT <it@econ.uzh.ch>"]
+authors: ["Department of Economics, University of Zurich"]
+license: "MIT"
+homepage: "https://github.com/uzh/veins"
+bug-reports: "https://github.com/uzh/veins"
 depends: [
   "dune" {>= "3.17"}
   "ocaml" {>= "5.0.0"}
@@ -25,3 +30,4 @@ build: [
     "@doc" {with-doc}
   ]
 ]
+dev-repo: "git+https://github.com/uzh/veins.git"
