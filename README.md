@@ -81,6 +81,13 @@ veins-gen "add users table"
 # → migration_20260424T140314_add_users_table.ml
 ```
 
+Set `VEINS_MIGRATION_DIR` to write the file to a specific directory (defaults to the current directory):
+
+```zsh
+VEINS_MIGRATION_DIR=lib/migrations veins-gen "add users table"
+# → lib/migrations/migration_20260424T140314_add_users_table.ml
+```
+
 The generated file:
 
 ```ocaml

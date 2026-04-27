@@ -99,7 +99,14 @@ let () =
   let slug = slugify s in
   let compact = compact_timestamp () in
   let written_at = iso8601_now () in
-  let filename = Printf.sprintf "migration_%s_%s.ml" compact slug in
+  let output_dir =
+    match Sys.getenv_opt "VEINS_MIGRATION_DIR" with
+    | Some d when String.length d > 0 -> d
+    | _ -> "."
+  in
+  let filename =
+    Filename.concat output_dir (Printf.sprintf "migration_%s_%s.ml" compact slug)
+  in
   let module_name =
     let cap s =
       if String.length s = 0
