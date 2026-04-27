@@ -55,18 +55,18 @@ end)
 ```ocaml
 let find_user id =
   let req = Caqti_type.(int ->? string) "SELECT name FROM users WHERE id = ?" in
-  Db.find_opt Entity.root req id
+  Db.find_opt (Label.create "root") req id
 
 let create_user name =
   let req = Caqti_type.(string ->. unit) "INSERT INTO users (name) VALUES (?)" in
-  Db.exec Entity.root req name
+  Db.exec (Label.create "root") req name
 ```
 
 ### 3. Transactions
 
 ```ocaml
-Db.transaction Entity.root (fun () ->
-  let%lwt () = Db.exec Entity.root insert_req row in
+Db.transaction (Label.create "root") (fun () ->
+  let%lwt () = Db.exec (Label.create "root") insert_req row in
   Lwt.return_unit)
 ```
 

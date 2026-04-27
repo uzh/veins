@@ -92,13 +92,31 @@ let empty namespace ~written_at = { namespace; written_at; steps = [] }
 let add_step s m = { m with steps = m.steps @ [ s ] }
 
 (* ------------------------------------------------------------------ *)
+(* Database target                                                     *)
+(* ------------------------------------------------------------------ *)
+
+type database_target =
+  | Database of Entity.Label.t
+  | Databases of Entity.Label.t list
+  | All
+  | AllExcept of Entity.Label.t list
+
+let target_applies_to (target : database_target) (label : Entity.Label.t) =
+  match target with
+  | Database lbl -> Entity.Label.equal lbl label
+  | Databases lbls -> CCList.mem ~eq:Entity.Label.equal label lbls
+  | All -> true
+  | AllExcept lbls -> not (CCList.mem ~eq:Entity.Label.equal label lbls)
+;;
+
+(* ------------------------------------------------------------------ *)
 (* Global registry                                                     *)
 (* ------------------------------------------------------------------ *)
 
-let registry : (Entity.Label.t * t) list ref = ref []
+let registry : (database_target * t) list ref = ref []
 
-let register ?(for_database = Entity.Label.create "root") migration =
-  registry := !registry @ [ for_database, migration ]
+let register ?(for_databases = All) migration =
+  registry := !registry @ [ for_databases, migration ]
 ;;
 
 (* ------------------------------------------------------------------ *)
@@ -297,7 +315,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   let run_all db_label () =
     let migrations_for_label =
       CCList.filter_map
-        (fun (lbl, mig) -> if Entity.Label.equal lbl db_label then Some mig else None)
+        (fun (target, mig) ->
+           if target_applies_to target db_label then Some mig else None)
         !registry
       |> CCList.sort (fun a b -> Ptime.compare a.written_at b.written_at)
     in
@@ -316,7 +335,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let%lwt applied_ids = get_applied_ids db_label in
     let migrations_for_label =
       CCList.filter_map
-        (fun (lbl, mig) -> if Entity.Label.equal lbl db_label then Some mig else None)
+        (fun (target, mig) ->
+           if target_applies_to target db_label then Some mig else None)
         !registry
     in
     Lwt.return
@@ -354,7 +374,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let applied_ids = CCList.map fst applied_rows in
     let migrations_for_label =
       CCList.filter_map
-        (fun (lbl, mig) -> if Entity.Label.equal lbl db_label then Some mig else None)
+        (fun (target, mig) ->
+           if target_applies_to target db_label then Some mig else None)
         !registry
     in
     (* All step IDs currently in the registry for this label *)

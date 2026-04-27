@@ -25,7 +25,7 @@
     (* 4. Register migrations (at module init time) *)
     let () =
       Veins.Migration.register
-        ~for_database:(Veins.Label.create "root")
+        ~for_databases:Migration.All
         Veins.Migration.(
           empty "my_app"
           |> add_step

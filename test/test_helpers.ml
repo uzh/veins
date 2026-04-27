@@ -156,7 +156,7 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
               ~down:"DELETE FROM vena_test_mig_tbl WHERE id = 42"
               {|INSERT INTO vena_test_mig_tbl (id) VALUES (42)|}))
   in
-  Migration.register ~for_database:label mig;
+  Migration.register ~for_databases:(Migration.Database label) mig;
   (* Test up: both steps applied *)
   let%lwt () =
     match%lwt M.run_all label () with

@@ -14,9 +14,9 @@
       of the order modules call {!register}.
     - Steps within a migration are applied in list order (always append new
       steps at the end).
-    - Migrations can target different databases.  Use [~for_database] to
-      associate a migration with a specific {!Veins.Label.t}.  Omitting the
-      argument defaults to [Label.create "root"].
+    - Migrations can target different databases.  Use [~for_databases] to
+      associate a migration with specific {!Veins.Label.t} values.  Omitting the
+      argument defaults to [Database (Label.create "root")].
     - Down migrations are optional.  A step whose [~down] is absent is
       irreversible; {!RunnerSig.down} will log a warning and skip it.
 
@@ -27,7 +27,7 @@
 
     let () =
       Veins.Migration.register
-        ~for_database:(Veins.Label.create "root")
+        ~for_databases:(Database (Veins.Label.create "root"))
         Veins.Migration.(
           empty
             (Namespace.create "my_app")
@@ -157,13 +157,28 @@ val add_step : step -> t -> t
 (* Global registry                                                     *)
 (* ------------------------------------------------------------------ *)
 
-(** Register [migration] so it will be applied to [for_database] when
-    {!RunnerSig.run_all} is next called for that label.
+(** Specifies which database(s) a migration should be applied to.
 
-    @param for_database
-      The database label this migration targets.
-      Defaults to [Entity.Label.create "root"]. *)
-val register : ?for_database:Entity.Label.t -> t -> unit
+    - [Database label] — exactly one database identified by [label].
+    - [Databases labels] — every database whose label appears in [labels].
+    - [All] — every database in the pool, regardless of label.
+    - [AllExcept labels] — every database {i except} those in [labels]. *)
+type database_target =
+  | Database of Entity.Label.t
+  | Databases of Entity.Label.t list
+  | All
+  | AllExcept of Entity.Label.t list
+
+(** [target_applies_to target label] returns [true] when [target] covers
+    [label]. *)
+val target_applies_to : database_target -> Entity.Label.t -> bool
+
+(** Register [migration] so it will be applied when
+    {!RunnerSig.run_all} is next called for a matching label.
+
+    @param for_databases Which database(s) this migration targets.
+                         Defaults to [All]. *)
+val register : ?for_databases:database_target -> t -> unit
 
 (* ------------------------------------------------------------------ *)
 (* Drift                                                               *)
