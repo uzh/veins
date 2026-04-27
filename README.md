@@ -95,11 +95,11 @@ open Veins
 
 let migration =
   Migration.(
-    empty
+    create
       (Namespace.create "add_users_table")
       ~written_at:(ptime_of_string "2026-04-24T14:03:14Z")
     |> add_step
-         (step
+         (Step.create
             ~id:(Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
             ~label:"TODO: describe step 1"
             ~down:"TODO: reverse SQL"
@@ -116,20 +116,28 @@ Edit the SQL strings, then link the file into your application. Every file that 
 ```ocaml
 module Runner = Migration.Make (Db)
 
-(* Apply all pending migrations in chronological order. *)
-let () = Lwt_main.run (Runner.run_all ())
+let root = Label.create "root"
 
-(* Or run a single step forward/backward. *)
-let () = Lwt_main.run (Runner.up ~id:(Migration.Id.create "30d5a1e5-...") ())
+(* Apply all pending migrations in chronological order. *)
+let () = Lwt_main.run
+  (match%lwt Runner.run_all root () with
+   | Ok () -> Lwt.return_unit
+   | Error e -> failwith (Error.show e))
 ```
 
 ### Drift detection
 
 ```ocaml
-(* Returns a list of steps that are recorded as applied in the database
-   but are no longer present in the registry (e.g. deleted migration files). *)
-let%lwt drifted = Runner.check () in
-List.iter (fun d -> Printf.eprintf "drift: %s\n" (Migration.Id.value d.Migration.id)) drifted
+(* Returns a list of drift values — Pending (steps not yet applied) or
+   Orphaned (applied IDs no longer present in the registry). *)
+let%lwt drifts = Runner.check (Label.create "root") () in
+List.iter (function
+  | Migration.Pending { namespace; pending_steps; _ } ->
+    Printf.eprintf "pending: %s (%d steps)\n" (Migration.Namespace.show namespace) pending_steps
+  | Migration.Orphaned { namespace; step_ids } ->
+    Printf.eprintf "orphaned in %s: %d step(s)\n"
+      (Migration.Namespace.show namespace) (List.length step_ids))
+  drifts
 ```
 
 ---

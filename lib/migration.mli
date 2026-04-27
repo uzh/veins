@@ -29,18 +29,18 @@
       let open Veins.Migration in
       register
         ~for_databases:(Database (Veins.Label.create "root"))
-          create
-            (Namespace.create "my_app")
-            ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
-          |> add_step
-               (Step.create
+        (create
+           (Namespace.create "my_app")
+           ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
+         |> add_step
+              (Step.create
                  ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
                  ~label:"create users table"
                  ~down:"DROP TABLE IF EXISTS users"
                  {|CREATE TABLE users (
-                        id   INT          PRIMARY KEY AUTO_INCREMENT,
-                        name VARCHAR(255) NOT NULL
-                      )|})
+                       id   INT          PRIMARY KEY AUTO_INCREMENT,
+                       name VARCHAR(255) NOT NULL
+                     )|})
         )
     ;;
 
