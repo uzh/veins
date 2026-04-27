@@ -15,7 +15,7 @@
     - Steps within a migration are applied in list order (always append new
       steps at the end).
     - Migrations can target different databases.  Use [~for_database] to
-      associate a migration with a specific {!Entity.Label.t}.  Omitting the
+      associate a migration with a specific {!Veins.Label.t}.  Omitting the
       argument defaults to [Label.create "root"].
     - Down migrations are optional.  A step whose [~down] is absent is
       irreversible; {!RunnerSig.down} will log a warning and skip it.

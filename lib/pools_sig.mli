@@ -20,7 +20,7 @@ module type ConfigSig = sig
   val expected_databases : int
 
   (** SQL dialect for DDL/DML differences between MariaDB and PostgreSQL.
-      Use {!Dialect.Mariadb} or {!Dialect.Postgresql}. *)
+      Use {!Veins.Dialect.Mariadb} or {!Veins.Dialect.Postgresql}. *)
   module Dialect : Dialect.Sig
 end
 
@@ -28,7 +28,7 @@ end
 
     All query helpers raise {!Error.Exn} on error rather than returning a
     [result] value, so callers can use plain [let%lwt] bindings.  Wrap
-    operations that need an explicit error boundary in {!transaction}. *)
+    operations that need an explicit error boundary in [transaction]. *)
 module type Sig = sig
   (** The configuration this pool was instantiated with. *)
   module Config : ConfigSig
@@ -99,7 +99,7 @@ module type Sig = sig
 
   (** {1 Query helpers}
 
-      Each helper accepts an {!Entity.Label.t} identifying which connection
+      Each helper accepts an {!Veins.Label.t} identifying which connection
       pool to borrow from, keeping the raw connection out of call sites. *)
 
   (** Run [f] with a borrowed connection from [label]'s pool.

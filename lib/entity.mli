@@ -1,4 +1,4 @@
-(** Public interface for {!Entity}. *)
+(** Entity types used throughout Veins. *)
 
 module Label : sig
   type t

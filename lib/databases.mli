@@ -1,4 +1,4 @@
-(** A global, in-process registry of named {!Entity.Database.t} entries.
+(** A global, in-process registry of named {!Veins.Database.t} entries.
 
     Use this module to declare all database configurations at startup so that
     pool functors and other components can look them up by label without

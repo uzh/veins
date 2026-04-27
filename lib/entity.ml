@@ -110,7 +110,18 @@ end = struct
 end
 
 (** A registered database entry. *)
-module Database = struct
+module Database : sig
+  type t =
+    { label : Label.t
+    ; url : Url.t
+    ; status : Status.t
+    }
+
+  val create : ?status:Status.t -> Label.t -> Url.t -> t
+  val label : t -> Label.t
+  val url : t -> Url.t
+  val status : t -> Status.t
+end = struct
   type t =
     { label : Label.t
     ; url : Url.t
