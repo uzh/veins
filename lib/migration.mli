@@ -61,10 +61,6 @@
     [ptime_of_string "2024-01-15T10:00:00Z"]. *)
 val ptime_of_string : string -> Ptime.t
 
-(* ------------------------------------------------------------------ *)
-(* Id / Namespace opaque types                                         *)
-(* ------------------------------------------------------------------ *)
-
 (** Opaque type for a step's stable identifier (UUID string). *)
 module Id : sig
   type t
@@ -86,10 +82,6 @@ module Namespace : sig
   val pp : Format.formatter -> t -> unit
   val show : t -> string
 end
-
-(* ------------------------------------------------------------------ *)
-(* Step                                                                *)
-(* ------------------------------------------------------------------ *)
 
 (** A single, individually-trackable migration step. *)
 type step =
@@ -123,10 +115,6 @@ type step =
     @param up (positional) SQL to apply the step. *)
 val step : id:Id.t -> label:string -> ?check_fk:bool -> ?down:string -> string -> step
 
-(* ------------------------------------------------------------------ *)
-(* Migration                                                           *)
-(* ------------------------------------------------------------------ *)
-
 (** A named, ordered group of migration steps. *)
 type t =
   { namespace : Namespace.t
@@ -155,10 +143,6 @@ val empty : Namespace.t -> written_at:Ptime.t -> t
 (** Append [step] to the end of [migration.steps]. *)
 val add_step : step -> t -> t
 
-(* ------------------------------------------------------------------ *)
-(* Global registry                                                     *)
-(* ------------------------------------------------------------------ *)
-
 (** Specifies which database(s) a migration should be applied to.
 
     - [Database label] — exactly one database identified by [label].
@@ -182,10 +166,6 @@ val target_applies_to : database_target -> Entity.Label.t -> bool
                          Defaults to [All]. *)
 val register : ?for_databases:database_target -> t -> unit
 
-(* ------------------------------------------------------------------ *)
-(* Drift                                                               *)
-(* ------------------------------------------------------------------ *)
-
 (** A discrepancy between the in-process registry and the migration-state
     table in a database.  Returned by {!RunnerSig.check}. *)
 type drift =
@@ -198,10 +178,6 @@ type drift =
       { namespace : Namespace.t
       ; step_ids : Id.t list
       }
-
-(* ------------------------------------------------------------------ *)
-(* Runner interface                                                    *)
-(* ------------------------------------------------------------------ *)
 
 (** Interface satisfied by the output of {!Make}. *)
 module type RunnerSig = sig
@@ -245,10 +221,6 @@ module type RunnerSig = sig
       least one unapplied step. *)
   val pending : Entity.Label.t -> unit -> (Namespace.t * int) list Lwt.t
 end
-
-(* ------------------------------------------------------------------ *)
-(* Functor                                                             *)
-(* ------------------------------------------------------------------ *)
 
 (** Instantiate a migration runner backed by [Db].
 

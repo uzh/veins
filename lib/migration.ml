@@ -4,10 +4,6 @@ let src = Logs.Src.create "veins.migration"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-(* ------------------------------------------------------------------ *)
-(* Id — opaque step identifier (UUID string)                          *)
-(* ------------------------------------------------------------------ *)
-
 module Id = struct
   type t = string
 
@@ -18,10 +14,6 @@ module Id = struct
   let show s = s
 end
 
-(* ------------------------------------------------------------------ *)
-(* Namespace — opaque migration group identifier                       *)
-(* ------------------------------------------------------------------ *)
-
 module Namespace = struct
   type t = string
 
@@ -31,10 +23,6 @@ module Namespace = struct
   let pp = Format.pp_print_string
   let show s = s
 end
-
-(* ------------------------------------------------------------------ *)
-(* Types                                                               *)
-(* ------------------------------------------------------------------ *)
 
 type step =
   { id : Id.t
@@ -50,10 +38,6 @@ type t =
   ; steps : step list
   }
 
-(* ------------------------------------------------------------------ *)
-(* Constructors                                                        *)
-(* ------------------------------------------------------------------ *)
-
 let step ~id ~label ?(check_fk = true) ?down up = { id; label; up; down; check_fk }
 
 let ptime_of_string s =
@@ -66,10 +50,6 @@ let ptime_of_string s =
 
 let empty namespace ~written_at = { namespace; written_at; steps = [] }
 let add_step s m = { m with steps = m.steps @ [ s ] }
-
-(* ------------------------------------------------------------------ *)
-(* Database target                                                     *)
-(* ------------------------------------------------------------------ *)
 
 type database_target =
   | Database of Entity.Label.t
@@ -85,19 +65,11 @@ let target_applies_to (target : database_target) (label : Entity.Label.t) =
   | AllExcept lbls -> not (CCList.mem ~eq:Entity.Label.equal label lbls)
 ;;
 
-(* ------------------------------------------------------------------ *)
-(* Global registry                                                     *)
-(* ------------------------------------------------------------------ *)
-
 let registry : (database_target * t) list ref = ref []
 
 let register ?(for_databases = All) migration =
   registry := !registry @ [ for_databases, migration ]
 ;;
-
-(* ------------------------------------------------------------------ *)
-(* Helpers                                                             *)
-(* ------------------------------------------------------------------ *)
 
 let table_name () =
   match Sys.getenv_opt "VENA_MIGRATION_TABLE" with
@@ -112,10 +84,6 @@ let now () =
   | None -> Ptime.epoch
 ;;
 
-(* ------------------------------------------------------------------ *)
-(* Drift                                                               *)
-(* ------------------------------------------------------------------ *)
-
 type drift =
   | Pending of
       { namespace : Namespace.t
@@ -127,10 +95,6 @@ type drift =
       ; step_ids : Id.t list
       }
 
-(* ------------------------------------------------------------------ *)
-(* Module type for Make output                                         *)
-(* ------------------------------------------------------------------ *)
-
 module type RunnerSig = sig
   val run_all : Entity.Label.t -> unit -> (unit, Error.t) Lwt_result.t
   val up : Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
@@ -139,10 +103,6 @@ module type RunnerSig = sig
   val status : Entity.Label.t -> unit -> (Namespace.t * int * int) list Lwt.t
   val pending : Entity.Label.t -> unit -> (Namespace.t * int) list Lwt.t
 end
-
-(* ------------------------------------------------------------------ *)
-(* Functor                                                             *)
-(* ------------------------------------------------------------------ *)
 
 module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   let setup db_label =

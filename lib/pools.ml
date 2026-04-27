@@ -8,10 +8,6 @@ module Make (Config : Pools_sig.ConfigSig) : Pools_sig.Sig with module Config = 
 struct
   module Config = Config
 
-  (* ------------------------------------------------------------------ *)
-  (* Internal pool entry                                                  *)
-  (* ------------------------------------------------------------------ *)
-
   type caqti_pool = (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t
 
   type connection_state =
@@ -72,10 +68,6 @@ struct
     ;;
   end
 
-  (* ------------------------------------------------------------------ *)
-  (* Connection cache                                                    *)
-  (* ------------------------------------------------------------------ *)
-
   module Cache = struct
     module LabelHash = struct
       type t = Entity.Label.t
@@ -97,10 +89,6 @@ struct
 
     let all () = Tbl.values_list pools
   end
-
-  (* ------------------------------------------------------------------ *)
-  (* Pool lifecycle                                                      *)
-  (* ------------------------------------------------------------------ *)
 
   module Pool = struct
     let drain_if_open (entry : Pool_entry.t) =
@@ -245,10 +233,6 @@ struct
     ;;
   end
 
-  (* ------------------------------------------------------------------ *)
-  (* Query helpers                                                       *)
-  (* ------------------------------------------------------------------ *)
-
   let query label f = Caqti_lwt_unix.Pool.use f |> Pool.map_fetched label
 
   let exec label request input =
@@ -289,10 +273,6 @@ struct
       let req = (param_type ->. Caqti_type.unit) ~oneshot:true sql in
       Lwt_list.iter_s (exec label req) rows
   ;;
-
-  (* ------------------------------------------------------------------ *)
-  (* Transactions                                                        *)
-  (* ------------------------------------------------------------------ *)
 
   let exec_each connection requests =
     Lwt_list.fold_left_s
