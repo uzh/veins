@@ -71,8 +71,8 @@ module Postgresql : Sig = struct
           id          UUID         NOT NULL,
           namespace   VARCHAR(128) NOT NULL,
           label       VARCHAR(256) NOT NULL,
-          created_at  TIMESTAMP    NOT NULL,
-          updated_at  TIMESTAMP    NOT NULL,
+          created_at  TIMESTAMPTZ  NOT NULL,
+          updated_at  TIMESTAMPTZ  NOT NULL,
           PRIMARY KEY (id)
         )|}
       table
