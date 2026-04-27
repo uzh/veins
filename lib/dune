@@ -12,7 +12,8 @@
   logs
   fmt
   uri
-  ptime)
+  ptime
+  uuidm)
  (wrapped true)
  (preprocess
   (pps lwt_ppx)))

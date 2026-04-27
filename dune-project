@@ -68,6 +68,8 @@
     (or :with-dev-setup :with-test)))
   (ptime
    (>= 1.1.0))
+  (uuidm
+   (>= 0.9.7))
   (uri
    (>= 4.4.0))))
 

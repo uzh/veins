@@ -24,21 +24,22 @@
 
     (* 4. Register migrations (at module init time) *)
     let () =
-      Veins.Migration.register
+      let open Veins.Migration in
+      register
         ~for_databases:Migration.All
-        Veins.Migration.(
-          empty
-            (Namespace.create "my_app")
-            ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
-          |> add_step
-               (step
-                  ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
-                  ~label:"create users table"
-                  ~down:"DROP TABLE IF EXISTS users"
-                  {|CREATE TABLE IF NOT EXISTS users (
+        (create
+           (Namespace.create "my_app")
+           ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
+         |> add_step
+              (Step.create
+                 ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
+                 ~label:"create users table"
+                 ~down:"DROP TABLE IF EXISTS users"
+                 {|CREATE TABLE IF NOT EXISTS users (
                         id   INT          PRIMARY KEY AUTO_INCREMENT,
                         name VARCHAR(255) NOT NULL
-                      )|}))
+                      )|})
+        )
     ;;
 
     (* 5. Initialize pool and run migrations *)
@@ -52,7 +53,29 @@
     ;;
     ]} *)
 
-include module type of Entity
+(** Opaque database label used as the key for pool lookups. *)
+module Label = Entity.Label
+
+(** Database connection URL.  Opaque — the raw connection string is not
+    accessible after construction.  Pass the value to
+    {!Database.create}. *)
+module Url : sig
+  type t = Entity.Url.t
+
+  val create : string -> t
+  val equal : t -> t -> bool
+  val pp : Format.formatter -> t -> unit
+  val show : t -> string
+end
+
+(** Connection and migration status of a database entry. *)
+module Status = Entity.Status
+
+(** Named database connection record. *)
+module Database = Entity.Database
+
+(** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
+module Dynparam = Entity.Dynparam
 
 (** Error types and exception raised by query helpers. *)
 module Error = Error
@@ -63,7 +86,7 @@ module Dialect = Dialect
 (** Module-type signatures for the pool functor. *)
 module Pools_sig = Pools_sig
 
-(** The main pool functor.  Apply [Pools.Make(Config)] to obtain a
+(** The main pool functor. Apply [Pools.Make(Config)] to obtain a
     database module for one pool family. *)
 module Pools = Pools
 

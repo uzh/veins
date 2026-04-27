@@ -14,11 +14,19 @@ module Url = struct
   type t = string
 
   let create s = s
-  let value s = s
   let to_uri = Uri.of_string
+
+  let redact s =
+    let u = Uri.of_string s in
+    (match Uri.password u with
+     | None | Some "" -> u
+     | Some _ -> Uri.with_password u (Some "***"))
+    |> Uri.to_string
+  ;;
+
   let equal = String.equal
-  let pp = Format.pp_print_string
-  let show s = s
+  let pp fmt s = Format.pp_print_string fmt (redact s)
+  let show = redact
 end
 
 module Status = struct

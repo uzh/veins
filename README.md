@@ -148,6 +148,8 @@ The `veins-gen` executable is installed as part of the `veins` package.
 
 ## Multiple databases
 
+_NOTE: `initialize` initiates the main database passed via `Pools.Make(Config)`_
+
 ```ocaml
 let analytics = Database.create (Label.create "analytics") analytics_url
 

@@ -142,15 +142,15 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
   let%lwt () = Db.exec label drop_tbl () in
   let mig =
     Migration.(
-      empty ns ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
+      create ns ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
       |> add_step
-           (step
+           (Step.create
               ~id:(Migration.Id.create "a1b2c3d4-0001-0001-0001-000000000001")
               ~label:"create table"
               ~down:"DROP TABLE IF EXISTS vena_test_mig_tbl"
               {|CREATE TABLE vena_test_mig_tbl (id INTEGER PRIMARY KEY)|})
       |> add_step
-           (step
+           (Step.create
               ~id:(Migration.Id.create "a1b2c3d4-0001-0001-0001-000000000002")
               ~label:"insert row"
               ~down:"DELETE FROM vena_test_mig_tbl WHERE id = 42"

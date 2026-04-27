@@ -24,21 +24,23 @@ module Namespace = struct
   let show s = s
 end
 
-type step =
-  { id : Id.t
-  ; label : string
-  ; up : string
-  ; down : string option
-  ; check_fk : bool
-  }
+module Step = struct
+  type t =
+    { id : Id.t
+    ; label : string
+    ; up : string
+    ; down : string option
+    ; check_fk : bool
+    }
+
+  let create ~id ~label ?(check_fk = true) ?down up = { id; label; up; down; check_fk }
+end
 
 type t =
   { namespace : Namespace.t
   ; written_at : Ptime.t
-  ; steps : step list
+  ; steps : Step.t list
   }
-
-let step ~id ~label ?(check_fk = true) ?down up = { id; label; up; down; check_fk }
 
 let ptime_of_string s =
   match Ptime.of_rfc3339 s with
@@ -48,7 +50,7 @@ let ptime_of_string s =
       (Format.asprintf "Migration.ptime_of_string: invalid RFC 3339 string: %S" s)
 ;;
 
-let empty namespace ~written_at = { namespace; written_at; steps = [] }
+let create namespace ~written_at = { namespace; written_at; steps = [] }
 let add_step s m = { m with steps = m.steps @ [ s ] }
 
 type database_target =
@@ -105,6 +107,8 @@ module type RunnerSig = sig
 end
 
 module Make (Db : Pools_sig.Sig) : RunnerSig = struct
+  open Step
+
   let setup db_label =
     let sql = Db.Config.Dialect.create_migration_table ~table:(table_name ()) in
     let req = (Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
@@ -118,7 +122,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     Lwt.return (CCList.map Id.create ids)
   ;;
 
-  let insert_applied_step db_label namespace (s : step) =
+  let insert_applied_step db_label namespace (s : Step.t) =
     let n = now () in
     let sql = Db.Config.Dialect.insert_applied_step ~table:(table_name ()) in
     let req =
@@ -151,7 +155,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       Lwt.finalize f (fun () -> Db.exec db_label on ()))
   ;;
 
-  let run_step_up db_label namespace (s : step) =
+  let run_step_up db_label namespace (s : Step.t) =
     Log.debug (fun m -> m "Applying step '%s' (%s)" s.label (Id.show s.id));
     let do_exec () =
       let req = (Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true s.up in
@@ -161,7 +165,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     if s.check_fk then do_exec () else with_fk_disabled db_label do_exec
   ;;
 
-  let run_step_down db_label (s : step) =
+  let run_step_down db_label (s : Step.t) =
     match s.down with
     | None ->
       Log.warn (fun m ->
@@ -177,12 +181,12 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       if s.check_fk then do_exec () else with_fk_disabled db_label do_exec
   ;;
 
-  let up db_label (mig : t) =
+  let up db_label mig =
     let%lwt () = setup db_label in
     let%lwt applied_ids = get_applied_ids db_label in
     let pending_steps =
       CCList.filter
-        (fun (s : step) -> not (CCList.mem ~eq:Id.equal s.id applied_ids))
+        (fun (s : Step.t) -> not (CCList.mem ~eq:Id.equal s.id applied_ids))
         mig.steps
     in
     if CCList.is_empty pending_steps
@@ -214,11 +218,13 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
        : (unit, Error.t) Lwt_result.t))
   ;;
 
-  let down db_label (mig : t) =
+  let down db_label mig =
     let%lwt () = setup db_label in
     let%lwt applied_ids = get_applied_ids db_label in
     let applied =
-      CCList.filter (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids) mig.steps
+      CCList.filter
+        (fun (s : Step.t) -> CCList.mem ~eq:Id.equal s.id applied_ids)
+        mig.steps
     in
     let to_revert = CCList.rev applied in
     if CCList.is_empty to_revert
@@ -277,12 +283,12 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     in
     Lwt.return
     @@ CCList.map
-         (fun (mig : t) ->
+         (fun mig ->
             let total = CCList.length mig.steps in
             let applied =
               CCList.length
                 (CCList.filter
-                   (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
+                   (fun (s : Step.t) -> CCList.mem ~eq:Id.equal s.id applied_ids)
                    mig.steps)
             in
             mig.namespace, applied, total)
@@ -317,18 +323,18 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     (* All step IDs currently in the registry for this label *)
     let all_registered_ids =
       CCList.flat_map
-        (fun (mig : t) -> CCList.map (fun (s : step) -> s.id) mig.steps)
+        (fun mig -> CCList.map (fun (s : Step.t) -> s.id) mig.steps)
         migrations_for_label
     in
     (* Pending: steps in registry not yet applied *)
     let pending_drifts =
       CCList.filter_map
-        (fun (mig : t) ->
+        (fun mig ->
            let total = CCList.length mig.steps in
            let applied_count =
              CCList.length
                (CCList.filter
-                  (fun (s : step) -> CCList.mem ~eq:Id.equal s.id applied_ids)
+                  (fun (s : Step.t) -> CCList.mem ~eq:Id.equal s.id applied_ids)
                   mig.steps)
            in
            let n = total - applied_count in

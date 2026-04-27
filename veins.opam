@@ -26,6 +26,7 @@ depends: [
   "ocaml-lsp-server" {with-dev-setup}
   "ocamlformat" {>= "0.18.0" & (with-dev-setup | with-test)}
   "ptime" {>= "1.1.0"}
+  "uuidm" {>= "0.9.7"}
   "uri" {>= "4.4.0"}
   "odoc" {with-doc}
 ]

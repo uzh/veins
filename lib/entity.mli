@@ -1,5 +1,6 @@
 (** Entity types used throughout Veins. *)
 
+(** @canonical Veins.Label *)
 module Label : sig
   type t
 
@@ -12,17 +13,18 @@ module Label : sig
   val show : t -> string
 end
 
+(** @canonical Veins.Url *)
 module Url : sig
   type t
 
   val create : string -> t
-  val value : t -> string
   val to_uri : t -> Uri.t
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
   val show : t -> string
 end
 
+(** @canonical Veins.Status *)
 module Status : sig
   type t =
     | Active
@@ -40,6 +42,7 @@ module Status : sig
   val pp : Format.formatter -> t -> unit
 end
 
+(** @canonical Veins.Database *)
 module Database : sig
   type t =
     { label : Label.t
@@ -53,6 +56,7 @@ module Database : sig
   val status : t -> Status.t
 end
 
+(** @canonical Veins.Dynparam *)
 module Dynparam : sig
   type t = Pack : 'a Caqti_type.t * 'a -> t
 

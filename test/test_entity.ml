@@ -10,12 +10,20 @@ let test_label_roundtrip () =
   assert (Label.show l = s)
 ;;
 
-let test_url_uri () =
+let test_url_roundtrip () =
   let raw = "mariadb://user:pass@host/db" in
   let u = Url.create raw in
-  assert (Url.value u = raw);
-  let uri = Url.to_uri u in
-  assert (Uri.scheme uri = Some "mariadb")
+  assert (Url.equal u (Url.create raw))
+;;
+
+let test_url_redacts_password () =
+  let u = Url.create "postgresql://admin:s3cr3t@host:5432/mydb" in
+  let shown = Url.show u in
+  assert (not (CCString.mem ~sub:"s3cr3t" shown));
+  assert (CCString.mem ~sub:"admin" shown);
+  assert (CCString.mem ~sub:"host" shown);
+  let u_no_pass = Url.create "postgresql://admin@host/mydb" in
+  assert (Url.show u_no_pass = "postgresql://admin@host/mydb")
 ;;
 
 let test_status_roundtrip () =
@@ -36,7 +44,8 @@ let test_dynparam () =
 
 let () =
   test_label_roundtrip ();
-  test_url_uri ();
+  test_url_roundtrip ();
+  test_url_redacts_password ();
   test_status_roundtrip ();
   test_dynparam ();
   print_endline "All entity unit tests passed."

@@ -43,6 +43,20 @@ module type Sig = sig
   (** [DELETE FROM <table> WHERE id = ?] — removes a step record during a
       down migration. *)
   val delete_applied_step : table:string -> string
+
+  (** Wrap a column name for use in a [SELECT] to return a UUID stored in
+      the dialect's native format as a lowercase dashed string.
+
+      - MariaDB ([BINARY(16)]): [LOWER(CONCAT(SUBSTR(HEX(<field>),1,8),'-',...))]
+      - PostgreSQL ([UUID]):    [<field>::text] *)
+  val uuid_select_fragment : field:string -> string
+
+  (** Wrap a [?] placeholder for use in an [INSERT] or [WHERE] clause
+      when the target column stores UUIDs in the dialect's native format.
+
+      - MariaDB ([BINARY(16)]): [UNHEX(REPLACE(<name>,'-',''))]
+      - PostgreSQL ([UUID]):    [<name>::uuid] *)
+  val uuid_value_fragment : string -> string
 end
 
 (** MariaDB / MySQL dialect.

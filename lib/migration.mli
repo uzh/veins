@@ -26,21 +26,22 @@
     module M = Veins.Migration.Make (Db)
 
     let () =
-      Veins.Migration.register
+      let open Veins.Migration in
+      register
         ~for_databases:(Database (Veins.Label.create "root"))
-        Veins.Migration.(
-          empty
+          create
             (Namespace.create "my_app")
             ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
           |> add_step
-               (step
-                  ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
-                  ~label:"create users table"
-                  ~down:"DROP TABLE IF EXISTS users"
-                  {|CREATE TABLE users (
+               (Step.create
+                 ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
+                 ~label:"create users table"
+                 ~down:"DROP TABLE IF EXISTS users"
+                 {|CREATE TABLE users (
                         id   INT          PRIMARY KEY AUTO_INCREMENT,
                         name VARCHAR(255) NOT NULL
-                      )|}))
+                      )|})
+        )
     ;;
 
     let () =
@@ -84,36 +85,38 @@ module Namespace : sig
 end
 
 (** A single, individually-trackable migration step. *)
-type step =
-  { id : Id.t
-    (** Stable UUID — must be globally unique across the entire
-        application.  Used as the primary key in the migration-state
-        table.  Choose a real UUID v4 at authoring time and never
-        change it once the step has been deployed. *)
-  ; label : string (** Human-readable description (used in log output). *)
-  ; up : string (** SQL statement to apply this step (forward migration). *)
-  ; down : string option
-    (** SQL statement to revert this step.  [None] means the step is
-        irreversible; {!RunnerSig.down} will log a warning and skip
-        it. *)
-  ; check_fk : bool
-    (** When [false] the runner temporarily disables FK checks before
-        executing [up] or [down].  Has no effect on dialects where
-        {!Dialect.Sig.fk_checks_supported} is [false] (e.g.
-        PostgreSQL). *)
-  }
+module Step : sig
+  type t =
+    { id : Id.t
+      (** Stable UUID — must be globally unique across the entire
+          application.  Used as the primary key in the migration-state
+          table.  Choose a real UUID v4 at authoring time and never
+          change it once the step has been deployed. *)
+    ; label : string (** Human-readable description (used in log output). *)
+    ; up : string (** SQL statement to apply this step (forward migration). *)
+    ; down : string option
+      (** SQL statement to revert this step.  [None] means the step is
+          irreversible; {!RunnerSig.down} will log a warning and skip
+          it. *)
+    ; check_fk : bool
+      (** When [false] the runner temporarily disables FK checks before
+          executing [up] or [down].  Has no effect on dialects where
+          {!Dialect.Sig.fk_checks_supported} is [false] (e.g.
+          PostgreSQL). *)
+    }
 
-(** Build a [step].
+  (** Build a step.
 
-    @param id Stable UUID v4 wrapped in {!Id.t}.
-    @param label Human-readable description for log output.
-    @param check_fk
-      Defaults to [true].  Pass [false] to disable FK
-      checks around this step on dialects that support it
-      (MariaDB / MySQL only).
-    @param down Optional SQL to revert the step.
-    @param up (positional) SQL to apply the step. *)
-val step : id:Id.t -> label:string -> ?check_fk:bool -> ?down:string -> string -> step
+      @param id Stable UUID v4 wrapped in {!Id.t}.
+      @param label Human-readable description for log output.
+      @param check_fk
+        Defaults to [true]. Pass [false] to disable FK
+        checks around this step on dialects that support it
+        (MariaDB / MySQL only).
+      @param down Optional SQL to revert the step.
+      @param up (positional) SQL to apply the step. *)
+  val create : id:Id.t -> label:string -> ?check_fk:bool -> ?down:string -> string -> t
+end
 
 (** A named, ordered group of migration steps. *)
 type t =
@@ -127,21 +130,21 @@ type t =
         database label by [written_at] (ascending) before applying
         them, so the apply order is deterministic regardless of
         registration order. *)
-  ; steps : step list
+  ; steps : Step.t list
     (** Steps in timeline / dependency order.  Always {b append} new
         steps at the end — never re-order or remove already-deployed
         steps. *)
   }
 
-(** Create an empty migration.
+(** Create a migration without steps. Add steps with {!add_step}.
     @param written_at
       Authoring timestamp.  Use {!ptime_of_string} for
       static literals, e.g.
       [ptime_of_string "2024-01-15T10:00:00Z"]. *)
-val empty : Namespace.t -> written_at:Ptime.t -> t
+val create : Namespace.t -> written_at:Ptime.t -> t
 
 (** Append [step] to the end of [migration.steps]. *)
-val add_step : step -> t -> t
+val add_step : Step.t -> t -> t
 
 (** Specifies which database(s) a migration should be applied to.
 
@@ -161,6 +164,18 @@ val target_applies_to : database_target -> Entity.Label.t -> bool
 
 (** Register [migration] so it will be applied when
     {!RunnerSig.run_all} is next called for a matching label.
+
+    [register] is a pure synchronous operation and can be called at
+    module initialisation time or from inside an {!Lwt.t} callback.
+    To target databases whose labels are only known at runtime (e.g.
+    fetched via a query), call [register] inside the Lwt sequence
+    before invoking the runner:
+
+    {[
+    let%lwt labels = Db.collect root fetch_tenant_labels () in
+    Migration.register ~for_databases:(Migration.Databases labels) my_migration;
+    M.run_all root ()
+    ]}
 
     @param for_databases Which database(s) this migration targets.
                          Defaults to [All]. *)
