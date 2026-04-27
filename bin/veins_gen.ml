@@ -66,9 +66,24 @@ let compact_timestamp p =
 
 let () =
   let now = Ptime_clock.now () in
-  let args = Sys.argv |> Array.to_list |> List.tl in
-  let s = String.concat " " args in
+  let args =
+    match Array.to_list Sys.argv with
+    | _ :: args -> args
+    | [] ->
+      prerr_endline "Usage: veins-gen <migration description>";
+      exit 1
+  in
+  let s = String.trim (String.concat " " args) in
+  if s = ""
+  then (
+    prerr_endline "Usage: veins-gen <migration description>";
+    exit 1);
   let slug = slugify s in
+  if slug = ""
+  then (
+    prerr_endline
+      "Migration description must contain at least one alphanumeric character.";
+    exit 1);
   let compact = compact_timestamp now in
   let written_at = iso8601_now now in
   let output_dir =
