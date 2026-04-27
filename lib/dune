@@ -15,6 +15,7 @@
   ptime
   uuidm)
  (wrapped true)
+ (modules_without_implementation pools_sig)
  (preprocess
   (pps lwt_ppx)))
 

@@ -39,29 +39,30 @@ struct
       url |> Entity.Url.to_uri |> Caqti_lwt_unix.connect_pool ~pool_config
     ;;
 
+    let raise_connection_failed msg = raise (Error.Exn (Error.Connection_failed msg))
+
+    let make_connection_error_message entry err =
+      Format.asprintf
+        "Failed to connect to '%s': %a"
+        (Entity.Label.show (database_label entry))
+        Caqti_error.pp
+        err
+    ;;
+
     let connect_base ?(retries = 2) ({ required; _ } as entry) =
       let attempt () = entry |> database_url |> make_caqti_pool in
       let result = CCResult.retry retries attempt in
       match result with
-      | Error [] ->
-        raise (Error.Exn (Error.Connection_failed "Failed to connect: empty error list"))
+      | Error [] -> raise_connection_failed "Failed to connect: empty error list"
       | Error (err :: _) when required ->
-        raise
-          (Error.Exn
-             (Error.Connection_failed
-                (Format.asprintf
-                   "Required database '%s' unavailable: %a"
-                   (Entity.Label.show (database_label entry))
-                   Caqti_error.pp
-                   err)))
+        raise_connection_failed
+          (Format.asprintf
+             "Required database '%s' unavailable: %a"
+             (Entity.Label.show (database_label entry))
+             Caqti_error.pp
+             err)
       | Error (err :: _) ->
-        let msg =
-          Format.asprintf
-            "Failed to connect to '%s': %a"
-            (Entity.Label.show (database_label entry))
-            Caqti_error.pp
-            err
-        in
+        let msg = make_connection_error_message entry err in
         Log.warn (fun m -> m "%s" msg);
         { entry with connection = Fail msg }
       | Ok pool -> { entry with connection = Open pool }
@@ -83,16 +84,16 @@ struct
     let find_opt label = Tbl.find_opt pools label
     let remove label = Tbl.remove pools label
 
-    let replace (entry : Pool_entry.t) =
-      Tbl.replace pools (Pool_entry.database_label entry) entry
+    let replace ({ Pool_entry.database; _ } as entry) =
+      Tbl.replace pools (Entity.Database.label database) entry
     ;;
 
     let all () = Tbl.values_list pools
   end
 
   module Pool = struct
-    let drain_if_open (entry : Pool_entry.t) =
-      match entry.Pool_entry.connection with
+    let drain_if_open { Pool_entry.connection; _ } =
+      match connection with
       | Open pool ->
         let%lwt () = Caqti_lwt_unix.Pool.drain pool in
         Lwt.return_unit
@@ -102,9 +103,9 @@ struct
     let initialize ?(additional_pools = []) () =
       CCList.iter
         (fun db ->
-           let label = Entity.Database.label db in
-           if CCOption.is_none (Cache.find_opt label)
-           then
+           match Cache.find_opt (Entity.Database.label db) with
+           | Some _ -> ()
+           | None ->
              Pool_entry.make ~required:true db |> Pool_entry.connect_base |> Cache.replace)
         (Config.database :: additional_pools)
     ;;
@@ -131,26 +132,28 @@ struct
         Lwt.return_unit
     ;;
 
-    let reset ?required database =
-      let%lwt () = drop (Entity.Database.label database) in
-      Pool_entry.make ?required database |> Pool_entry.connect_base |> Cache.replace;
-      Lwt.return_unit
-    ;;
-
     let reset_label ?required label database =
       let%lwt () = drop label in
       Pool_entry.make ?required database |> Pool_entry.connect_base |> Cache.replace;
       Lwt.return_unit
     ;;
 
+    let reset ?required database =
+      reset_label ?required (Entity.Database.label database) database
+    ;;
+
     let clear () = Cache.clear ()
+
+    let database_not_registered label =
+      Error (Error.Database_not_registered (Entity.Label.show label))
+    ;;
 
     let connect label =
       match Cache.find_opt label with
-      | None -> Error (Error.Database_not_registered (Entity.Label.show label))
+      | None -> database_not_registered label
       | Some entry ->
-        let rec try_connect (e : Pool_entry.t) =
-          match e.Pool_entry.connection with
+        let rec try_connect ({ Pool_entry.connection; _ } as e) =
+          match connection with
           | Fail msg -> Error (Error.Connection_failed msg)
           | Close ->
             let e2 = Pool_entry.connect_base e in
@@ -180,37 +183,38 @@ struct
     ;;
 
     let find_all ?(allowed_status = Entity.Status.all) ?(exclude = []) () =
-      Cache.all ()
-      |> CCList.filter (fun (e : Pool_entry.t) ->
-        let lbl = Pool_entry.database_label e in
-        let st = Entity.Database.status e.Pool_entry.database in
-        CCList.mem ~eq:Entity.Status.equal st allowed_status
-        && not (CCList.mem ~eq:Entity.Label.equal lbl exclude))
-      |> CCList.map (fun (e : Pool_entry.t) -> e.Pool_entry.database)
+      CCList.filter_map
+        (fun { Pool_entry.database; _ } ->
+           let lbl = Entity.Database.label database in
+           let st = Entity.Database.status database in
+           CCOption.return_if
+             (CCList.mem ~eq:Entity.Status.equal st allowed_status
+              && not (CCList.mem ~eq:Entity.Label.equal lbl exclude))
+             database)
+        (Cache.all ())
     ;;
 
     let fetch ?(retries = 2) label =
+      let raise_not_registered () =
+        raise (Error.Exn (Error.Database_not_registered (Entity.Label.show label)))
+      in
       let rec go () =
         match Cache.find_opt label with
-        | None ->
-          raise (Error.Exn (Error.Database_not_registered (Entity.Label.show label)))
-        | Some entry ->
-          (match entry.Pool_entry.connection with
+        | None -> raise_not_registered ()
+        | Some ({ Pool_entry.connection; n_retries; _ } as entry) ->
+          (match connection with
            | Open pool ->
-             if entry.Pool_entry.n_retries > 0
-             then Cache.replace (Pool_entry.reset_retry entry);
+             if n_retries > 0 then Cache.replace (Pool_entry.reset_retry entry);
              Lwt.return pool
            | Close ->
              Cache.replace (Pool_entry.connect_base entry);
              go ()
-           | Fail _ when entry.Pool_entry.n_retries >= retries ->
-             raise
-               (Error.Exn
-                  (Error.Connection_failed
-                     (Format.asprintf
-                        "All %d reconnect attempts exhausted for '%s'"
-                        retries
-                        (Entity.Label.show label))))
+           | Fail _ when n_retries >= retries ->
+             Pool_entry.raise_connection_failed
+               (Format.asprintf
+                  "All %d reconnect attempts exhausted for '%s'"
+                  retries
+                  (Entity.Label.show label))
            | Fail _ ->
              Cache.replace (Pool_entry.connect_base entry |> Pool_entry.increment_retry);
              go ())
@@ -263,24 +267,16 @@ struct
     match rows with
     | [] -> Lwt.return_unit
     | _ ->
-      let placeholders =
-        CCList.replicate (CCList.length column_names) "?" |> CCString.concat ", "
-      in
-      let cols = CCString.concat ", " column_names in
-      let sql =
-        Format.asprintf "INSERT INTO %s (%s) VALUES (%s)" table cols placeholders
-      in
+      let sql = Config.Dialect.insert_row ~table ~columns:column_names in
       let req = (param_type ->. Caqti_type.unit) ~oneshot:true sql in
       Lwt_list.iter_s (exec label req) rows
   ;;
 
   let exec_each connection requests =
-    Lwt_list.fold_left_s
-      (fun acc f ->
-         match acc with
-         | Error e -> Lwt.return (Error e)
-         | Ok () -> f connection)
-      (Ok ())
+    let open Lwt_result.Infix in
+    CCList.fold_left
+      (fun acc f -> acc >>= fun () -> f connection)
+      (Lwt_result.return ())
       requests
   ;;
 

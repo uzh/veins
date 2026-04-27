@@ -21,7 +21,7 @@ let setup () =
   PostgresDb.Pool.initialize ();
   match PostgresDb.Pool.connect (Label.create "root") with
   | Ok () -> ()
-  | Error e -> failwith (Error.show e)
+  | Error e -> invalid_arg (Error.show e)
 ;;
 
 let test_ping () =

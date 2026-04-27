@@ -44,6 +44,11 @@ module type Sig = sig
       down migration. *)
   val delete_applied_step : table:string -> string
 
+  (** [INSERT INTO <table> (<col1>, ...) VALUES (?, ...)] — generic single-row
+      insert with one [?] placeholder per column.  Used by
+      {!Pools_sig.Sig.populate}. *)
+  val insert_row : table:string -> columns:string list -> string
+
   (** Wrap a column name for use in a [SELECT] to return a UUID stored in
       the dialect's native format as a lowercase dashed string.
 

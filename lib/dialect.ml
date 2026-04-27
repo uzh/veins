@@ -5,9 +5,16 @@ module type Sig = sig
   val select_applied_rows : table:string -> string
   val insert_applied_step : table:string -> string
   val delete_applied_step : table:string -> string
+  val insert_row : table:string -> columns:string list -> string
   val uuid_select_fragment : field:string -> string
   val uuid_value_fragment : string -> string
 end
+
+let insert_row ~table ~columns =
+  let cols = CCString.concat ", " columns in
+  let placeholders = CCString.concat ", " (CCList.map (Fun.const "?") columns) in
+  Format.asprintf "INSERT INTO %s (%s) VALUES (%s)" table cols placeholders
+;;
 
 module Mariadb : Sig = struct
   let uuid_select_fragment ~field =
@@ -59,6 +66,8 @@ module Mariadb : Sig = struct
   let delete_applied_step ~table =
     Format.asprintf "DELETE FROM %s WHERE id = %s" table (uuid_value_fragment "?")
   ;;
+
+  let insert_row = insert_row
 end
 
 module Postgresql : Sig = struct
@@ -102,6 +111,8 @@ module Postgresql : Sig = struct
   let delete_applied_step ~table =
     Format.asprintf "DELETE FROM %s WHERE id = %s" table (uuid_value_fragment "?")
   ;;
+
+  let insert_row = insert_row
 end
 
 let of_url url =

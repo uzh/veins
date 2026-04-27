@@ -51,7 +51,7 @@
          (* drifts is [] when the DB is fully up to date *)
          match%lwt M.run_all (Veins.Label.create "root") () with
          | Ok () -> Lwt.return_unit
-         | Error e -> failwith (Veins.Error.show e))
+         | Error e -> invalid_arg (Veins.Error.show e))
     ;;
     ]}
 
@@ -116,6 +116,9 @@ module Step : sig
       @param down Optional SQL to revert the step.
       @param up (positional) SQL to apply the step. *)
   val create : id:Id.t -> label:string -> ?check_fk:bool -> ?down:string -> string -> t
+
+  (** Return the step's stable identifier. *)
+  val id : t -> Id.t
 end
 
 (** A named, ordered group of migration steps. *)
@@ -146,6 +149,9 @@ val create : Namespace.t -> written_at:Ptime.t -> t
 (** Append [step] to the end of [migration.steps]. *)
 val add_step : Step.t -> t -> t
 
+(** Return the [Id.t] of every step in [migration], in list order. *)
+val step_ids : t -> Id.t list
+
 (** Specifies which database(s) a migration should be applied to.
 
     - [Database label] — exactly one database identified by [label].
@@ -166,7 +172,7 @@ val target_applies_to : database_target -> Entity.Label.t -> bool
     {!RunnerSig.run_all} is next called for a matching label.
 
     [register] is a pure synchronous operation and can be called at
-    module initialisation time or from inside an {!Lwt.t} callback.
+    module initialisation time or from inside an [Lwt.t] callback.
     To target databases whose labels are only known at runtime (e.g.
     fetched via a query), call [register] inside the Lwt sequence
     before invoking the runner:

@@ -32,7 +32,7 @@ let test_status_roundtrip () =
     (fun st ->
        match of_string (show st) with
        | Ok s -> assert (equal s st)
-       | Error e -> failwith e)
+       | Error e -> invalid_arg e)
     all
 ;;
 
@@ -43,10 +43,14 @@ let test_dynparam () =
 ;;
 
 let () =
-  test_label_roundtrip ();
-  test_url_roundtrip ();
-  test_url_redacts_password ();
-  test_status_roundtrip ();
-  test_dynparam ();
-  print_endline "All entity unit tests passed."
+  Alcotest.run
+    "Veins Entity"
+    [ "label", [ Alcotest.test_case "roundtrip" `Quick test_label_roundtrip ]
+    ; ( "url"
+      , [ Alcotest.test_case "roundtrip" `Quick test_url_roundtrip
+        ; Alcotest.test_case "redacts_password" `Quick test_url_redacts_password
+        ] )
+    ; "status", [ Alcotest.test_case "roundtrip" `Quick test_status_roundtrip ]
+    ; "dynparam", [ Alcotest.test_case "create" `Quick test_dynparam ]
+    ]
 ;;

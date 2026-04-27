@@ -7,17 +7,14 @@ open Caqti_request.Infix
 let db_of_env_or var default =
   let raw =
     match Sys.getenv_opt var with
-    | Some s when s <> "" -> s
+    | Some s when not (CCString.is_empty s) -> s
     | _ -> default
   in
   Database.(create (Label.create "root") (Url.create raw))
 ;;
 
 (** Simple query: return [1] from the database to verify connectivity. *)
-let ping_request =
-  let open Caqti_request.Infix in
-  Caqti_type.(unit ->! int) "SELECT 1"
-;;
+let ping_request = Caqti_type.(unit ->! int) "SELECT 1"
 
 (** Create a trivial test table, insert a row, query it back, then drop it. *)
 let roundtrip_test (module Db : Pools_sig.Sig) () =
@@ -156,33 +153,41 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
               ~down:"DELETE FROM vena_test_mig_tbl WHERE id = 42"
               {|INSERT INTO vena_test_mig_tbl (id) VALUES (42)|}))
   in
+  let fail_with_error e = Lwt.fail (Invalid_argument (Error.show e)) in
   Migration.register ~for_databases:(Migration.Database label) mig;
   (* Test up: both steps applied *)
   let%lwt () =
     match%lwt M.run_all label () with
     | Ok () -> Lwt.return_unit
-    | Error e -> failwith (Error.show e)
+    | Error e -> fail_with_error e
   in
   let%lwt statuses = M.status label () in
   let _, applied, total =
-    CCList.find (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses
+    match CCList.find_opt (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses with
+    | Some t -> t
+    | None ->
+      Alcotest.failf "namespace %s not found in status" (Migration.Namespace.show ns)
   in
   assert (applied = 2 && total = 2);
   (* Test idempotency: running again is a no-op *)
   let%lwt () =
     match%lwt M.run_all label () with
     | Ok () -> Lwt.return_unit
-    | Error e -> failwith (Error.show e)
+    | Error e -> fail_with_error e
   in
   (* Test down: revert all steps *)
   let%lwt () =
     match%lwt M.down label mig with
     | Ok () -> Lwt.return_unit
-    | Error e -> failwith ("down failed: " ^ Error.show e)
+    | Error e ->
+      Lwt.fail (Invalid_argument (Format.asprintf "down failed: %s" (Error.show e)))
   in
   let%lwt statuses2 = M.status label () in
   let _, applied2, _ =
-    CCList.find (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses2
+    match CCList.find_opt (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses2 with
+    | Some t -> t
+    | None ->
+      Alcotest.failf "namespace %s not found in status2" (Migration.Namespace.show ns)
   in
   assert (applied2 = 0);
   (* Cleanup *)
@@ -190,17 +195,13 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
   Lwt.return_unit
 ;;
 
-(* ------------------------------------------------------------------ *)
-(* Performance helpers                                                  *)
-(* ------------------------------------------------------------------ *)
-
 (** Fire [n] concurrent pings against the pool and assert all return 1.
     Exercises pool borrowing under concurrency. *)
 let concurrent_queries_test ?(n = 20) (module Db : Pools_sig.Sig) () =
   let label = Label.create "root" in
-  let tasks = List.init n (fun _ -> Db.find label ping_request ()) in
+  let tasks = CCList.init n (fun _ -> Db.find label ping_request ()) in
   let%lwt results = Lwt.all tasks in
-  assert (List.for_all (fun r -> r = 1) results);
+  assert (CCList.for_all (fun r -> r = 1) results);
   Lwt.return_unit
 ;;
 
@@ -228,17 +229,13 @@ let bulk_insert_test ?(n = 100) (module Db : Pools_sig.Sig) () =
   in
   let%lwt () = Db.exec label create_req () in
   let%lwt () =
-    Lwt_list.iter_s (fun i -> Db.exec label insert_req (i, i * 2)) (List.init n Fun.id)
+    Lwt_list.iter_s (fun i -> Db.exec label insert_req (i, i * 2)) (CCList.init n Fun.id)
   in
   let%lwt count = Db.find label count_req () in
   let%lwt () = Db.exec label drop_req () in
   assert (count = n);
   Lwt.return_unit
 ;;
-
-(* ------------------------------------------------------------------ *)
-(* Resilience helpers                                                   *)
-(* ------------------------------------------------------------------ *)
 
 (** Disconnect the pool then issue a query — the pool must auto-reconnect. *)
 let disconnect_reconnect_test (module Db : Pools_sig.Sig) () =

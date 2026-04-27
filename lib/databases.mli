@@ -25,7 +25,7 @@ val register : Entity.Database.t -> unit
     [label], or [None] if no such entry exists. *)
 val find : Entity.Label.t -> Entity.Database.t option
 
-(** Like {!find} but raises [Not_found] if the label is not registered. *)
+(** Like {!find} but raises [Invalid_argument] if the label is not registered. *)
 val find_exn : Entity.Label.t -> Entity.Database.t
 
 (** Return all currently registered databases in unspecified order. *)

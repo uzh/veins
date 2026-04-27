@@ -49,7 +49,7 @@
       Lwt_main.run
         (match%lwt M.run_all root () with
          | Ok () -> Lwt.return_unit
-         | Error e -> failwith (Veins.Error.show e))
+         | Error e -> invalid_arg (Veins.Error.show e))
     ;;
     ]} *)
 

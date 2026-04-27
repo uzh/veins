@@ -14,7 +14,11 @@ let find = Tbl.find_opt store
 let find_exn label =
   match Tbl.find_opt store label with
   | Some db -> db
-  | None -> raise Not_found
+  | None ->
+    invalid_arg
+      (Format.asprintf
+         "Databases.find_exn: no database registered for label %S"
+         (Entity.Label.show label))
 ;;
 
 let all () = Tbl.values_list store

@@ -3,8 +3,8 @@ module Label = struct
 
   let create s = s
   let value s = s
-  let equal = String.equal
-  let compare = String.compare
+  let equal = CCString.equal
+  let compare = CCString.compare
   let hash = Hashtbl.hash
   let pp = Format.pp_print_string
   let show s = s
@@ -18,13 +18,12 @@ module Url = struct
 
   let redact s =
     let u = Uri.of_string s in
-    (match Uri.password u with
-     | None | Some "" -> u
-     | Some _ -> Uri.with_password u (Some "***"))
-    |> Uri.to_string
+    match Uri.password u with
+    | None | Some "" -> s
+    | Some _ -> Uri.with_password u (Some "***") |> Uri.to_string
   ;;
 
-  let equal = String.equal
+  let equal = CCString.equal
   let pp fmt s = Format.pp_print_string fmt (redact s)
   let show = redact
 end
@@ -60,7 +59,7 @@ module Status = struct
     | MigrationsPending -> "migrations_pending"
   ;;
 
-  let equal a b = String.equal (show a) (show b)
+  let equal (a : t) (b : t) = Stdlib.(a = b)
 
   let of_string = function
     | "active" -> Ok Active

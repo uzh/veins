@@ -2,4 +2,4 @@
  (name veins_gen)
  (public_name veins-gen)
  (package veins)
- (libraries veins uuidm ptime ptime.clock.os))
+ (libraries veins uuidm ptime ptime.clock.os containers))

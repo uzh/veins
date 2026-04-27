@@ -8,10 +8,6 @@ let tenant1 = lbl "tenant1"
 let tenant2 = lbl "tenant2"
 let other = lbl "other"
 
-(* ------------------------------------------------------------------ *)
-(* target_applies_to                                                   *)
-(* ------------------------------------------------------------------ *)
-
 let test_database_matches_exact () =
   let t = Migration.Database root in
   assert (Migration.target_applies_to t root);
@@ -57,10 +53,6 @@ let test_all_except_empty_list_matches_all () =
   assert (Migration.target_applies_to t tenant2)
 ;;
 
-(* ------------------------------------------------------------------ *)
-(* register — default target                                           *)
-(* ------------------------------------------------------------------ *)
-
 let test_register_default_targets_root () =
   (* The default for_databases is All; verify it applies to every label. *)
   let default_target = Migration.All in
@@ -68,17 +60,34 @@ let test_register_default_targets_root () =
   assert (Migration.target_applies_to default_target (lbl "tenant"))
 ;;
 
-(* ------------------------------------------------------------------ *)
-(* Runner                                                              *)
-(* ------------------------------------------------------------------ *)
-
 let () =
-  test_database_matches_exact ();
-  test_databases_matches_any_listed ();
-  test_databases_empty_list_matches_nothing ();
-  test_all_matches_every_label ();
-  test_all_except_excludes_listed ();
-  test_all_except_empty_list_matches_all ();
-  test_register_default_targets_root ();
-  print_endline "All migration unit tests passed."
+  Alcotest.run
+    "Veins Migration"
+    [ ( "database_target"
+      , [ Alcotest.test_case "Database exact match" `Quick test_database_matches_exact
+        ; Alcotest.test_case
+            "Databases matches any listed"
+            `Quick
+            test_databases_matches_any_listed
+        ; Alcotest.test_case
+            "Databases empty list matches nothing"
+            `Quick
+            test_databases_empty_list_matches_nothing
+        ; Alcotest.test_case "All matches every label" `Quick test_all_matches_every_label
+        ; Alcotest.test_case
+            "AllExcept excludes listed"
+            `Quick
+            test_all_except_excludes_listed
+        ; Alcotest.test_case
+            "AllExcept empty matches all"
+            `Quick
+            test_all_except_empty_list_matches_all
+        ] )
+    ; ( "register"
+      , [ Alcotest.test_case
+            "default target is All"
+            `Quick
+            test_register_default_targets_root
+        ] )
+    ]
 ;;
