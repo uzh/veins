@@ -10,6 +10,16 @@ module Label = struct
   let show s = s
 end
 
+module Role = struct
+  type t = string
+
+  let create s = s
+  let value s = s
+  let equal = CCString.equal
+  let pp = Format.pp_print_string
+  let show s = s
+end
+
 module Url = struct
   type t = string
 
@@ -76,16 +86,49 @@ module Status = struct
 end
 
 module Database = struct
+  type pool =
+    | Main of Url.t
+    | Multiple of (Role.t * Url.t) list
+
   type t =
     { label : Label.t
-    ; url : Url.t
     ; status : Status.t
+    ; pool : pool
     }
 
-  let create ?(status = Status.Active) label url = { label; url; status }
+  let create ?(status = Status.Active) label pool =
+    (match pool with
+     | Main _ -> ()
+     | Multiple roles ->
+       let seen = Hashtbl.create (CCList.length roles) in
+       CCList.iter
+         (fun (role, _) ->
+            if Hashtbl.mem seen role
+            then
+              invalid_arg
+                (Format.asprintf "Database.create: duplicate role %a" Role.pp role);
+            Hashtbl.add seen role ())
+         roles);
+    { label; status; pool }
+  ;;
+
   let label { label; _ } = label
-  let url { url; _ } = url
   let status { status; _ } = status
+  let pool { pool; _ } = pool
+
+  let url ?role { pool; _ } =
+    match pool, role with
+    | Main db_url, None -> db_url
+    | Main db_url, Some _ ->
+      Logs.warn (fun m ->
+        m "Database.url: role provided for Main pool; ignoring and returning primary URL");
+      db_url
+    | Multiple _, None -> invalid_arg "Database.url: role is required for Multiple pool"
+    | Multiple databases, Some role ->
+      CCList.assoc_opt ~eq:Role.equal role databases
+      |> CCOption.get_exn_or
+           (Format.asprintf "Database.url: unknown role %a" Role.pp role)
+  ;;
 end
 
 module Dynparam = struct

@@ -60,10 +60,12 @@ let test_multi_disconnect_reconnect () =
   Test_helpers.multi_disconnect_reconnect_test (module PostgresDb) default_url ()
 ;;
 
+let test_role_pool () = Test_helpers.role_pool_test (module PostgresDb) default_url ()
+
 let test_multi_pool () =
   (* Second pool with its own label pointing to the same DB *)
   let alt_url = default_url in
-  let alt_db = Database.(create (Label.create "pg_alt") (Url.create alt_url)) in
+  let alt_db = Database.(create (Label.create "pg_alt") (Main (Url.create alt_url))) in
   PostgresDb.Pool.add alt_db;
   let alt_label = Label.create "pg_alt" in
   let%lwt result = PostgresDb.find alt_label Test_helpers.ping_request () in
@@ -100,6 +102,7 @@ let () =
            ; test_case "pool_reset" `Quick (fun _ () -> test_pool_reset ())
            ; test_case "multi_disconnect_reconnect" `Quick (fun _ () ->
                test_multi_disconnect_reconnect ())
+           ; test_case "role_pool" `Quick (fun _ () -> test_role_pool ())
            ] )
        ]
 ;;

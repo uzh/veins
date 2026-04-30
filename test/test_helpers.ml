@@ -10,7 +10,7 @@ let db_of_env_or var default =
     | Some s when not (CCString.is_empty s) -> s
     | _ -> default
   in
-  Database.(create (Label.create "root") (Url.create raw))
+  Database.(create (Label.create "root") (Main (Url.create raw)))
 ;;
 
 (** Simple query: return [1] from the database to verify connectivity. *)
@@ -273,8 +273,8 @@ let pool_reset_test (module Db : Pools_sig.Sig) db () =
 let multi_disconnect_reconnect_test (module Db : Pools_sig.Sig) url () =
   let lbl_a = Label.create "vena_extra_a" in
   let lbl_b = Label.create "vena_extra_b" in
-  let db_a = Database.create lbl_a (Url.create url) in
-  let db_b = Database.create lbl_b (Url.create url) in
+  let db_a = Database.create lbl_a (Database.Main (Url.create url)) in
+  let db_b = Database.create lbl_b (Database.Main (Url.create url)) in
   Db.Pool.add db_a;
   Db.Pool.add db_b;
   (* Disconnect both extra pools *)
@@ -292,4 +292,35 @@ let multi_disconnect_reconnect_test (module Db : Pools_sig.Sig) url () =
   let%lwt () = Db.Pool.drop lbl_a in
   let%lwt () = Db.Pool.drop lbl_b in
   Lwt.return_unit
+;;
+
+(** Register a [Multiple] pool with two roles pointing at [url], verify both
+    roles can execute queries, verify that querying without a role raises
+    [Database_not_registered], then clean up. *)
+let role_pool_test (module Db : Pools_sig.Sig) url () =
+  let label = Label.create "vena_role_db" in
+  let reader = Role.create "reader" in
+  let writer = Role.create "writer" in
+  let db =
+    Database.create
+      label
+      (Database.Multiple [ reader, Url.create url; writer, Url.create url ])
+  in
+  Db.Pool.add db;
+  (* Both roles can reach the database *)
+  let%lwt r1 = Db.find ~role:reader label ping_request () in
+  assert (r1 = 1);
+  let%lwt r2 = Db.find ~role:writer label ping_request () in
+  assert (r2 = 1);
+  (* No primary entry exists for a Multiple pool *)
+  let%lwt () =
+    Lwt.catch
+      (fun () ->
+         let%lwt _ = Db.find label ping_request () in
+         Lwt.fail_with "expected Database_not_registered for Multiple pool without role")
+      (function[@warning "-4"]
+        | Error.Exn (Error.Database_not_registered _) -> Lwt.return_unit
+        | exn -> Lwt.fail exn)
+  in
+  Db.Pool.drop label
 ;;

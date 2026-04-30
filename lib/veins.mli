@@ -7,7 +7,7 @@
     module Cfg = struct
       let database =
         let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
-        Veins.Database.create (Veins.Label.create "root") url
+        Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
       ;;
 
       let database_pool_size = 10
@@ -55,6 +55,10 @@
 
 (** Opaque database label used as the key for pool lookups. *)
 module Label = Entity.Label
+
+(** Role name for a database user (e.g. ["readonly"], ["write"]).
+    Distinct from {!Label} to prevent accidental mixing. *)
+module Role = Entity.Role
 
 (** Database connection URL.  Opaque — the raw connection string is not
     accessible after construction.  Pass the value to

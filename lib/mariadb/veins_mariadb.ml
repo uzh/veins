@@ -5,7 +5,9 @@
 
     {[
     module Db = Veins_mariadb.Pools.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
+        let database =
+          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
+        ;;
       end)
     ]}
 

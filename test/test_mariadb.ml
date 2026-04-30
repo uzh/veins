@@ -55,10 +55,12 @@ let test_multi_disconnect_reconnect () =
   Test_helpers.multi_disconnect_reconnect_test (module MariaDb) default_url ()
 ;;
 
+let test_role_pool () = Test_helpers.role_pool_test (module MariaDb) default_url ()
+
 let test_pool_add_and_drop () =
   let extra_url = default_url in
   let extra_db =
-    Database.(create (Label.create "mariadb_extra") (Url.create extra_url))
+    Database.(create (Label.create "mariadb_extra") (Main (Url.create extra_url)))
   in
   MariaDb.Pool.add extra_db;
   let%lwt () = MariaDb.Pool.drop (Label.create "mariadb_extra") in
@@ -93,6 +95,7 @@ let () =
            ; test_case "pool_reset" `Quick (fun _ () -> test_pool_reset ())
            ; test_case "multi_disconnect_reconnect" `Quick (fun _ () ->
                test_multi_disconnect_reconnect ())
+           ; test_case "role_pool" `Quick (fun _ () -> test_role_pool ())
            ] )
        ]
 ;;

@@ -5,7 +5,9 @@
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
+        let database =
+          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
+        ;;
       end)
     ]}
 
@@ -24,7 +26,9 @@ module Dialect = Veins.Dialect.Postgresql
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
+        let database =
+          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
+        ;;
       end)
     ]}
 
