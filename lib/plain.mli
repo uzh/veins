@@ -184,6 +184,11 @@ module type Sig = sig
     -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
     -> 'a Lwt.t
 
+  val connection_transaction
+    :  Caqti_lwt.connection
+    -> (unit -> ('a, Caqti.Error.t) Lwt_result.t)
+    -> ('a, Caqti.Error.t) Lwt_result.t
+
   (** {!transaction} running [fs] in order. *)
   val transaction_iter
     :  _ Ctx.t

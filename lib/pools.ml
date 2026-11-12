@@ -415,8 +415,27 @@ struct
       fns
   ;;
 
+  let connection_transaction ((module Connection : Caqti_lwt.CONNECTION) as connection) fn
+    =
+    let open Lwt_result.Syntax in
+    let fail_after_rollback error =
+      let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
+      Lwt_result.fail error
+    in
+    let* () = Connection.start () in
+    match%lwt fn () with
+    | Ok result ->
+      (match%lwt Connection.commit () with
+       | Ok () -> Lwt_result.return result
+       | Error error -> fail_after_rollback error)
+    | Error error -> fail_after_rollback error
+    | exception exn ->
+      let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
+      Lwt.reraise exn
+  ;;
+
   let transaction ?(setup = []) ?(cleanup = []) ~needs ctx fn =
-    query ~needs ctx (fun ((module Connection : Caqti_lwt.CONNECTION) as connection) ->
+    query ~needs ctx (fun connection ->
       let open Lwt_result.Syntax in
       let fn' () =
         let* () = exec_each setup connection in
@@ -424,23 +443,7 @@ struct
         let* () = exec_each cleanup connection in
         Lwt_result.return result
       in
-      let fail_after_rollback error =
-        let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
-        Lwt_result.fail error
-      in
-      if Ctx.is_transaction ctx
-      then fn' ()
-      else
-        let* () = Connection.start () in
-        match%lwt fn' () with
-        | Ok result ->
-          (match%lwt Connection.commit () with
-           | Ok () -> Lwt_result.return result
-           | Error error -> fail_after_rollback error)
-        | Error error -> fail_after_rollback error
-        | exception exn ->
-          let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
-          Lwt.reraise exn)
+      if Ctx.is_transaction ctx then fn' () else connection_transaction connection fn')
   ;;
 
   let transaction_iter ~needs ctx fns = transaction ~needs ctx (exec_each fns)
