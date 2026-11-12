@@ -53,7 +53,10 @@ from #624, #637 and #657 there.
   `Error.cause_of_exn`.
 - Every session is pinned to UTC (`Dialect.set_utc`), and `Driver.is_connection_error`; the driver libraries
   recognise their driver's "connection lost" errors (MariaDB errnos, PostgreSQL SQLSTATE class 08).
-- `Migration.Id.derive` for stable step ids of migrations written without ids.
+- `Migration.Id.derive` for stable step ids of migrations written without ids, and
+  `Runner.mark_applied` to import another engine's state; `run_all`, `status`, `pending` and `check`
+  take an explicit `?migrations` list.
+- `connection_transaction` for transactions on a raw connection (inside `query`).
 
 #### Changed
 

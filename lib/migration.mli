@@ -214,13 +214,17 @@ type drift =
     Migration statements declare no needs: the login's grants are what
     limits them. Each step runs in a
     transaction together with its state row (PostgreSQL rolls back both on
-    failure; MariaDB commits DDL implicitly). *)
+    failure; MariaDB commits DDL implicitly).
+
+    [run_all], [check], [status] and [pending] work on the migrations
+    registered for the label, or on [?migrations] when given. *)
 module type RunnerSig = sig
   (** Apply all unapplied steps for every migration registered for
       [db_label], oldest [written_at] first. Returns [Error _] on the first
       failure, leaving the remaining migrations unattempted. *)
   val run_all
     :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
     -> Entity.Label.t
     -> unit
     -> (unit, Error.t) Lwt_result.t
@@ -228,18 +232,35 @@ module type RunnerSig = sig
   (** Apply the unapplied steps of [migration] to [db_label]. *)
   val up : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
 
+  (** [mark_applied db_label migration ~steps] records the first [steps]
+      steps of [migration] as applied without running them, e.g. to import the
+      state of another migration engine (see {!Id.derive}). Steps recorded
+      already are skipped. *)
+  val mark_applied
+    :  ?role:_ Entity.Role.t
+    -> Entity.Label.t
+    -> t
+    -> steps:int
+    -> unit Lwt.t
+
   (** Revert the applied steps of [migration] in reverse order. Steps without
       [down] are logged and skipped. *)
   val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
 
   (** Compare the registry with the state table and return every {!drift}
       ([[]] when in sync). Also logs each one as a warning. *)
-  val check : ?role:_ Entity.Role.t -> Entity.Label.t -> unit -> drift list Lwt.t
+  val check
+    :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
+    -> Entity.Label.t
+    -> unit
+    -> drift list Lwt.t
 
   (** [(namespace, applied_count, total_count)] for every migration
       registered for [db_label]. *)
   val status
     :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
     -> Entity.Label.t
     -> unit
     -> (Namespace.t * int * int) list Lwt.t
@@ -248,6 +269,7 @@ module type RunnerSig = sig
       steps. *)
   val pending
     :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
     -> Entity.Label.t
     -> unit
     -> (Namespace.t * int) list Lwt.t

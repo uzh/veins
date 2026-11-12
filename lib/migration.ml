@@ -114,22 +114,39 @@ type drift =
 module type RunnerSig = sig
   val run_all
     :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
     -> Entity.Label.t
     -> unit
     -> (unit, Error.t) Lwt_result.t
 
   val up : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
+
+  val mark_applied
+    :  ?role:_ Entity.Role.t
+    -> Entity.Label.t
+    -> t
+    -> steps:int
+    -> unit Lwt.t
+
   val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
-  val check : ?role:_ Entity.Role.t -> Entity.Label.t -> unit -> drift list Lwt.t
+
+  val check
+    :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
+    -> Entity.Label.t
+    -> unit
+    -> drift list Lwt.t
 
   val status
     :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
     -> Entity.Label.t
     -> unit
     -> (Namespace.t * int * int) list Lwt.t
 
   val pending
     :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
     -> Entity.Label.t
     -> unit
     -> (Namespace.t * int) list Lwt.t
@@ -142,11 +159,17 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   let table () = Lazy.force table_name
 
   (* Return migrations targeting [db_label], sorted by written_at ascending. *)
-  let migrations_for db_label =
+  let registered_for db_label =
     CCList.filter_map
       (fun (target, mig) -> CCOption.return_if (target_applies_to target db_label) mig)
       !registry
     |> CCList.sort (fun a b -> Ptime.compare a.written_at b.written_at)
+  ;;
+
+  let migrations_for ?migrations db_label =
+    match migrations with
+    | Some migrations -> migrations
+    | None -> registered_for db_label
   ;;
 
   let applied_id_set ids =
@@ -282,6 +305,29 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
 
   let up ?role db_label mig = with_ctx ?role db_label (fun ctx -> apply_up ctx mig)
 
+  let mark_applied ?role db_label mig ~steps =
+    with_ctx ?role db_label
+    @@ fun ctx ->
+    let%lwt applied_ids = get_applied_ids ctx in
+    let applied = applied_id_set applied_ids in
+    let to_mark =
+      CCList.take steps mig.steps
+      |> CCList.filter (fun { Step.id; _ } -> not (is_applied applied id))
+    in
+    let%lwt () =
+      Db.with_transaction ctx (fun ctx ->
+        Lwt_list.iter_s (insert_applied_step ctx mig.namespace) to_mark)
+    in
+    if not (CCList.is_empty to_mark)
+    then
+      Log.info (fun m ->
+        m
+          "Marked %d step(s) of migration '%s' as applied"
+          (CCList.length to_mark)
+          (Namespace.show mig.namespace));
+    Lwt.return_unit
+  ;;
+
   let down ?role db_label mig =
     with_ctx ?role db_label
     @@ fun ctx ->
@@ -305,7 +351,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
         (failed "Migration '%s' revert failed: %s" mig)
   ;;
 
-  let run_all ?role db_label () =
+  let run_all ?role ?migrations db_label () =
     with_ctx ?role db_label
     @@ fun ctx ->
     let rec run = function
@@ -315,10 +361,10 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
          | Error e -> Lwt_result.fail e
          | Ok () -> run rest)
     in
-    run (migrations_for db_label)
+    run (migrations_for ?migrations db_label)
   ;;
 
-  let status ?role db_label () =
+  let status ?role ?migrations db_label () =
     with_ctx ?role db_label
     @@ fun ctx ->
     let%lwt applied_ids = get_applied_ids ctx in
@@ -331,11 +377,11 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
               CCList.count (fun { Step.id; _ } -> is_applied applied id) mig.steps
             in
             mig.namespace, n_applied, total)
-         (migrations_for db_label)
+         (migrations_for ?migrations db_label)
   ;;
 
-  let pending ?role db_label () =
-    let%lwt statuses = status ?role db_label () in
+  let pending ?role ?migrations db_label () =
+    let%lwt statuses = status ?role ?migrations db_label () in
     Lwt.return
     @@ CCList.filter_map
          (fun (ns, applied, total) ->
@@ -344,7 +390,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
          statuses
   ;;
 
-  let check ?role db_label () =
+  let check ?role ?migrations db_label () =
     with_ctx ?role db_label
     @@ fun ctx ->
     let req = state_request T.(unit -->* t2 string string) Dialect.select_applied_rows in
@@ -353,7 +399,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       CCList.map (fun (id, ns) -> Id.create id, Namespace.create ns) raw_rows
     in
     let applied = applied_id_set (CCList.map fst applied_rows) in
-    let migs = migrations_for db_label in
+    let migs = migrations_for ?migrations db_label in
     (* All step IDs currently in the registry for this label *)
     let registered_set = CCList.flat_map step_ids migs |> applied_id_set in
     (* Pending: steps in registry not yet applied *)
