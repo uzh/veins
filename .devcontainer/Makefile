@@ -14,8 +14,18 @@ ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))..
 MARIADB_URL  ?= mariadb://admin:password@database-mariadb/development
 POSTGRES_URL ?= postgresql://root:root@database-postgres/development
 
-export MARIADB_URL
-export POSTGRES_URL
+# One database user per role (created by init-*/01.sql). Unset, every role
+# connects as the all-rights user above.
+MARIADB_READER_URL   ?= mariadb://veins_reader:reader@database-mariadb/development
+MARIADB_WRITER_URL   ?= mariadb://veins_writer:writer@database-mariadb/development
+MARIADB_MIGRATOR_URL ?= mariadb://veins_migrator:migrator@database-mariadb/development
+POSTGRES_READER_URL   ?= postgresql://veins_reader:reader@database-postgres/development
+POSTGRES_WRITER_URL   ?= postgresql://veins_writer:writer@database-postgres/development
+POSTGRES_MIGRATOR_URL ?= postgresql://veins_migrator:migrator@database-postgres/development
+
+export MARIADB_URL POSTGRES_URL
+export MARIADB_READER_URL MARIADB_WRITER_URL MARIADB_MIGRATOR_URL
+export POSTGRES_READER_URL POSTGRES_WRITER_URL POSTGRES_MIGRATOR_URL
 
 # Override: run the full test suite against both live database containers.
 .PHONY: test

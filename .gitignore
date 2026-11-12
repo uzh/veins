@@ -24,3 +24,6 @@ _opam/
 
 # macOS
 .DS_Store
+
+# devcontainer
+.devcontainer/.env

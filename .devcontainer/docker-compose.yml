@@ -6,25 +6,27 @@ services:
     volumes:
       # default user is "opam"
       - ..:/workspace:cached
-      - opam:/home/opam/.opam:cached
       - build:/workspace/_build:cached
+      - opam-5.5.2-2.6:/home/opam/.opam:cached
+      - ${HOME}/.claude:/home/opam/.claude
       # Add database folders to dev container
       - db-mariadb:/databases/db-mariadb/:ro
       - db-postgres:/databases/db-postgres/:ro
-    environment:
-      - OPAMSOLVERTIMEOUT=180
+    env_file: [.env]
     depends_on:
       - database-mariadb
       - database-postgres
     command: sleep infinity
 
+  # NOTE: both servers run in Europe/Zurich on purpose: veins pins every session
+  # to UTC, and a UTC server would let the tests for that pass trivially.
   database-mariadb:
     image: mariadb:10.6
     restart: unless-stopped
     command: --max_allowed_packet=629145600
     ports: [ 3344:3306 ]
     environment:
-      TZ: UTC
+      TZ: Europe/Zurich
       MYSQL_USER: admin
       MYSQL_PASSWORD: password
       MYSQL_DATABASE: development
@@ -38,7 +40,7 @@ services:
     restart: unless-stopped
     ports: [ 3345:5432 ]
     environment:
-      TZ: UTC
+      TZ: Europe/Zurich
       POSTGRES_PASSWORD: root
       POSTGRES_USER: root
       POSTGRES_DB: development
@@ -47,7 +49,7 @@ services:
       - ./init-postgres:/docker-entrypoint-initdb.d/:ro
 
 volumes:
-  opam:
   build:
+  opam-5.5.2-2.6:
   db-mariadb:
   db-postgres:

@@ -1,33 +1,21 @@
-FROM ocaml/opam:debian-ocaml-5.4
+# Same base image as the pool tool's devcontainer (RHEL 9 UBI, OCaml 5.5.2, opam 2.6),
+# see https://github.com/uzh/z-pool-tool/blob/main/docker/Dockerfile.build
+FROM ghcr.io/uzh/z-pool-tool/ocaml:9-5.5-2.6
 COPY --from=hadolint/hadolint:latest-alpine /bin/hadolint /bin/hadolint
-
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 USER root
 
-RUN ln -fs /usr/bin/opam-2.5 /usr/bin/opam
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  build-essential \
-  curl \
-  git \
-  libgmp-dev \
-  libmariadb-dev \
-  libpq-dev \
-  pkg-config \
-  wget \
-  zsh \
-  && rm -rf /var/lib/apt/lists/*
+# The base image only ships the MariaDB client library; caqti-driver-postgresql needs libpq.
+# hadolint ignore=DL3041
+RUN dnf install -y libpq-devel && dnf clean all
 
-# WTF: https://github.com/mirage/ocaml-cohttp/issues/675
-RUN bash -c 'echo "http		80/tcp	www		# WorldWideWeb HTTP" >> /etc/services' \
-  && bash -c 'echo "https		443/tcp	www		# WorldWideWeb HTTPS" >> /etc/services'
+# NOTE: Pre-create volume folders for the correct ownership.
+RUN mkdir -p /workspace/_build /home/opam/.cache \
+  && chown -R opam:opam /workspace/_build /home/opam/.cache
 
 USER opam
 
-# Install and configure zsh with oh-my-zsh
-# hadolint ignore=SC2016
-RUN wget --progress=dot:giga https://github.com/robbyrussell/oh-my-zsh/raw/master/tools/install.sh -q -O - | zsh \
-  && cp ~/.oh-my-zsh/templates/zshrc.zsh-template ~/.zshrc \
-  && sed -i "/^plugins=/c\plugins=(git dotenv)" ~/.zshrc \
-  && echo 'alias make="make -f /workspace/.devcontainer/Makefile"' >> ~/.zshrc
+# GitButler CLI (`but`), installed to ~/.local/bin (the installer verifies the binary's signature)
+RUN curl -fsSL https://gitbutler.com/install.sh | sh > /dev/null

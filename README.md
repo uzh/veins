@@ -172,20 +172,26 @@ let () =
 
 ## Development
 
-Requires Docker (for the database services).
+The devcontainer mirrors the pool tool's setup (same base image, GitButler CLI, PAT-based git access). Copy
+`.devcontainer/.env.example` to `.devcontainer/.env` and fill it in, then reopen the folder in the container.
 
 ```bash
-# Start services and enter the dev container (VS Code Dev Containers recommended)
-# Then inside the container:
-
-opam install . --deps-only --with-test
-dune build @all
-dune test
+# inside the container (the `make` alias uses .devcontainer/Makefile with the database URLs)
+make deps
+make build
+make test
 ```
+
+Both database servers run in `Europe/Zurich` on purpose, so the tests prove that veins pins every session to UTC.
+The init scripts (`.devcontainer/init-*/01.sql`) create a `test` database and one user per role
+(`veins_reader`, `veins_writer`, `veins_migrator`); they only run when the database volume is created, so remove
+the `db-mariadb` / `db-postgres` volumes after changing them.
 
 Environment variables used by the test suite (defaults match the devcontainer):
 
-| Variable       | Default                                                     |
-|----------------|-------------------------------------------------------------|
-| `MARIADB_URL`  | `mariadb://admin:password@database-mariadb/development`     |
-| `POSTGRES_URL` | `postgresql://admin:password@database-postgres/development` |
+| Variable                                         | Default                                                     |
+|--------------------------------------------------|-------------------------------------------------------------|
+| `MARIADB_URL`                                    | `mariadb://admin:password@database-mariadb/development`     |
+| `POSTGRES_URL`                                   | `postgresql://root:root@database-postgres/development`      |
+| `MARIADB_{READER,WRITER,MIGRATOR}_URL`           | `MARIADB_URL` (a single all-rights user)                    |
+| `POSTGRES_{READER,WRITER,MIGRATOR}_URL`          | `POSTGRES_URL` (a single all-rights user)                   |
