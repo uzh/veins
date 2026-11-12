@@ -36,17 +36,17 @@
     :with-test
     (>= 1.7.0)))
   (caqti
-   (>= 2.1.0))
+   (>= 3.0.0))
   (caqti-driver-mariadb
    (and
     :with-test
-    (>= 2.1.0)))
+    (>= 3.0.0)))
   (caqti-driver-postgresql
    (and
     :with-test
-    (>= 2.1.0)))
+    (>= 3.0.0)))
   (caqti-lwt
-   (>= 2.1.0))
+   (>= 3.0.0))
   (containers
    (>= 3.13.0))
   (dune
@@ -84,7 +84,7 @@
   (veins
    (= :version))
   (caqti-driver-mariadb
-   (>= 2.1.0))))
+   (>= 3.0.0))))
 
 (package
  (name veins-postgresql)
@@ -97,4 +97,4 @@
   (veins
    (= :version))
   (caqti-driver-postgresql
-   (>= 2.1.0))))
+   (>= 3.0.0))))

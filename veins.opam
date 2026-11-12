@@ -12,10 +12,10 @@ bug-reports: "https://github.com/uzh/veins"
 depends: [
   "alcotest" {with-test & >= "1.7.0"}
   "alcotest-lwt" {with-test & >= "1.7.0"}
-  "caqti" {>= "2.1.0"}
-  "caqti-driver-mariadb" {with-test & >= "2.1.0"}
-  "caqti-driver-postgresql" {with-test & >= "2.1.0"}
-  "caqti-lwt" {>= "2.1.0"}
+  "caqti" {>= "3.0.0"}
+  "caqti-driver-mariadb" {with-test & >= "3.0.0"}
+  "caqti-driver-postgresql" {with-test & >= "3.0.0"}
+  "caqti-lwt" {>= "3.0.0"}
   "containers" {>= "3.13.0"}
   "dune" {>= "3.17" & >= "3.17"}
   "fmt" {>= "0.9.0"}

@@ -77,9 +77,9 @@ let register ?(for_databases = All) migration =
 
 let table_name =
   lazy
-    (match Sys.getenv_opt "VENA_MIGRATION_TABLE" with
+    (match Sys.getenv_opt "VEINS_MIGRATION_TABLE" with
      | Some t when not (CCString.is_empty t) -> t
-     | _ -> "vena_migration_state")
+     | _ -> "veins_migration_state")
 ;;
 
 (* Current wall-clock time as a Ptime.t, safe for Caqti_type.ptime. *)

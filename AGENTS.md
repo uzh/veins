@@ -16,7 +16,8 @@ make watch          # dune build @all --watch
 make deps           # opam install . --deps-only --with-test
 ```
 
-Integration tests require live MariaDB and PostgreSQL containers.
+Integration tests require live MariaDB and PostgreSQL containers. All suites are `tests` stanzas, so `dune test` runs them.
+Run a single suite with `dune build @test/unit/runtest` (or `test/mariadb`, `test/postgresql`).
 Inside the devcontainer, use the `.devcontainer/Makefile` which pre-sets the correct URLs:
 
 ```bash
@@ -38,8 +39,10 @@ make test
 | `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
 | `lib/mariadb/` | `veins-mariadb` package — dialect + pre-configured `Pools.Make` |
 | `lib/postgresql/` | `veins-postgresql` package — dialect + pre-configured `Pools.Make` |
-| `bin/vena_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
-| `test/` | Alcotest integration tests (MariaDB + PostgreSQL) |
+| `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
+| `test/unit/` | Tests without a database (run anywhere) |
+| `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |
+| `test/mariadb/`, `test/postgresql/` | Integration suites per dialect, each links only its driver |
 | `dune-project` | Source of truth for all three packages and their dependencies |
 
 ## Key Architecture

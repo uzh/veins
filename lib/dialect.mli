@@ -17,8 +17,8 @@ module type Sig = sig
 
       @param table
         Fully-qualified table name, e.g.
-        ["vena_migration_state"].  May be overridden at runtime
-        via the [VENA_MIGRATION_TABLE] environment variable. *)
+        ["veins_migration_state"].  May be overridden at runtime
+        via the [VEINS_MIGRATION_TABLE] environment variable. *)
   val create_migration_table : table:string -> string
 
   (** Whether [SET FOREIGN_KEY_CHECKS = 0 / 1] is supported by this
