@@ -29,7 +29,7 @@ open Veins
 
 (* The URL is typically read from an environment variable. *)
 let url = Url.create (Sys.getenv "DATABASE_URL")
-let db  = Database.create (Label.create "root") url
+let db  = Database.create (Label.create "root") (Database.Main url)
 
 module Db = Veins_mariadb.Pools.Make (struct
   let database = db
@@ -50,27 +50,71 @@ module Db = Veins.Pools.Make (struct
 end)
 ```
 
-### 2. Run queries
+### 2. Declare what statements need
+
+Every statement is a `Veins.Request.t`: a Caqti request plus the capabilities it needs. Capabilities are defined
+by your application, once, as values.
 
 ```ocaml
-let find_user id =
-  let req = Caqti_type.(int ->? string) "SELECT name FROM users WHERE id = ?" in
-  Db.find_opt (Label.create "root") req id
+let read = Capability.create "read"
+let write = Capability.create "write"
 
-let create_user name =
-  let req = Caqti_type.(string ->. unit) "INSERT INTO users (name) VALUES (?)" in
-  Db.exec (Label.create "root") req name
+let find_user =
+  {sql| SELECT name FROM users WHERE id = ? |sql}
+  |> Caqti_type.(int ->? string)
+  |> Request.create ~needs:[ read ]
+
+let create_user =
+  {sql| INSERT INTO users (name) VALUES (?) |sql}
+  |> Caqti_type.(string ->. unit)
+  |> Request.create ~needs:[ write ]
 ```
 
-### 3. Transactions
+### 3. Run them on a context
+
+A context says where statements run: `label_ctx` takes a fresh connection per statement, `connection_ctx` holds one
+connection, `transaction_ctx` holds one connection inside a transaction.
 
 ```ocaml
-Db.transaction (Label.create "root") (fun () ->
-  let%lwt () = Db.exec (Label.create "root") insert_req row in
-  Lwt.return_unit)
+let root = Label.create "root"
+
+let%lwt name = Db.find_opt (Db.label_ctx root) find_user 42
+
+let%lwt () =
+  Db.transaction_ctx root (fun ctx ->
+    Ctx.after_commit ctx (fun () -> Logs.info (fun m -> m "user created"));
+    Db.exec ctx create_user "alice")
 ```
 
----
+`Db.with_transaction ctx f` joins `ctx` when it is a transaction already, so functions can ask for a transaction
+without knowing whether their caller opened one. Hooks registered with `Ctx.after_commit` run after the commit and
+are dropped on rollback.
+
+Errors the database reports raise `Error.Failed` with the label, role and untouched Caqti error; match on
+`Error.cause_of_exn exn` (e.g. `` `Unique_violation ``) instead of on messages. Only errors that mean the connection
+is gone drop and reconnect the pool.
+
+### 4. Roles
+
+With one URL per role, each role is a database user with a set of capabilities. Veins never picks a role: every
+context names one, and statements needing capabilities the role lacks fail with `Error.Insufficient_capabilities`
+before they are sent. A held connection keeps its role.
+
+```ocaml
+let reader = Role.create "reader" ~capabilities:[ read ]
+let writer = Role.create "writer" ~capabilities:[ read; write ]
+
+let db =
+  Database.create (Label.create "app")
+    (Database.Multiple [ reader, Url.create reader_url; writer, Url.create writer_url ])
+
+Db.find_opt (Db.label_ctx ~role:reader (Label.create "app")) find_user 42  (* ok *)
+Db.exec (Db.label_ctx ~role:reader (Label.create "app")) create_user "bob" (* Insufficient_capabilities *)
+```
+
+A single user with all rights works too: give every role the same URL, or use a single-URL database
+(`Database.Main`), which has every capability. Naming a role on a `Main` database uses the main pool, or is rejected
+with `~role_policy:Strict`.
 
 ## Migrations
 
@@ -125,6 +169,10 @@ let () = Lwt_main.run
    | Error e -> failwith (Error.show e))
 ```
 
+Each runner call holds one connection. On a database with one URL per role, pass the role that may change the schema,
+e.g. `Runner.run_all ~role:migrator root ()`; migration statements declare no capabilities, the database user's
+rights limit them.
+
 ### Drift detection
 
 ```ocaml
@@ -159,16 +207,24 @@ The `veins-gen` executable is installed as part of the `veins` package.
 _NOTE: `initialize` initiates the main database passed via `Pools.Make(Config)`_
 
 ```ocaml
-let analytics = Database.create (Label.create "analytics") analytics_url
+let analytics =
+  Database.create (Label.create "analytics") (Database.Main (Url.create analytics_url))
 
 let () =
   Db.Pool.initialize ~additional_pools:[ analytics ] ();
   (* later: *)
-  let%lwt rows = Db.collect (Label.create "analytics") req () in
+  let%lwt rows = Db.collect (Db.label_ctx (Label.create "analytics")) req () in
   ...
 ```
 
 ---
+
+## Credits
+
+The context design (`Veins.Ctx`: label, held connection and transaction contexts, the phantom transaction marker,
+after-commit hooks) is Reynir Björnsson's database refactoring of the
+[pool tool](https://github.com/uzh/z-pool-tool) ([#647](https://github.com/uzh/z-pool-tool/pull/647)), moved here
+together with the pool tool's reconnect fixes.
 
 ## Development
 
