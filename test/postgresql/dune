@@ -5,6 +5,7 @@
  (package veins-postgresql)
  (libraries
   veins
+  veins-postgresql
   veins_test_common
   caqti
   caqti.classic

@@ -1,115 +1,29 @@
-(** Integration tests against a live PostgreSQL instance.
+(** Integration tests against a live PostgreSQL, see [POSTGRES_URL] and the
+    per-role [POSTGRES_*_URL] variables in the README. *)
 
-    Environment variables (all optional, fall back to Docker-compose defaults):
-    - [POSTGRES_URL]  e.g. [postgresql://root:root@database-postgres/development] *)
+module Suite = Suite.Make (struct
+    let env = "POSTGRES"
+    let default_url = "postgresql://root:root@database-postgres/development"
+    let default_port = 5432
 
-open Veins
+    module Db = Veins.Pools.Make (struct
+        let database =
+          Veins.Database.create
+            (Veins.Label.create "root")
+            (Veins.Database.Main
+               (Veins.Url.create
+                  (Suite.env_opt "POSTGRES_URL" |> CCOption.value ~default:default_url)))
+        ;;
 
-let default_url = "postgresql://root:root@database-postgres/development"
+        let database_pool_size = 5
+        let expected_databases = 4
 
-(* The extra pools connect to the same server as the main one. *)
-let url =
-  match Sys.getenv_opt "POSTGRES_URL" with
-  | Some s when not (CCString.is_empty s) -> s
-  | _ -> default_url
-;;
+        module Dialect = Veins_postgresql.Dialect
+      end)
 
-module PostgresDb = Pools.Make (struct
-    let database = Test_helpers.db_of_env_or "POSTGRES_URL" default_url
-    let database_pool_size = 5
-    let expected_databases = 1
-
-    module Dialect = Dialect.Postgresql
+    let utc_offset_sql = "SELECT EXTRACT(TIMEZONE FROM now())::int"
+    let connection_id_sql = "SELECT pg_backend_pid()"
+    let current_user_sql = "SELECT CURRENT_USER::text"
   end)
 
-module MigPostgres = Migration.Make (PostgresDb)
-
-let setup () =
-  PostgresDb.Pool.initialize ();
-  match PostgresDb.Pool.connect (Label.create "root") with
-  | Ok () -> ()
-  | Error e -> invalid_arg (Error.show e)
-;;
-
-let test_ping () =
-  let%lwt result = PostgresDb.find (Label.create "root") Test_helpers.ping_request () in
-  assert (result = 1);
-  Lwt.return_unit
-;;
-
-let test_roundtrip () = Test_helpers.roundtrip_test (module PostgresDb) ()
-let test_transaction () = Test_helpers.transaction_test (module PostgresDb) ()
-let test_rollback () = Test_helpers.rollback_test (module PostgresDb) ()
-
-let test_migration () =
-  Test_helpers.migration_test (module PostgresDb) (module MigPostgres) ()
-;;
-
-let test_concurrent_queries () =
-  Test_helpers.concurrent_queries_test (module PostgresDb) ()
-;;
-
-let test_bulk_insert () = Test_helpers.bulk_insert_test (module PostgresDb) ()
-
-let test_disconnect_reconnect () =
-  Test_helpers.disconnect_reconnect_test (module PostgresDb) ()
-;;
-
-let test_unregistered_label () =
-  Test_helpers.unregistered_label_test (module PostgresDb) ()
-;;
-
-let test_pool_reset () =
-  Test_helpers.pool_reset_test (module PostgresDb) PostgresDb.Config.database ()
-;;
-
-let test_multi_disconnect_reconnect () =
-  Test_helpers.multi_disconnect_reconnect_test (module PostgresDb) url ()
-;;
-
-let test_role_pool () = Test_helpers.role_pool_test (module PostgresDb) url ()
-
-let test_multi_pool () =
-  (* Second pool with its own label pointing to the same DB *)
-  let alt_url = url in
-  let alt_db = Database.(create (Label.create "pg_alt") (Main (Url.create alt_url))) in
-  PostgresDb.Pool.add alt_db;
-  let alt_label = Label.create "pg_alt" in
-  let%lwt result = PostgresDb.find alt_label Test_helpers.ping_request () in
-  assert (result = 1);
-  let%lwt () = PostgresDb.Pool.drop alt_label in
-  Lwt.return_unit
-;;
-
-let () =
-  setup ();
-  let open Alcotest_lwt in
-  Lwt_main.run
-  @@ run
-       "Veins PostgreSQL"
-       [ ( "connectivity"
-         , [ test_case "ping" `Quick (fun _ () -> test_ping ())
-           ; test_case "roundtrip" `Quick (fun _ () -> test_roundtrip ())
-           ; test_case "multi_pool" `Quick (fun _ () -> test_multi_pool ())
-           ] )
-       ; ( "transactions"
-         , [ test_case "commit" `Quick (fun _ () -> test_transaction ())
-           ; test_case "rollback" `Quick (fun _ () -> test_rollback ())
-           ] )
-       ; "migrations", [ test_case "run_all" `Quick (fun _ () -> test_migration ()) ]
-       ; ( "performance"
-         , [ test_case "concurrent_queries" `Slow (fun _ () -> test_concurrent_queries ())
-           ; test_case "bulk_insert" `Slow (fun _ () -> test_bulk_insert ())
-           ] )
-       ; ( "resilience"
-         , [ test_case "disconnect_reconnect" `Quick (fun _ () ->
-               test_disconnect_reconnect ())
-           ; test_case "unregistered_label" `Quick (fun _ () ->
-               test_unregistered_label ())
-           ; test_case "pool_reset" `Quick (fun _ () -> test_pool_reset ())
-           ; test_case "multi_disconnect_reconnect" `Quick (fun _ () ->
-               test_multi_disconnect_reconnect ())
-           ; test_case "role_pool" `Quick (fun _ () -> test_role_pool ())
-           ] )
-       ]
-;;
+let () = Suite.run "Veins PostgreSQL"

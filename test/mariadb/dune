@@ -5,6 +5,7 @@
  (package veins-mariadb)
  (libraries
   veins
+  veins-mariadb
   veins_test_common
   caqti
   caqti.classic

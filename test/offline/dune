@@ -1,0 +1,24 @@
+; Resilience and role checks against a fake server: needs the MariaDB driver,
+; no database.
+
+(tests
+ (names test_offline)
+ (package veins-mariadb)
+ (libraries
+  veins
+  veins-mariadb
+  veins_test_common
+  caqti
+  caqti.classic
+  caqti-lwt
+  caqti-lwt.unix
+  caqti-driver-mariadb
+  lwt
+  lwt.unix
+  alcotest
+  alcotest-lwt
+  containers)
+ (flags
+  (:standard -w -4))
+ (preprocess
+  (pps lwt_ppx)))
