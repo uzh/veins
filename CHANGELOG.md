@@ -4,6 +4,8 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [unreleased](https://github.com/uzh/veins/tree/HEAD)
 
+To be released as 0.2.0.
+
 ### 💥 Breaking: database contexts, capabilities and role-bound connections
 
 The connection handling of the pool tool's database module moved here. The context design (`Veins.Ctx`: label,
