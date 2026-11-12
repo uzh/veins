@@ -1,0 +1,18 @@
+; Helpers shared by the per-dialect integration suites.
+
+(library
+ (name veins_test_common)
+ (wrapped false)
+ (libraries
+  veins
+  caqti
+  caqti.classic
+  caqti-lwt
+  caqti-lwt.unix
+  lwt
+  lwt.unix
+  alcotest
+  alcotest-lwt
+  containers)
+ (preprocess
+  (pps lwt_ppx)))

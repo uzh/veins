@@ -23,7 +23,7 @@ let roundtrip_test (module Db : Pools_sig.Sig) () =
   let create_req =
     Caqti_type.(unit ->. unit)
       ~oneshot:true
-      {|CREATE TABLE IF NOT EXISTS vena_test_roundtrip (
+      {|CREATE TABLE IF NOT EXISTS veins_test_roundtrip (
           id   INTEGER PRIMARY KEY,
           name VARCHAR(64) NOT NULL
         )|}
@@ -31,15 +31,15 @@ let roundtrip_test (module Db : Pools_sig.Sig) () =
   let insert_req =
     Caqti_type.(t2 int string ->. unit)
       ~oneshot:true
-      {|INSERT INTO vena_test_roundtrip (id, name) VALUES (?, ?)|}
+      {|INSERT INTO veins_test_roundtrip (id, name) VALUES (?, ?)|}
   in
   let select_req =
     Caqti_type.(unit ->* t2 int string)
       ~oneshot:true
-      {|SELECT id, name FROM vena_test_roundtrip ORDER BY id|}
+      {|SELECT id, name FROM veins_test_roundtrip ORDER BY id|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_roundtrip|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS veins_test_roundtrip|}
   in
   let%lwt () = Db.exec label create_req () in
   let%lwt () = Db.exec label insert_req (1, "alice") in
@@ -56,7 +56,7 @@ let transaction_test (module Db : Pools_sig.Sig) () =
   let create_req =
     Caqti_type.(unit ->. unit)
       ~oneshot:true
-      {|CREATE TABLE IF NOT EXISTS vena_test_tx (
+      {|CREATE TABLE IF NOT EXISTS veins_test_tx (
           id   INTEGER PRIMARY KEY,
           val  INTEGER NOT NULL
         )|}
@@ -64,13 +64,13 @@ let transaction_test (module Db : Pools_sig.Sig) () =
   let insert_req =
     Caqti_type.(t2 int int ->. unit)
       ~oneshot:true
-      {|INSERT INTO vena_test_tx (id, val) VALUES (?, ?)|}
+      {|INSERT INTO veins_test_tx (id, val) VALUES (?, ?)|}
   in
   let select_req =
-    Caqti_type.(unit ->* int) ~oneshot:true {|SELECT val FROM vena_test_tx ORDER BY id|}
+    Caqti_type.(unit ->* int) ~oneshot:true {|SELECT val FROM veins_test_tx ORDER BY id|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_tx|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS veins_test_tx|}
   in
   let%lwt () = Db.exec label create_req () in
   let%lwt () =
@@ -91,7 +91,7 @@ let rollback_test (module Db : Pools_sig.Sig) () =
   let create_req =
     Caqti_type.(unit ->. unit)
       ~oneshot:true
-      {|CREATE TABLE IF NOT EXISTS vena_test_rb (
+      {|CREATE TABLE IF NOT EXISTS veins_test_rb (
           id  INTEGER PRIMARY KEY,
           val INTEGER NOT NULL
         )|}
@@ -99,13 +99,13 @@ let rollback_test (module Db : Pools_sig.Sig) () =
   let insert_req =
     Caqti_type.(t2 int int ->. unit)
       ~oneshot:true
-      {|INSERT INTO vena_test_rb (id, val) VALUES (?, ?)|}
+      {|INSERT INTO veins_test_rb (id, val) VALUES (?, ?)|}
   in
   let count_req =
-    Caqti_type.(unit ->! int) ~oneshot:true {|SELECT COUNT(*) FROM vena_test_rb|}
+    Caqti_type.(unit ->! int) ~oneshot:true {|SELECT COUNT(*) FROM veins_test_rb|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_rb|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS veins_test_rb|}
   in
   let%lwt () = Db.exec label create_req () in
   (* This transaction intentionally fails mid-way. *)
@@ -126,14 +126,14 @@ let rollback_test (module Db : Pools_sig.Sig) () =
 let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) () =
   let label = Label.create "root" in
   let ns =
-    Migration.Namespace.create ("vena_test_mig_" ^ string_of_int (Random.int 100000))
+    Migration.Namespace.create ("veins_test_mig_" ^ string_of_int (Random.int 100000))
   in
   (* Drop leftover tables so we always start from a clean slate. *)
   let drop_state =
-    Caqti_type.(unit ->. unit) ~oneshot:true "DROP TABLE IF EXISTS vena_migration_state"
+    Caqti_type.(unit ->. unit) ~oneshot:true "DROP TABLE IF EXISTS veins_migration_state"
   in
   let drop_tbl =
-    Caqti_type.(unit ->. unit) ~oneshot:true "DROP TABLE IF EXISTS vena_test_mig_tbl"
+    Caqti_type.(unit ->. unit) ~oneshot:true "DROP TABLE IF EXISTS veins_test_mig_tbl"
   in
   let%lwt () = Db.exec label drop_state () in
   let%lwt () = Db.exec label drop_tbl () in
@@ -144,14 +144,14 @@ let migration_test (module Db : Pools_sig.Sig) (module M : Migration.RunnerSig) 
            (Step.create
               ~id:(Migration.Id.create "a1b2c3d4-0001-0001-0001-000000000001")
               ~label:"create table"
-              ~down:"DROP TABLE IF EXISTS vena_test_mig_tbl"
-              {|CREATE TABLE vena_test_mig_tbl (id INTEGER PRIMARY KEY)|})
+              ~down:"DROP TABLE IF EXISTS veins_test_mig_tbl"
+              {|CREATE TABLE veins_test_mig_tbl (id INTEGER PRIMARY KEY)|})
       |> add_step
            (Step.create
               ~id:(Migration.Id.create "a1b2c3d4-0001-0001-0001-000000000002")
               ~label:"insert row"
-              ~down:"DELETE FROM vena_test_mig_tbl WHERE id = 42"
-              {|INSERT INTO vena_test_mig_tbl (id) VALUES (42)|}))
+              ~down:"DELETE FROM veins_test_mig_tbl WHERE id = 42"
+              {|INSERT INTO veins_test_mig_tbl (id) VALUES (42)|}))
   in
   let fail_with_error e = Lwt.fail (Invalid_argument (Error.show e)) in
   Migration.register ~for_databases:(Migration.Database label) mig;
@@ -211,7 +211,7 @@ let bulk_insert_test ?(n = 100) (module Db : Pools_sig.Sig) () =
   let create_req =
     Caqti_type.(unit ->. unit)
       ~oneshot:true
-      {|CREATE TABLE IF NOT EXISTS vena_test_bulk (
+      {|CREATE TABLE IF NOT EXISTS veins_test_bulk (
           id  INTEGER PRIMARY KEY,
           val INTEGER NOT NULL
         )|}
@@ -219,13 +219,13 @@ let bulk_insert_test ?(n = 100) (module Db : Pools_sig.Sig) () =
   let insert_req =
     Caqti_type.(t2 int int ->. unit)
       ~oneshot:true
-      {|INSERT INTO vena_test_bulk (id, val) VALUES (?, ?)|}
+      {|INSERT INTO veins_test_bulk (id, val) VALUES (?, ?)|}
   in
   let count_req =
-    Caqti_type.(unit ->! int) ~oneshot:true {|SELECT COUNT(*) FROM vena_test_bulk|}
+    Caqti_type.(unit ->! int) ~oneshot:true {|SELECT COUNT(*) FROM veins_test_bulk|}
   in
   let drop_req =
-    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS vena_test_bulk|}
+    Caqti_type.(unit ->. unit) ~oneshot:true {|DROP TABLE IF EXISTS veins_test_bulk|}
   in
   let%lwt () = Db.exec label create_req () in
   let%lwt () =
@@ -248,7 +248,7 @@ let disconnect_reconnect_test (module Db : Pools_sig.Sig) () =
 
 (** Querying an unknown label must raise [Error.Exn (Database_not_registered _)]. *)
 let unregistered_label_test (module Db : Pools_sig.Sig) () =
-  let unknown = Label.create "vena_nonexistent_________label" in
+  let unknown = Label.create "veins_nonexistent_________label" in
   Lwt.catch
     (fun () ->
        let%lwt _ = Db.find unknown ping_request () in
@@ -271,8 +271,8 @@ let pool_reset_test (module Db : Pools_sig.Sig) db () =
     verify each auto-reconnects independently and the primary pool is
     unaffected throughout. *)
 let multi_disconnect_reconnect_test (module Db : Pools_sig.Sig) url () =
-  let lbl_a = Label.create "vena_extra_a" in
-  let lbl_b = Label.create "vena_extra_b" in
+  let lbl_a = Label.create "veins_extra_a" in
+  let lbl_b = Label.create "veins_extra_b" in
   let db_a = Database.create lbl_a (Database.Main (Url.create url)) in
   let db_b = Database.create lbl_b (Database.Main (Url.create url)) in
   Db.Pool.add db_a;
@@ -298,7 +298,7 @@ let multi_disconnect_reconnect_test (module Db : Pools_sig.Sig) url () =
     roles can execute queries, verify that querying without a role raises
     [Database_not_registered], then clean up. *)
 let role_pool_test (module Db : Pools_sig.Sig) url () =
-  let label = Label.create "vena_role_db" in
+  let label = Label.create "veins_role_db" in
   let reader = Role.create "reader" in
   let writer = Role.create "writer" in
   let db =

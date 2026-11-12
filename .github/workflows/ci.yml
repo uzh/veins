@@ -17,6 +17,7 @@ jobs:
           MYSQL_PASSWORD: password
           MYSQL_DATABASE: development
           MYSQL_ROOT_PASSWORD: password
+          TZ: Europe/Zurich
         ports:
           - 3306:3306
         options: >-
@@ -31,6 +32,7 @@ jobs:
           POSTGRES_USER: admin
           POSTGRES_PASSWORD: password
           POSTGRES_DB: development
+          TZ: Europe/Zurich
         ports:
           - 5432:5432
         options: >-
@@ -53,10 +55,23 @@ jobs:
       - name: Build
         run: opam exec -- dune build @all
 
+      # Service containers can't mount the init scripts, run them once they are up.
+      - name: Create test databases and role users
+        run: |
+          docker exec -i ${{ job.services.mariadb.id }} mariadb -uroot -ppassword < .devcontainer/init-mariadb/01.sql
+          docker exec -i ${{ job.services.postgres.id }} psql -v ON_ERROR_STOP=1 -U admin -d development < .devcontainer/init-postgres/01.sql
+
+      # The job runs on the runner host, the services are published on localhost.
       - name: Run tests
         env:
-          MARIADB_URL: mariadb://admin:password@mariadb/development
-          POSTGRES_URL: postgresql://admin:password@postgres/development
+          MARIADB_URL: mariadb://admin:password@127.0.0.1:3306/development
+          MARIADB_READER_URL: mariadb://veins_reader:reader@127.0.0.1:3306/development
+          MARIADB_WRITER_URL: mariadb://veins_writer:writer@127.0.0.1:3306/development
+          MARIADB_MIGRATOR_URL: mariadb://veins_migrator:migrator@127.0.0.1:3306/development
+          POSTGRES_URL: postgresql://admin:password@127.0.0.1:5432/development
+          POSTGRES_READER_URL: postgresql://veins_reader:reader@127.0.0.1:5432/development
+          POSTGRES_WRITER_URL: postgresql://veins_writer:writer@127.0.0.1:5432/development
+          POSTGRES_MIGRATOR_URL: postgresql://veins_migrator:migrator@127.0.0.1:5432/development
         run: opam exec -- dune test
 
   lint-fmt:
