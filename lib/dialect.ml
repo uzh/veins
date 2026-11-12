@@ -1,4 +1,7 @@
 module type Sig = sig
+  val session_setup : string list
+  val is_connection_error : Caqti_error.t -> bool
+  val after_rollback : string list
   val create_migration_table : table:string -> string
   val fk_checks_supported : bool
   val select_applied_ids : table:string -> string
@@ -10,6 +13,16 @@ module type Sig = sig
   val uuid_value_fragment : string -> string
 end
 
+let is_connection_error : Caqti_error.t -> bool = function
+  | #Caqti_error.load_or_connect -> true
+  | `Request_failed _
+  | `Response_failed _
+  | `Encode_rejected _
+  | `Encode_failed _
+  | `Decode_rejected _
+  | `Response_rejected _ -> false
+;;
+
 let insert_row ~table ~columns =
   let cols = CCString.concat ", " columns in
   let placeholders = CCString.concat ", " (CCList.map (Fun.const "?") columns) in
@@ -17,6 +30,10 @@ let insert_row ~table ~columns =
 ;;
 
 module Mariadb : Sig = struct
+  let session_setup = [ "SET time_zone = '+00:00'" ]
+  let is_connection_error = is_connection_error
+  let after_rollback = [ "SET autocommit = 1" ]
+
   let uuid_select_fragment ~field =
     Format.asprintf
       "LOWER(CONCAT(SUBSTR(HEX(%s),1,8),'-',SUBSTR(HEX(%s),9,4),'-',SUBSTR(HEX(%s),13,4),'-',SUBSTR(HEX(%s),17,4),'-',SUBSTR(HEX(%s),21)))"
@@ -71,6 +88,9 @@ module Mariadb : Sig = struct
 end
 
 module Postgresql : Sig = struct
+  let session_setup = [ "SET TIME ZONE 'UTC'" ]
+  let is_connection_error = is_connection_error
+  let after_rollback = []
   let uuid_select_fragment ~field = Format.asprintf "%s::text" field
   let uuid_value_fragment name = Format.asprintf "%s::uuid" name
 

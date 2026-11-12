@@ -3,55 +3,42 @@
     {b Quick-start}
 
     {[
-    (* 1. Define a config module *)
-    module Cfg = struct
-      let database =
-        let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
-        Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
-      ;;
+    (* 1. Instantiate the pool *)
+    module Db = Veins_mariadb.Pools.Make (struct
+        let database =
+          let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
+          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
+        ;;
+      end)
 
-      let database_pool_size = 10
-      let expected_databases = 1
+    (* 2. Declare what statements need *)
+    let read = Veins.Capability.create "read"
 
-      module Dialect = Veins.Dialect.Mariadb
-    end
-
-    (* 2. Instantiate the pool *)
-    module Db = Veins.Pools.Make (Cfg)
-
-    (* 3. Instantiate the migration runner *)
-    module M = Veins.Migration.Make (Db)
-
-    (* 4. Register migrations (at module init time) *)
-    let () =
-      let open Veins.Migration in
-      register
-        ~for_databases:Migration.All
-        (create
-           (Namespace.create "my_app")
-           ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
-         |> add_step
-              (Step.create
-                 ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
-                 ~label:"create users table"
-                 ~down:"DROP TABLE IF EXISTS users"
-                 {|CREATE TABLE IF NOT EXISTS users (
-                        id   INT          PRIMARY KEY AUTO_INCREMENT,
-                        name VARCHAR(255) NOT NULL
-                      )|})
-        )
+    let find_name =
+      {sql| SELECT name FROM users WHERE id = ? |sql}
+      |> Caqti_type.(int ->? string)
+      |> Veins.Request.create ~needs:[ read ]
     ;;
 
-    (* 5. Initialize pool and run migrations *)
+    (* 3. Run them on a context *)
     let () =
-      let root = Veins.Label.create "root" in
       Db.Pool.initialize ();
+      let root = Veins.Label.create "root" in
       Lwt_main.run
-        (match%lwt M.run_all root () with
-         | Ok () -> Lwt.return_unit
-         | Error e -> invalid_arg (Veins.Error.show e))
+        (let%lwt name = Db.find_opt (Db.label_ctx root) find_name 1 in
+         Db.transaction_ctx root (fun ctx ->
+           Veins.Ctx.after_commit ctx (fun () -> print_endline "committed");
+           Db.find_opt ctx find_name 2))
     ;;
-    ]} *)
+    ]}
+
+    {b Roles.} With one URL per role ([Database.Multiple]), each role is a
+    database user with a set of {!Capability} values. Every context names its
+    role and every statement is checked against it before it is sent. A
+    single-URL database ([Database.Main]) has every capability.
+
+    The context design ({!Ctx}) comes from Reynir Björnsson's database
+    refactoring of the pool tool (uzh/z-pool-tool#647). *)
 
 (** Opaque database label used as the key for pool lookups. *)
 module Label = Entity.Label
@@ -59,6 +46,9 @@ module Label = Entity.Label
 (** Role name for a database user (e.g. ["readonly"], ["write"]).
     Distinct from {!Label} to prevent accidental mixing. *)
 module Role = Entity.Role
+
+(** A right a statement needs, defined by the application or library. *)
+module Capability = Entity.Capability
 
 (** Database connection URL.  Opaque — the raw connection string is not
     accessible after construction.  Pass the value to
@@ -81,8 +71,14 @@ module Database = Entity.Database
 (** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
 module Dynparam = Entity.Dynparam
 
-(** Error types and exception raised by query helpers. *)
+(** Error types and exceptions raised by query helpers. *)
 module Error = Error
+
+(** Database contexts: a label, a held connection, or a transaction. *)
+module Ctx = Ctx
+
+(** Caqti requests with the capabilities they need. *)
+module Request = Request
 
 (** SQL dialect implementations (MariaDB / PostgreSQL DDL differences). *)
 module Dialect = Dialect

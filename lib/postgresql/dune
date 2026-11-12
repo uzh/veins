@@ -3,4 +3,10 @@
 (library
  (name veins_postgresql)
  (public_name veins-postgresql)
- (libraries veins caqti-driver-postgresql))
+ (libraries
+  veins
+  caqti
+  caqti.classic
+  caqti-driver-postgresql
+  postgresql
+  containers))
