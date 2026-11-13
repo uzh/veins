@@ -148,7 +148,10 @@ module Make (D : Dialect) = struct
     let%lwt missing =
       Db.find_opt
         ctx
-        (int_query (Format.asprintf "SELECT val FROM %s WHERE id = 4" table))
+        (Caqti.Templater.direct
+           Caqti.Templater.T.(unit -->? int)
+           (Format.asprintf "SELECT val FROM %s WHERE id = 4" table)
+         |> Request.create ~needs:Roles.read)
         ()
     in
     Lwt.return (Alcotest.(check (option int)) "find_opt" None missing)
