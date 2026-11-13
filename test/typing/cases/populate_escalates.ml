@@ -4,6 +4,6 @@ let _ =
     (Fixture.Db.label_ctx ~role:Fixture.query Fixture.label)
     "t"
     [ "id" ]
-    Caqti_type.int
+    Fixture.T.int
     [ 1 ]
 ;;

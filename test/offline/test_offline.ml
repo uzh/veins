@@ -3,7 +3,7 @@
    fits its role is checked by the compiler, see test/typing. *)
 
 open Veins
-open Caqti_request.Infix
+module T = Caqti.Templater.T
 
 module Db = Pools.Make (struct
     let database =
@@ -17,7 +17,7 @@ module Db = Pools.Make (struct
   end)
 
 let ping =
-  (Caqti_type.unit ->! Caqti_type.int) "SELECT 1" |> Request.create ~needs:Roles.read
+  Caqti.Templater.static T.(unit -->! int) "SELECT 1" |> Request.create ~needs:Roles.read
 ;;
 
 let owner_ctx label = Db.label_ctx ~role:Role.owner label
@@ -159,7 +159,7 @@ let test_registry () =
 
 let test_mariadb_permission_errors () =
   let error errno =
-    Caqti_error.request_failed
+    Caqti.Error.request_failed
       ~uri:(Uri.of_string "mariadb://x/y")
       ~query:"INSERT INTO t VALUES (1)"
       (Caqti_driver_mariadb.Error_msg { errno; error = "denied" })

@@ -25,10 +25,10 @@ module Dialect : Veins.Dialect.Sig = struct
     || CCList.mem sqlstate [ "57P01"; "57P02"; "57P03" ]
   ;;
 
-  let is_connection_error : Caqti_error.t -> bool = function
-    | `Request_failed { Caqti_error.msg; _ }
-    | `Response_failed { Caqti_error.msg; _ }
-    | `Response_rejected { Caqti_error.msg; _ } ->
+  let is_connection_error : Caqti.Error.t -> bool = function
+    | `Request_failed { Caqti.Error.msg; _ }
+    | `Response_failed { Caqti.Error.msg; _ }
+    | `Response_rejected { Caqti.Error.msg; _ } ->
       (match[@warning "-4"] msg with
        | Caqti_driver_postgresql.Connection_error_msg { connection_status; _ } ->
          connection_status = Postgresql.Bad
@@ -39,15 +39,15 @@ module Dialect : Veins.Dialect.Sig = struct
   ;;
 
   (* 42501 insufficient_privilege *)
-  let is_permission_error : Caqti_error.t -> bool = function
-    | `Request_failed { Caqti_error.msg; _ }
-    | `Response_failed { Caqti_error.msg; _ }
-    | `Response_rejected { Caqti_error.msg; _ } ->
+  let is_permission_error : Caqti.Error.t -> bool = function
+    | `Request_failed { Caqti.Error.msg; _ }
+    | `Response_failed { Caqti.Error.msg; _ }
+    | `Response_rejected { Caqti.Error.msg; _ } ->
       (match[@warning "-4"] msg with
        | Caqti_driver_postgresql.Result_error_msg { sqlstate; _ } ->
          CCString.equal sqlstate "42501"
        | _ -> false)
-    | (_ : Caqti_error.t) -> false
+    | (_ : Caqti.Error.t) -> false
   ;;
 end
 

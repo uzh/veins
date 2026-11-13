@@ -82,7 +82,7 @@ module type Sig = sig
       :  ?retries:int
       -> ?login:Entity.Login.t
       -> Entity.Label.t
-      -> (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t Lwt.t
+      -> (Caqti_lwt.connection, Caqti.Error.t) Caqti_lwt_unix.Pool.t Lwt.t
 
     (** Try to open the pool [login] (default {!Veins.Login.owner}) connects
         with, without raising. *)
@@ -92,7 +92,7 @@ module type Sig = sig
         connects with, with [~login]) in the background and mark them
         closed, or failed with [~error]; the next statement reconnects. *)
     val disconnect
-      :  ?error:Caqti_error.t
+      :  ?error:Caqti.Error.t
       -> ?login:Entity.Login.t
       -> Entity.Label.t
       -> unit
@@ -147,7 +147,7 @@ module type Sig = sig
   val query
     :  needs:'g Entity.Need.t
     -> (_, 'g) Ctx.t
-    -> (Caqti_lwt.connection -> ('a, Caqti_error.t) Lwt_result.t)
+    -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
     -> 'a Lwt.t
 
   val exec : (_, 'g) Ctx.t -> ('a, unit, [< `Zero ], 'g) Request.t -> 'a -> unit Lwt.t
@@ -173,7 +173,7 @@ module type Sig = sig
     -> (_, 'g) Ctx.t
     -> string
     -> string list
-    -> 'a Caqti_type.t
+    -> 'a Caqti.Template.Row_type.t
     -> 'a list
     -> unit Lwt.t
 
@@ -183,17 +183,17 @@ module type Sig = sig
       @param setup statements run after [BEGIN], before [f]
       @param cleanup statements run after [f], before [COMMIT] *)
   val transaction
-    :  ?setup:(Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
-    -> ?cleanup:(Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
+    :  ?setup:(Caqti_lwt.connection -> (unit, Caqti.Error.t) Lwt_result.t) list
+    -> ?cleanup:(Caqti_lwt.connection -> (unit, Caqti.Error.t) Lwt_result.t) list
     -> needs:'g Entity.Need.t
     -> (_, 'g) Ctx.t
-    -> (Caqti_lwt.connection -> ('a, Caqti_error.t) Lwt_result.t)
+    -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
     -> 'a Lwt.t
 
   (** {!transaction} running [fs] in order. *)
   val transaction_iter
     :  needs:'g Entity.Need.t
     -> (_, 'g) Ctx.t
-    -> (Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
+    -> (Caqti_lwt.connection -> (unit, Caqti.Error.t) Lwt_result.t) list
     -> unit Lwt.t
 end

@@ -4,8 +4,6 @@
    design is Reynir Björnsson's refactoring (uzh/z-pool-tool#647), the
    reconnect fixes come from #624, #637 and #657 there. *)
 
-open Caqti_request.Infix
-
 let src = Logs.Src.create "veins.pools"
 
 module Log = (val Logs.src_log src : Logs.LOG)
@@ -14,12 +12,12 @@ module Make (Config : Pools_sig.ConfigSig) : Pools_sig.Sig with module Config = 
 struct
   module Config = Config
 
-  type caqti_pool = (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t
+  type caqti_pool = (Caqti_lwt.connection, Caqti.Error.t) Caqti_lwt_unix.Pool.t
 
   type connection =
     | Close
     | Open of caqti_pool
-    | Fail of Caqti_error.t
+    | Fail of Caqti.Error.t
 
   (* One Caqti pool per label for the owner, plus one per login with a URL of
      its own. Logins without one share the owner's pool ([None]). *)
@@ -100,15 +98,13 @@ struct
            ; login = Entity.Login.name login
            ; role
            ; needs
-           ; message = Caqti_error.show error
+           ; message = Caqti.Error.show error
            })
     else raise (Error.Failed (Error.failure ?role ~login label error))
   ;;
 
   let session_setup_requests =
-    CCList.map
-      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-      Config.Dialect.session_setup
+    CCList.map Caqti.Templater.(static T.(unit -->. unit)) Config.Dialect.session_setup
   ;;
 
   let exec_requests (module Connection : Caqti_lwt.CONNECTION) requests =
@@ -121,9 +117,7 @@ struct
   let post_connect connection = exec_requests connection session_setup_requests
 
   let after_rollback_requests =
-    CCList.map
-      (fun sql -> (Caqti_type.unit ->. Caqti_type.unit) sql)
-      Config.Dialect.after_rollback
+    CCList.map Caqti.Templater.(static T.(unit -->. unit)) Config.Dialect.after_rollback
   ;;
 
   (* Never use the driver's [rollback] (or caqti's [with_transaction]) alone,
@@ -138,7 +132,7 @@ struct
   ;;
 
   let connect_pool url =
-    let pool_config = Caqti_pool_config.create ~max_size:Config.database_pool_size () in
+    let pool_config = Caqti.Pool.Config.create ~max_size:Config.database_pool_size () in
     Caqti_lwt_unix.connect_pool ~pool_config ~post_connect (Entity.Url.to_uri url)
   ;;
 
@@ -155,7 +149,7 @@ struct
         m
           ~tags:(tags_of_key entry.key)
           "Failed to connect: %s"
-          (CCString.concat "; " (CCList.map Caqti_error.show errors)));
+          (CCString.concat "; " (CCList.map Caqti.Error.show errors)));
       { entry with connection = Fail error }
     | Ok pool -> { entry with connection = Open pool }
   ;;
@@ -186,7 +180,7 @@ struct
           (Key.show key)
           (CCOption.map_or
              ~default:""
-             (Format.asprintf " with error: %a" Caqti_error.pp)
+             (Format.asprintf " with error: %a" Caqti.Error.pp)
              error));
       let connection =
         match error with
@@ -325,7 +319,7 @@ struct
       | key ->
         let rec connect entry =
           match entry.connection with
-          | Fail error -> Error (Error.Connection_failed (Caqti_error.show error))
+          | Fail error -> Error (Error.Connection_failed (Caqti.Error.show error))
           | Open _ -> Ok ()
           | Close ->
             let entry =
@@ -407,7 +401,7 @@ struct
   let populate ~needs ctx table columns row_type rows =
     query ~needs ctx (fun (module Connection : Caqti_lwt.CONNECTION) ->
       Connection.populate ~table ~columns row_type (Caqti_lwt.Stream.of_list rows)
-      |> Lwt.map Caqti_error.uncongested)
+      |> Lwt.map Caqti.Error.uncongested)
   ;;
 
   let exec_each fns connection =
@@ -427,7 +421,7 @@ struct
         Lwt_result.return result
       in
       let fail_after_rollback error =
-        let%lwt (_ : (unit, Caqti_error.t) result) = rollback connection in
+        let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
         Lwt_result.fail error
       in
       if Ctx.is_transaction ctx
@@ -441,7 +435,7 @@ struct
            | Error error -> fail_after_rollback error)
         | Error error -> fail_after_rollback error
         | exception exn ->
-          let%lwt (_ : (unit, Caqti_error.t) result) = rollback connection in
+          let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
           Lwt.reraise exn)
   ;;
 
@@ -491,7 +485,7 @@ struct
         | Error error ->
           Lwt.return
             (Log.warn (fun m ->
-               m ~tags:(Ctx.tags ctx) "Rollback failed: %a" Caqti_error.pp error))
+               m ~tags:(Ctx.tags ctx) "Rollback failed: %a" Caqti.Error.pp error))
       in
       Lwt.reraise exn
     in

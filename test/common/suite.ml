@@ -46,7 +46,11 @@ let permission_denied name ~login ~needs = function
 ;;
 
 module Make (D : Dialect) = struct
-  open Caqti_request.Infix
+  module T = Caqti.Templater.T
+
+  let static = Caqti.Templater.static
+  let direct = Caqti.Templater.direct
+
   module Db = D.Db
 
   let url = env_opt (D.env ^ "_URL") |> CCOption.value ~default:D.default_url
@@ -64,29 +68,18 @@ module Make (D : Dialect) = struct
   let owner = Role.owner
   let root_ctx () = Db.label_ctx ~role:owner root
   let database = Database.create root (Url.create url)
-
-  let ping =
-    (Caqti_type.unit ->! Caqti_type.int) "SELECT 1" |> Request.create ~needs:Roles.read
-  ;;
-
-  let int_query sql =
-    (Caqti_type.unit ->! Caqti_type.int) ~oneshot:true sql
-    |> Request.create ~needs:Roles.read
-  ;;
+  let ping = static T.(unit -->! int) "SELECT 1" |> Request.create ~needs:Roles.read
+  let int_query sql = direct T.(unit -->! int) sql |> Request.create ~needs:Roles.read
 
   let string_query sql =
-    (Caqti_type.unit ->! Caqti_type.string) ~oneshot:true sql
-    |> Request.create ~needs:Roles.read
+    direct T.(unit -->! string) sql |> Request.create ~needs:Roles.read
   ;;
 
-  let ddl sql =
-    (Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql
-    |> Request.create ~needs:Roles.schema
-  ;;
+  let ddl sql = direct T.(unit -->. unit) sql |> Request.create ~needs:Roles.schema
 
   let insert table =
-    (Caqti_type.(t2 int int) ->. Caqti_type.unit)
-      ~oneshot:true
+    direct
+      T.(t2 int int -->. unit)
       (Format.asprintf "INSERT INTO %s (id, val) VALUES (?, ?)" table)
     |> Request.create ~needs:Need.(Roles.read & Roles.write)
   ;;
@@ -94,8 +87,8 @@ module Make (D : Dialect) = struct
   let count table = int_query (Format.asprintf "SELECT COUNT(*) FROM %s" table)
 
   let rows table =
-    (Caqti_type.unit ->* Caqti_type.(t2 int int))
-      ~oneshot:true
+    direct
+      T.(unit -->* t2 int int)
       (Format.asprintf "SELECT id, val FROM %s ORDER BY id" table)
     |> Request.create ~needs:Roles.read
   ;;
@@ -140,7 +133,7 @@ module Make (D : Dialect) = struct
         ctx
         table
         [ "id"; "val" ]
-        Caqti_type.(t2 int int)
+        T.(t2 int int)
         [ 2, 20; 3, 30 ]
     in
     let%lwt rows = Db.collect ctx (rows table) () in
@@ -462,7 +455,7 @@ module Make (D : Dialect) = struct
              (function
                | Error.Failed { Error.error; _ } ->
                  Alcotest.(check bool)
-                   (Format.asprintf "a connection error: %a" Caqti_error.pp error)
+                   (Format.asprintf "a connection error: %a" Caqti.Error.pp error)
                    true
                    (Db.Config.Dialect.is_connection_error error)
                | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))

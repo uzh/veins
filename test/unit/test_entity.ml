@@ -1,7 +1,7 @@
 (** Unit tests for {!Veins.Entity} that require no database. *)
 
 open Veins
-open Caqti_request.Infix
+module T = Caqti.Templater.T
 
 let test_label_roundtrip () =
   let s = "my_tenant" in
@@ -39,7 +39,7 @@ let test_status_roundtrip () =
 
 let test_dynparam () =
   let open Dynparam in
-  let (Pack (t, v)) = empty |> add Caqti_type.int 42 |> add Caqti_type.string "hello" in
+  let (Pack (t, v)) = empty |> add T.int 42 |> add T.string "hello" in
   ignore (t, v)
 ;;
 
@@ -119,7 +119,8 @@ let test_database_create_validates () =
 
 let test_request_needs () =
   let request =
-    Caqti_type.(unit ->! int) "SELECT 1" |> Request.create ~needs:Need.(read & write)
+    Caqti.Templater.static T.(unit -->! int) "SELECT 1"
+    |> Request.create ~needs:Need.(read & write)
   in
   Alcotest.(check (list string))
     "needs"

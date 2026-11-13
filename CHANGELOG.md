@@ -38,6 +38,9 @@ from #624, #637 and #657 there.
 
 #### Changed
 
+- Built on the Caqti 3 API (`Caqti.Template`, `Caqti.Error`, `Caqti.Pool.Config`); veins and its driver packages no
+  longer link `caqti.classic`. Requests built with the Caqti 2 API still work: `Caqti_request.t` is
+  `Caqti.Template.Request.t`.
 - Query helpers take a context and a `Request.t`; `query`, `populate`, `transaction` and `transaction_iter` take
   `~needs`. The migration runner takes `?role` (default `Role.owner`) and runs on one held connection.
 - `Database.create` takes the owner's URL and optional `~logins` instead of `Main` / `Multiple`; `Pool.fetch`,

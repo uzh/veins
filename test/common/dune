@@ -6,7 +6,6 @@
  (libraries
   veins
   caqti
-  caqti.classic
   caqti-lwt
   caqti-lwt.unix
   lwt

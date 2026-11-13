@@ -37,7 +37,7 @@ type failure =
   { label : Entity.Label.t
   ; login : Entity.Login.t
   ; role : string option
-  ; error : Caqti_error.t
+  ; error : Caqti.Error.t
   }
 
 exception Failed of failure
@@ -54,16 +54,16 @@ let () =
            Entity.Login.pp
            login
            (CCOption.map_or ~default:"" (Format.asprintf ", role %s") role)
-           Caqti_error.pp
+           Caqti.Error.pp
            error)
     | _ -> None)
 ;;
 
 let failure ?role ~login label error = { label; login; role; error }
 
-let cause : Caqti_error.t -> Caqti_error.cause option = function
-  | `Request_failed e -> Some (Caqti_error.cause (`Request_failed e))
-  | `Response_failed e -> Some (Caqti_error.cause (`Response_failed e))
+let cause : Caqti.Error.t -> Caqti.Error.cause option = function
+  | `Request_failed e -> Some (Caqti.Error.cause (`Request_failed e))
+  | `Response_failed e -> Some (Caqti.Error.cause (`Response_failed e))
   | `Load_failed _
   | `Load_rejected _
   | `Connect_failed _
@@ -76,6 +76,6 @@ let cause : Caqti_error.t -> Caqti_error.cause option = function
 ;;
 
 let cause_of_exn = function
-  | Failed { error; _ } | Caqti_error.Exn error -> cause error
+  | Failed { error; _ } | Caqti.Error.Exn error -> cause error
   | _ -> None
 ;;

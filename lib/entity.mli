@@ -185,9 +185,9 @@ end
 
 (** @canonical Veins.Dynparam *)
 module Dynparam : sig
-  type t = Pack : 'a Caqti_type.t * 'a -> t
+  type t = Pack : 'a Caqti.Template.Row_type.t * 'a -> t
 
   val empty : t
-  val add : 'a Caqti_type.t -> 'a -> t -> t
-  val prefix : 'a Caqti_type.t -> 'a -> t -> t
+  val add : 'a Caqti.Template.Row_type.t -> 'a -> t -> t
+  val prefix : 'a Caqti.Template.Row_type.t -> 'a -> t -> t
 end

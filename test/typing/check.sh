@@ -10,7 +10,7 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 # Prints the compiler's messages; whether it compiled shows in the .cmo.
 compile() {
-  ocamlfind ocamlc -package caqti,caqti.classic,caqti-lwt,lwt,logs \
+  ocamlfind ocamlc -package caqti,caqti-lwt,lwt,logs \
     -I "$objs" -I "$out" -c -o "$out/$(basename "$1" .ml)" "$1" 2>&1 \
     | grep -v 'ocamlfind: \[WARNING\]' || true
 }

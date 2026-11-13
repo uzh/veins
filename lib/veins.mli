@@ -17,7 +17,7 @@
 
     let find_name =
       {sql| SELECT name FROM users WHERE id = ? |sql}
-      |> Caqti_type.(int ->? string)
+      |> Caqti.Templater.(static T.(int -->? string))
       |> Veins.Request.create ~needs:read
     ;;
 

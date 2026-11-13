@@ -8,7 +8,6 @@
   veins-postgresql
   veins_test_common
   caqti
-  caqti.classic
   caqti-lwt
   caqti-lwt.unix
   caqti-driver-postgresql

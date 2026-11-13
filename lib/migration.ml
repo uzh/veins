@@ -1,5 +1,6 @@
-open Caqti_request.Infix
+module T = Caqti.Templater.T
 
+let direct = Caqti.Templater.direct
 let src = Logs.Src.create "veins.migration"
 
 module Log = (val Logs.src_log src : Logs.LOG)
@@ -94,7 +95,7 @@ let table_name =
      | _ -> "veins_migration_state")
 ;;
 
-(* Current wall-clock time as a Ptime.t, safe for Caqti_type.ptime. *)
+(* Current wall-clock time as a Ptime.t, safe for Caqti.Template.Row_type.ptime. *)
 let now () =
   CCOption.get_or ~default:Ptime.epoch (Ptime.of_float_s (Unix.gettimeofday ()))
 ;;
@@ -158,14 +159,12 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
 
   let setup ctx =
     let sql = Db.Config.Dialect.create_migration_table ~table:(table ()) in
-    Db.exec ctx (Caqti_type.(unit ->. unit) ~oneshot:true sql |> unchecked) ()
+    Db.exec ctx (direct T.(unit -->. unit) sql |> unchecked) ()
   ;;
 
   let get_applied_ids ctx =
     let sql = Db.Config.Dialect.select_applied_ids ~table:(table ()) in
-    let%lwt ids =
-      Db.collect ctx (Caqti_type.(unit ->* string) ~oneshot:true sql |> unchecked) ()
-    in
+    let%lwt ids = Db.collect ctx (direct T.(unit -->* string) sql |> unchecked) () in
     Lwt.return (CCList.map Id.create ids)
   ;;
 
@@ -173,20 +172,14 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let n = now () in
     let sql = Db.Config.Dialect.insert_applied_step ~table:(table ()) in
     let req =
-      Caqti_type.(t2 (t3 string string string) (t2 ptime ptime) ->. unit)
-        ~oneshot:true
-        sql
-      |> unchecked
+      direct T.(t2 (t3 string string string) (t2 ptime ptime) -->. unit) sql |> unchecked
     in
     Db.exec ctx req ((Id.value id, Namespace.value namespace, label), (n, n))
   ;;
 
   let delete_applied_step ctx (step_id : Id.t) =
     let sql = Db.Config.Dialect.delete_applied_step ~table:(table ()) in
-    Db.exec
-      ctx
-      (Caqti_type.(string ->. unit) ~oneshot:true sql |> unchecked)
-      (Id.value step_id)
+    Db.exec ctx (direct T.(string -->. unit) sql |> unchecked) (Id.value step_id)
   ;;
 
   (* [SET FOREIGN_KEY_CHECKS] is session state: [ctx] holds one connection, so
@@ -197,7 +190,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     else (
       let set value =
         Format.asprintf "SET FOREIGN_KEY_CHECKS = %d" value
-        |> Caqti_type.(unit ->. unit) ~oneshot:true
+        |> direct T.(unit -->. unit)
         |> unchecked
       in
       let%lwt () = Db.exec ctx (set 0) () in
@@ -209,9 +202,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   let run_statement ctx ~check_fk sql record =
     let run () =
       Db.with_transaction ctx (fun ctx ->
-        let%lwt () =
-          Db.exec ctx (Caqti_type.(unit ->. unit) ~oneshot:true sql |> unchecked) ()
-        in
+        let%lwt () = Db.exec ctx (direct T.(unit -->. unit) sql |> unchecked) () in
         record ctx)
     in
     if check_fk then run () else with_fk_disabled ctx run
@@ -336,7 +327,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     with_ctx ?role db_label
     @@ fun ctx ->
     let sql = Db.Config.Dialect.select_applied_rows ~table:(table ()) in
-    let req = Caqti_type.(unit ->* t2 string string) ~oneshot:true sql |> unchecked in
+    let req = direct T.(unit -->* t2 string string) sql |> unchecked in
     let%lwt raw_rows = Db.collect ctx req () in
     let applied_rows =
       CCList.map (fun (id, ns) -> Id.create id, Namespace.create ns) raw_rows
