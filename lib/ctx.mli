@@ -7,7 +7,7 @@
 
     The first type parameter tells the two apart at compile time
     ({!no_transaction} / {!transaction}), {!val-txn} at runtime. The second
-    is the type of the context's role ({!Entity.Role}): a statement only runs
+    is the type of the context's role ({!Veins.Role}): a statement only runs
     on a context whose role grants everything it needs, which the compiler
     checks. Build contexts with [label_ctx], [connection_ctx] and
     [transaction_ctx] of a pool (see {!Pools_sig.Sig}).

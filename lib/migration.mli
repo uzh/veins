@@ -211,7 +211,7 @@ type drift =
 (** Interface satisfied by the output of {!Make}.
 
     Every function runs on one connection held for the whole call, as
-    [?role] (default {!Entity.Role.owner}, i.e. the database's own URL).
+    [?role] (default {!Veins.Role.owner}, i.e. the database's own URL).
     Migration statements declare no needs: the login's grants are what
     limits them. Each step runs in a
     transaction together with its state row (PostgreSQL rolls back both on

@@ -30,9 +30,9 @@ end
     {!Error.Exn} for errors veins detects itself and for
     [Error.Permission_denied].
 
-    {b Roles.} Every context names its role ({!Entity.Role}), and connects
+    {b Roles.} Every context names its role ({!Veins.Role}), and connects
     as the role's login. A statement only runs on a context whose role type
-    grants everything it needs ({!Request.t}, {!Entity.Need}): the compiler
+    grants everything it needs ({!Request.t}, {!Veins.Need}): the compiler
     checks this, nothing is checked at runtime. *)
 module type Sig = sig
   module Config : ConfigSig
@@ -72,7 +72,7 @@ module type Sig = sig
       -> unit
       -> Entity.Database.t list
 
-    (** The Caqti pool [login] (default {!Entity.Login.owner}) connects with,
+    (** The Caqti pool [login] (default {!Veins.Login.owner}) connects with,
         connecting or reconnecting when needed. After [retries] failed
         reconnects the call raises, and the next call tries again.
 
@@ -84,7 +84,7 @@ module type Sig = sig
       -> Entity.Label.t
       -> (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t Lwt.t
 
-    (** Try to open the pool [login] (default {!Entity.Login.owner}) connects
+    (** Try to open the pool [login] (default {!Veins.Login.owner}) connects
         with, without raising. *)
     val connect : ?login:Entity.Login.t -> Entity.Label.t -> (unit, Error.t) result
 
