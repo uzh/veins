@@ -4,7 +4,7 @@
     Caqti 3 request may render its SQL from it. Veins builds its own requests
     that way ({!request}), so one pool works on MariaDB and PostgreSQL alike,
     without configuring a dialect. The functions here are the SQL veins needs,
-    by {!kind}; applications may use them to build their own dialect-dependent
+    by {!type-kind}; applications may use them to build their own dialect-dependent
     requests, or with a fixed kind where the database is known (e.g. a
     package for MariaDB only).
 

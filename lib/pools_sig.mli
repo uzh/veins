@@ -19,7 +19,7 @@ module type ConfigSig = sig
 
   (** How to read the driver's errors. Prefer [Veins_mariadb.Driver] /
       [Veins_postgresql.Driver], which recognise lost connections and missing
-      privileges; {!Driver.Generic} only knows connect errors. The SQL veins
+      privileges; {!Veins.Driver.Generic} only knows connect errors. The SQL veins
       sends follows each connection's dialect, see {!Dialect}. *)
   module Driver : Driver.Sig
 end
