@@ -17,6 +17,7 @@
   uri
   logs
   logs.fmt
+  threads.posix
   unix)
  ; tests match one expected error and fail on anything else
  (flags

@@ -55,89 +55,142 @@ end
 
 (** A TCP proxy in front of a real database. [set_down t true] cuts every
     open connection and closes new ones right away, like an outage;
-    [set_down t false] forwards again. *)
+    [set_down t false] forwards again.
+
+    It runs on system threads with blocking I/O, not on Lwt: caqti-driver-
+    postgresql connects with libpq's blocking PQconnectdb, which holds up the
+    Lwt loop until the handshake is done, so a proxy on that loop would never
+    answer it. *)
 module Proxy = struct
   type t =
-    { socket : Lwt_unix.file_descr
+    { socket : Unix.file_descr
     ; port : int
     ; target : Unix.sockaddr
+    ; lock : Mutex.t
     ; mutable down : bool
-    ; mutable open_fds : Lwt_unix.file_descr list
+    ; mutable open_fds : Unix.file_descr list
     }
 
+  let locked t f =
+    Mutex.lock t.lock;
+    Fun.protect ~finally:(fun () -> Mutex.unlock t.lock) f
+  ;;
+
+  let quietly f fd =
+    try f fd with
+    | (_ : exn) -> ()
+  ;;
+
+  (* Wakes a thread blocked on [fd]; only the thread owning [fd] closes it. *)
+  let cut = quietly (fun fd -> Unix.shutdown fd Unix.SHUTDOWN_ALL)
+  let close = quietly Unix.close
+
+  (* Copies until either side ends, then cuts both so the other pump ends too. *)
   let pump ~src ~dst =
     let buffer = Bytes.create 16384 in
     let rec write offset length =
-      if length = 0
-      then Lwt.return_unit
-      else (
-        let%lwt n = Lwt_unix.write dst buffer offset length in
+      if length > 0
+      then (
+        let n = Unix.write dst buffer offset length in
         write (offset + n) (length - n))
     in
     let rec loop () =
-      match%lwt Lwt_unix.read src buffer 0 (Bytes.length buffer) with
-      | 0 -> Lwt.return_unit
+      match Unix.read src buffer 0 (Bytes.length buffer) with
+      | 0 -> ()
       | n ->
-        let%lwt () = write 0 n in
+        write 0 n;
         loop ()
     in
-    Lwt.catch loop (fun (_ : exn) -> Lwt.return_unit)
+    (try loop () with
+     | (_ : exn) -> ());
+    cut src;
+    cut dst
   ;;
 
   let forward t client =
-    if t.down
-    then close_quietly client
-    else (
-      let upstream =
-        Lwt_unix.socket (Unix.domain_of_sockaddr t.target) Unix.SOCK_STREAM 0
+    let upstream = Unix.socket (Unix.domain_of_sockaddr t.target) Unix.SOCK_STREAM 0 in
+    match Unix.connect upstream t.target with
+    | exception (_ : exn) ->
+      close upstream;
+      close client
+    | () ->
+      let accepted =
+        locked t (fun () ->
+          if not t.down then t.open_fds <- client :: upstream :: t.open_fds;
+          not t.down)
       in
-      match%lwt Lwt_unix.connect upstream t.target with
-      | exception (_ : exn) ->
-        let%lwt () = close_quietly upstream in
-        close_quietly client
-      | () ->
-        t.open_fds <- client :: upstream :: t.open_fds;
-        let%lwt () =
-          Lwt.pick [ pump ~src:client ~dst:upstream; pump ~src:upstream ~dst:client ]
+      if accepted
+      then (
+        let pumps =
+          [ Thread.create (fun () -> pump ~src:client ~dst:upstream) ()
+          ; Thread.create (fun () -> pump ~src:upstream ~dst:client) ()
+          ]
         in
-        let%lwt () = close_quietly client in
-        close_quietly upstream)
+        List.iter Thread.join pumps;
+        locked t (fun () ->
+          t.open_fds <- List.filter (fun fd -> fd != client && fd != upstream) t.open_fds));
+      close client;
+      close upstream
+  ;;
+
+  (* Ends when [stop] shuts the listening socket down. *)
+  let accept_loop t =
+    let rec loop () =
+      match Unix.accept ~cloexec:true t.socket with
+      | exception (_ : exn) -> close t.socket
+      | client, _ ->
+        if locked t (fun () -> t.down)
+        then close client
+        else ignore (Thread.create (forward t) client : Thread.t);
+        loop ()
+    in
+    loop ()
   ;;
 
   (** [start uri] proxies to the host and port of [uri]; returns [uri]
       pointing at the proxy. *)
   let start ~default_port uri =
+    (* a write to a connection the other side closed must not end the process *)
+    Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
     let host = Uri.host uri |> CCOption.get_exn_or "database URL without host" in
     let port = Uri.port uri |> CCOption.value ~default:default_port in
-    let%lwt addresses =
-      Lwt_unix.getaddrinfo host (string_of_int port) [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
-    in
     let target =
-      match addresses with
+      match
+        Unix.getaddrinfo host (string_of_int port) [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
+      with
       | { Unix.ai_addr; _ } :: _ -> ai_addr
       | [] -> failwith ("cannot resolve " ^ host)
     in
-    let%lwt socket, proxy_port = listen () in
-    let t = { socket; port = proxy_port; target; down = false; open_fds = [] } in
-    accept_loop socket (forward t);
-    let proxied =
-      Uri.with_port (Uri.with_host uri (Some "127.0.0.1")) (Some proxy_port)
+    let socket = Unix.socket ~cloexec:true Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.setsockopt socket Unix.SO_REUSEADDR true;
+    Unix.bind socket (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+    Unix.listen socket 32;
+    let port =
+      match Unix.getsockname socket with
+      | Unix.ADDR_INET (_, port) -> port
+      | Unix.ADDR_UNIX _ -> failwith "expected an inet socket"
     in
+    let t =
+      { socket; port; target; lock = Mutex.create (); down = false; open_fds = [] }
+    in
+    ignore (Thread.create accept_loop t : Thread.t);
+    let proxied = Uri.with_port (Uri.with_host uri (Some "127.0.0.1")) (Some port) in
     Lwt.return (t, proxied)
   ;;
 
   let set_down t down =
-    t.down <- down;
-    if down
-    then (
-      let fds = t.open_fds in
-      t.open_fds <- [];
-      Lwt_list.iter_p close_quietly fds)
-    else Lwt.return_unit
+    let fds =
+      locked t (fun () ->
+        t.down <- down;
+        if down then t.open_fds else [])
+    in
+    List.iter cut fds;
+    Lwt.return_unit
   ;;
 
   let stop t =
     let%lwt () = set_down t true in
-    close_quietly t.socket
+    cut t.socket;
+    Lwt.return_unit
   ;;
 end
