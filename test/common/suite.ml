@@ -31,21 +31,18 @@ let env_opt var =
   | _ -> None
 ;;
 
-let unchecked request = Request.create ~needs:[] request
-
 let expect_exn name f check =
   match%lwt f () with
   | (_ : _) -> Alcotest.failf "%s: expected an exception" name
   | exception exn -> Lwt.return (check exn)
 ;;
 
-let insufficient name = function
-  | Error.Exn (Error.Insufficient_capabilities _) -> ()
+let permission_denied name ~login ~needs = function
+  | Error.Exn (Error.Permission_denied { login = login'; needs = needs'; _ }) ->
+    Alcotest.(check string) (name ^ ": login") login login';
+    Alcotest.(check (list string)) (name ^ ": needs") needs needs'
   | exn ->
-    Alcotest.failf
-      "%s: expected Insufficient_capabilities, got %s"
-      name
-      (Printexc.to_string exn)
+    Alcotest.failf "%s: expected Permission_denied, got %s" name (Printexc.to_string exn)
 ;;
 
 module Make (D : Dialect) = struct
@@ -55,8 +52,8 @@ module Make (D : Dialect) = struct
   let url = env_opt (D.env ^ "_URL") |> CCOption.value ~default:D.default_url
   let role_url role = env_opt (Format.asprintf "%s_%s_URL" D.env role)
 
-  (* Every role connects as the all-rights user unless the per-role URLs are
-     set; the "which user" checks need them. *)
+  (* Every login connects as the all-rights user unless the per-role URLs are
+     set; the "which user" and permission checks need them. *)
   let distinct_role_users =
     match role_url "READER" with
     | Some reader -> not (CCString.equal reader url)
@@ -64,33 +61,34 @@ module Make (D : Dialect) = struct
   ;;
 
   let root = Label.create "root"
-  let root_ctx () = Db.label_ctx root
-  let database = Database.create root (Database.Main (Url.create url))
+  let owner = Role.owner
+  let root_ctx () = Db.label_ctx ~role:owner root
+  let database = Database.create root (Url.create url)
 
   let ping =
-    (Caqti_type.unit ->! Caqti_type.int) "SELECT 1" |> Request.create ~needs:[ Caps.read ]
+    (Caqti_type.unit ->! Caqti_type.int) "SELECT 1" |> Request.create ~needs:Roles.read
   ;;
 
   let int_query sql =
     (Caqti_type.unit ->! Caqti_type.int) ~oneshot:true sql
-    |> Request.create ~needs:[ Caps.read ]
+    |> Request.create ~needs:Roles.read
   ;;
 
   let string_query sql =
     (Caqti_type.unit ->! Caqti_type.string) ~oneshot:true sql
-    |> Request.create ~needs:[ Caps.read ]
+    |> Request.create ~needs:Roles.read
   ;;
 
   let ddl sql =
     (Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql
-    |> Request.create ~needs:[ Caps.schema ]
+    |> Request.create ~needs:Roles.schema
   ;;
 
   let insert table =
     (Caqti_type.(t2 int int) ->. Caqti_type.unit)
       ~oneshot:true
       (Format.asprintf "INSERT INTO %s (id, val) VALUES (?, ?)" table)
-    |> Request.create ~needs:[ Caps.write ]
+    |> Request.create ~needs:Need.(Roles.read & Roles.write)
   ;;
 
   let count table = int_query (Format.asprintf "SELECT COUNT(*) FROM %s" table)
@@ -99,7 +97,7 @@ module Make (D : Dialect) = struct
     (Caqti_type.unit ->* Caqti_type.(t2 int int))
       ~oneshot:true
       (Format.asprintf "SELECT id, val FROM %s ORDER BY id" table)
-    |> Request.create ~needs:[ Caps.read ]
+    |> Request.create ~needs:Roles.read
   ;;
 
   let create_table table =
@@ -138,7 +136,7 @@ module Make (D : Dialect) = struct
     let%lwt () = Db.exec ctx (insert table) (1, 10) in
     let%lwt () =
       Db.populate
-        ~needs:[ Caps.write ]
+        ~needs:Roles.write
         ctx
         table
         [ "id"; "val" ]
@@ -165,8 +163,8 @@ module Make (D : Dialect) = struct
       let%lwt b = Db.find ctx connection_id () in
       Lwt.return (Alcotest.(check int) "same connection" a b)
     in
-    let%lwt () = Db.connection_ctx root check in
-    Db.transaction_ctx root check
+    let%lwt () = Db.connection_ctx ~role:owner root check in
+    Db.transaction_ctx ~role:owner root check
   ;;
 
   let test_held_connection_serialises () =
@@ -175,14 +173,16 @@ module Make (D : Dialect) = struct
       Lwt.return
         (Alcotest.(check (list int)) "all answered" (CCList.replicate 10 1) results)
     in
-    let%lwt () = Db.connection_ctx root parallel in
-    Db.transaction_ctx root parallel
+    let%lwt () = Db.connection_ctx ~role:owner root parallel in
+    Db.transaction_ctx ~role:owner root parallel
   ;;
 
   let test_session_is_utc () =
     let offset = int_query D.utc_offset_sql in
     let%lwt label_offset = Db.find (root_ctx ()) offset () in
-    let%lwt held_offset = Db.connection_ctx root (fun ctx -> Db.find ctx offset ()) in
+    let%lwt held_offset =
+      Db.connection_ctx ~role:owner root (fun ctx -> Db.find ctx offset ())
+    in
     Alcotest.(check int) "label ctx session in UTC" 0 label_offset;
     Lwt.return (Alcotest.(check int) "held connection in UTC" 0 held_offset)
   ;;
@@ -192,10 +192,12 @@ module Make (D : Dialect) = struct
   let test_commit_and_rollback () =
     with_table "txn"
     @@ fun table ->
-    let%lwt () = Db.transaction_ctx root (fun ctx -> Db.exec ctx (insert table) (1, 1)) in
+    let%lwt () =
+      Db.transaction_ctx ~role:owner root (fun ctx -> Db.exec ctx (insert table) (1, 1))
+    in
     let%lwt () =
       ignore_exit (fun () ->
-        Db.transaction_ctx root (fun ctx ->
+        Db.transaction_ctx ~role:owner root (fun ctx ->
           let%lwt () = Db.exec ctx (insert table) (2, 2) in
           Lwt.fail Exit))
     in
@@ -208,14 +210,14 @@ module Make (D : Dialect) = struct
     (* the outer transaction fails after the inner one returned *)
     let%lwt () =
       ignore_exit (fun () ->
-        Db.transaction_ctx root (fun ctx ->
+        Db.transaction_ctx ~role:owner root (fun ctx ->
           let%lwt () = Db.exec ctx (insert table) (1, 1) in
           let%lwt () =
             Db.with_transaction ctx (fun inner -> Db.exec inner (insert table) (2, 2))
           in
           let%lwt () =
             Db.transaction
-              ~needs:[ Caps.write ]
+              ~needs:Roles.write
               ctx
               (fun (module C : Caqti_lwt.CONNECTION) ->
                  C.exec (Request.caqti (insert table)) (3, 3))
@@ -226,7 +228,7 @@ module Make (D : Dialect) = struct
     (* the inner one fails *)
     let%lwt () =
       ignore_exit (fun () ->
-        Db.transaction_ctx root (fun ctx ->
+        Db.transaction_ctx ~role:owner root (fun ctx ->
           let%lwt () = Db.exec ctx (insert table) (4, 4) in
           Db.with_transaction ctx (fun inner ->
             let%lwt () = Db.exec inner (insert table) (5, 5) in
@@ -235,7 +237,7 @@ module Make (D : Dialect) = struct
     let%lwt () = check_count table 0 in
     (* on a held connection it starts a transaction and commits *)
     let%lwt () =
-      Db.connection_ctx root (fun ctx ->
+      Db.connection_ctx ~role:owner root (fun ctx ->
         Db.with_transaction ctx (fun inner -> Db.exec inner (insert table) (6, 6)))
     in
     check_count table 1
@@ -246,7 +248,7 @@ module Make (D : Dialect) = struct
     @@ fun table ->
     let ran = ref [] in
     let%lwt () =
-      Db.transaction_ctx root (fun ctx ->
+      Db.transaction_ctx ~role:owner root (fun ctx ->
         Ctx.after_commit ctx (fun () -> ran := 1 :: !ran);
         Ctx.after_commit ctx (fun () -> failwith "hook failure");
         Ctx.after_commit ctx (fun () -> ran := 3 :: !ran);
@@ -262,7 +264,7 @@ module Make (D : Dialect) = struct
     let dropped = ref true in
     let%lwt () =
       ignore_exit (fun () ->
-        Db.transaction_ctx root (fun ctx ->
+        Db.transaction_ctx ~role:owner root (fun ctx ->
           Ctx.after_commit ctx (fun () -> dropped := false);
           Lwt.fail Exit))
     in
@@ -291,18 +293,18 @@ module Make (D : Dialect) = struct
     @@ fun table ->
     let%lwt () =
       ignore_exit (fun () ->
-        Single.transaction_ctx root (fun ctx ->
+        Single.transaction_ctx ~role:owner root (fun ctx ->
           let%lwt () = Single.exec ctx (insert table) (1, 1) in
           Lwt.fail Exit))
     in
     let%lwt () =
       ignore_exit (fun () ->
         Single.transaction
-          ~needs:[]
-          (Single.label_ctx root)
+          ~needs:Need.none
+          (Single.label_ctx ~role:owner root)
           (fun (_ : Caqti_lwt.connection) -> Lwt.fail Exit))
     in
-    let%lwt () = Single.exec (Single.label_ctx root) (insert table) (2, 2) in
+    let%lwt () = Single.exec (Single.label_ctx ~role:owner root) (insert table) (2, 2) in
     (* another connection sees the row only if it was committed *)
     let%lwt n = Db.find (root_ctx ()) (count table) () in
     (* close the connection before asserting: a transaction left open on it
@@ -361,14 +363,19 @@ module Make (D : Dialect) = struct
   let roles_label = Label.create "veins_roles"
 
   let roles_database =
-    let url_of role = role_url role |> CCOption.value ~default:url |> Url.create in
+    let login_url login role =
+      role_url role |> CCOption.map (fun url -> login, Url.create url)
+    in
     Database.create
+      ~logins:
+        (CCList.filter_map
+           CCFun.id
+           [ login_url Roles.reader_login "READER"
+           ; login_url Roles.writer_login "WRITER"
+           ; login_url Roles.migrator_login "MIGRATOR"
+           ])
       roles_label
-      (Database.Multiple
-         [ Caps.reader, url_of "READER"
-         ; Caps.writer, url_of "WRITER"
-         ; Caps.migrator, url_of "MIGRATOR"
-         ])
+      (Url.create url)
   ;;
 
   let setup () =
@@ -376,13 +383,15 @@ module Make (D : Dialect) = struct
     Db.Pool.add roles_database
   ;;
 
-  let extra name = Database.create (Label.create name) (Database.Main (Url.create url))
+  let extra name = Database.create (Label.create name) (Url.create url)
 
   let test_clear_drains_pools () =
     let database = extra "veins_extra_clear" in
     let label = Database.label database in
     Db.Pool.add database;
-    let%lwt (_ : int) = Db.connection_ctx label (fun ctx -> Db.find ctx ping ()) in
+    let%lwt (_ : int) =
+      Db.connection_ctx ~role:owner label (fun ctx -> Db.find ctx ping ())
+    in
     let%lwt pool = Db.Pool.fetch label in
     Db.Pool.clear ();
     setup ();
@@ -398,7 +407,7 @@ module Make (D : Dialect) = struct
     let%lwt (_ : int) = Db.find (root_ctx ()) ping () in
     expect_exn
       "cleared label"
-      (fun () -> Db.find (Db.label_ctx label) ping ())
+      (fun () -> Db.find (Db.label_ctx ~role:owner label) ping ())
       (function
         | Error.Exn (Error.Database_not_registered _) -> ()
         | exn ->
@@ -412,7 +421,7 @@ module Make (D : Dialect) = struct
     let label = Database.label database in
     Db.Pool.add database;
     let%lwt () =
-      Db.connection_ctx label (fun ctx ->
+      Db.connection_ctx ~role:owner label (fun ctx ->
         let%lwt (_ : int) = Db.find ctx ping () in
         (* returns right away, the held connection stays usable *)
         Db.Pool.drop label;
@@ -421,7 +430,7 @@ module Make (D : Dialect) = struct
     in
     expect_exn
       "dropped label"
-      (fun () -> Db.find (Db.label_ctx label) ping ())
+      (fun () -> Db.find (Db.label_ctx ~role:owner label) ping ())
       (function
         | Error.Exn (Error.Database_not_registered _) -> ()
         | exn ->
@@ -437,9 +446,8 @@ module Make (D : Dialect) = struct
       Net.Proxy.start ~default_port:D.default_port (Uri.of_string url)
     in
     let label = Label.create "veins_outage" in
-    Db.Pool.add
-      (Database.create label (Database.Main (Url.create (Uri.to_string proxied))));
-    let ctx = Db.label_ctx label in
+    Db.Pool.add (Database.create label (Url.create (Uri.to_string proxied)));
+    let ctx = Db.label_ctx ~role:owner label in
     Lwt.finalize
       (fun () ->
          let%lwt (_ : int) = Db.find ctx ping () in
@@ -474,84 +482,57 @@ module Make (D : Dialect) = struct
 
   let as_role role = Db.label_ctx ~role roles_label
 
-  let test_roles_are_checked () =
-    with_table ~ctx:(fun () -> as_role Caps.migrator) "roles"
+  (* Each role runs what its type grants, on its login's URL or, without
+     one, on the owner's. Misuse doesn't compile, see test/typing. *)
+  let test_roles_run_their_statements () =
+    with_table ~ctx:(fun () -> as_role Roles.migrator) "roles"
     @@ fun table ->
-    let%lwt () = Db.exec (as_role Caps.writer) (insert table) (1, 1) in
-    let%lwt n = Db.find (as_role Caps.reader) (count table) () in
-    Alcotest.(check int) "reader reads" 1 n;
+    let%lwt () = Db.exec (as_role Roles.writer) (insert table) (1, 1) in
     let%lwt () =
-      expect_exn
-        "reader writes"
-        (fun () -> Db.exec (as_role Caps.reader) (insert table) (2, 2))
-        (insufficient "reader writes")
+      Db.transaction_ctx ~role:Roles.writer roles_label (fun ctx ->
+        Db.with_transaction ctx (fun inner -> Db.exec inner (insert table) (2, 2)))
     in
-    let%lwt () =
-      expect_exn
-        "raw query"
-        (fun () ->
-           Db.query
-             ~needs:[ Caps.write ]
-             (as_role Caps.reader)
-             (fun (_ : Caqti_lwt.connection) -> Lwt_result.return ()))
-        (insufficient "raw query")
-    in
-    let%lwt () =
-      expect_exn
-        "nested transaction can't escalate"
-        (fun () ->
-           Db.transaction_ctx ~role:Caps.reader roles_label (fun ctx ->
-             Db.with_transaction ctx (fun inner -> Db.exec inner (insert table) (3, 3))))
-        (insufficient "nested transaction")
-    in
-    let%lwt () =
-      expect_exn
-        "no role"
-        (fun () -> Db.find (Db.label_ctx roles_label) (count table) ())
-        (function
-          | Error.Exn (Error.Role_required _) -> ()
-          | exn ->
-            Alcotest.failf "expected Role_required, got %s" (Printexc.to_string exn))
-    in
-    let%lwt n = Db.find (as_role Caps.reader) (count table) () in
-    Lwt.return (Alcotest.(check int) "nothing written by the rejected statements" 1 n)
+    let%lwt n = Db.find (as_role Roles.reader) (count table) () in
+    Lwt.return (Alcotest.(check int) "reader reads what the writer wrote" 2 n)
   ;;
 
   (* Needs one database user per role (the *_READER_URL etc. variables). *)
   let test_roles_run_as_their_user () =
     if not distinct_role_users then Alcotest.skip ();
-    let%lwt reader = Db.find (as_role Caps.reader) (string_query D.current_user_sql) () in
-    let%lwt writer = Db.find (as_role Caps.writer) (string_query D.current_user_sql) () in
+    let%lwt reader =
+      Db.find (as_role Roles.reader) (string_query D.current_user_sql) ()
+    in
+    let%lwt writer =
+      Db.find (as_role Roles.writer) (string_query D.current_user_sql) ()
+    in
     Alcotest.(check bool)
       ("reader is " ^ reader)
       true
       (CCString.mem ~sub:"veins_reader" reader);
-    Alcotest.(check bool)
-      ("writer is " ^ writer)
-      true
-      (CCString.mem ~sub:"veins_writer" writer);
-    (* a role declared with more rights than its user has: the database
-       still refuses *)
-    let overstated = Role.create "reader" ~capabilities:[ Caps.read; Caps.write ] in
-    let label = Label.create "veins_overstated" in
-    Db.Pool.add
-      (Database.create
-         label
-         (Database.Multiple
-            [ ( overstated
-              , Url.create (CCOption.get_exn_or "reader URL" (role_url "READER")) )
-            ]));
-    with_table ~ctx:(fun () -> as_role Caps.migrator) "overstated"
+    Lwt.return
+      (Alcotest.(check bool)
+         ("writer is " ^ writer)
+         true
+         (CCString.mem ~sub:"veins_writer" writer))
+  ;;
+
+  (* A role claiming more than its login is granted: the types allow the
+     statement, the database refuses it. Needs the per-role users. *)
+  let test_overstated_role_is_refused () =
+    if not distinct_role_users then Alcotest.skip ();
+    let overstated : [ `Read | `Write ] Role.t =
+      Role.v ~login:Roles.reader_login "overstated"
+    in
+    with_table ~ctx:(fun () -> as_role Roles.migrator) "overstated"
     @@ fun table ->
-    Lwt.finalize
-      (fun () ->
-         expect_exn
-           "overstated role"
-           (fun () -> Db.exec (Db.label_ctx ~role:overstated label) (insert table) (1, 1))
-           (function
-             | Error.Failed _ -> ()
-             | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn)))
-      (fun () -> Lwt.return (Db.Pool.drop label))
+    let%lwt () =
+      expect_exn
+        "overstated role"
+        (fun () -> Db.exec (as_role overstated) (insert table) (1, 1))
+        (permission_denied "overstated role" ~login:"reader" ~needs:[ "read"; "write" ])
+    in
+    let%lwt n = Db.find (as_role Roles.reader) (count table) () in
+    Lwt.return (Alcotest.(check int) "nothing written" 0 n)
   ;;
 
   (* {1 Migrations} *)
@@ -633,8 +614,9 @@ module Make (D : Dialect) = struct
         ; case "outage and recovery" `Slow test_outage_and_recovery
         ] )
     ; ( "roles"
-      , [ case "statements are checked" `Quick test_roles_are_checked
+      , [ case "roles run their statements" `Quick test_roles_run_their_statements
         ; case "roles run as their user" `Quick test_roles_run_as_their_user
+        ; case "overstated role is refused" `Quick test_overstated_role_is_refused
         ] )
     ; "migrations", [ case "run_all, check, down" `Quick test_migration ]
     ]

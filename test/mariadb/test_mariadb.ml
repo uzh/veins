@@ -10,9 +10,8 @@ module Suite = Suite.Make (struct
         let database =
           Veins.Database.create
             (Veins.Label.create "root")
-            (Veins.Database.Main
-               (Veins.Url.create
-                  (Suite.env_opt "MARIADB_URL" |> CCOption.value ~default:default_url)))
+            (Veins.Url.create
+               (Suite.env_opt "MARIADB_URL" |> CCOption.value ~default:default_url))
         ;;
 
         let database_pool_size = 5

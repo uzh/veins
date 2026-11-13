@@ -27,6 +27,12 @@ module type Sig = sig
       recognise the driver's own "connection lost" errors. *)
   val is_connection_error : Caqti_error.t -> bool
 
+  (** [true] when the database refused a statement for lack of privileges;
+      veins then raises [Error.Permission_denied]. Like
+      {!is_connection_error}, only the driver packages' dialects recognise
+      these errors; the implementations here always answer [false]. *)
+  val is_permission_error : Caqti_error.t -> bool
+
   (** Statements run on a connection after rolling back a transaction, before
       it is used again. MariaDB restores [autocommit]: caqti-driver-mariadb
       (3.1) turns it off to start a transaction and back on when committing,

@@ -1,15 +1,12 @@
 type t =
   | Connection_failed of string
   | Database_not_registered of string
-  | Role_required of string
-  | Role_not_configured of
+  | Permission_denied of
       { label : string
-      ; role : string
-      }
-  | Insufficient_capabilities of
-      { label : string
+      ; login : string
       ; role : string option
-      ; missing : string list
+      ; needs : string list
+      ; message : string
       }
   | Migration_failed of string
   | Unsupported of string
@@ -19,18 +16,17 @@ exception Exn of t
 let show : t -> string = function
   | Connection_failed msg -> "Connection failed: " ^ msg
   | Database_not_registered label -> "Database not registered: " ^ label
-  | Role_required label ->
+  | Permission_denied { label; login; role; needs; message } ->
     Format.asprintf
-      "Database '%s' has one URL per role: the context must name a role"
+      "Database '%s' refused login '%s'%s a statement declared to need %s; the login \
+       lacks a grant its role claims: %s"
       label
-  | Role_not_configured { label; role } ->
-    Format.asprintf "Role '%s' is not configured for database '%s'" role label
-  | Insufficient_capabilities { label; role; missing } ->
-    Format.asprintf
-      "Statement on '%s' needs %s, which role '%s' doesn't have"
-      label
-      (CCString.concat ", " missing)
-      (CCOption.value ~default:"(none)" role)
+      login
+      (CCOption.map_or ~default:"" (Format.asprintf " (role '%s')") role)
+      (match needs with
+       | [] -> "nothing"
+       | needs -> CCString.concat ", " needs)
+      message
   | Migration_failed msg -> "Migration failed: " ^ msg
   | Unsupported msg -> "Unsupported: " ^ msg
 ;;
@@ -39,7 +35,8 @@ let pp fmt t = Format.pp_print_string fmt (show t)
 
 type failure =
   { label : Entity.Label.t
-  ; role : Entity.Role.t option
+  ; login : Entity.Login.t
+  ; role : string option
   ; error : Caqti_error.t
   }
 
@@ -48,22 +45,21 @@ exception Failed of failure
 let () =
   Printexc.register_printer (function
     | Exn t -> Some (show t)
-    | Failed { label; role; error } ->
+    | Failed { label; login; role; error } ->
       Some
         (Format.asprintf
-           "Database %a%s: %a"
+           "Database %a (login %a%s): %a"
            Entity.Label.pp
            label
-           (CCOption.map_or
-              ~default:""
-              (Format.asprintf " (role %a)" Entity.Role.pp)
-              role)
+           Entity.Login.pp
+           login
+           (CCOption.map_or ~default:"" (Format.asprintf ", role %s") role)
            Caqti_error.pp
            error)
     | _ -> None)
 ;;
 
-let failure ?role label error = { label; role; error }
+let failure ?role ~login label error = { label; login; role; error }
 
 let cause : Caqti_error.t -> Caqti_error.cause option = function
   | `Request_failed e -> Some (Caqti_error.cause (`Request_failed e))

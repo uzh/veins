@@ -112,32 +112,32 @@ type drift =
 
 module type RunnerSig = sig
   val run_all
-    :  ?role:Entity.Role.t
+    :  ?role:_ Entity.Role.t
     -> Entity.Label.t
     -> unit
     -> (unit, Error.t) Lwt_result.t
 
-  val up : ?role:Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
-  val down : ?role:Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
-  val check : ?role:Entity.Role.t -> Entity.Label.t -> unit -> drift list Lwt.t
+  val up : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
+  val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
+  val check : ?role:_ Entity.Role.t -> Entity.Label.t -> unit -> drift list Lwt.t
 
   val status
-    :  ?role:Entity.Role.t
+    :  ?role:_ Entity.Role.t
     -> Entity.Label.t
     -> unit
     -> (Namespace.t * int * int) list Lwt.t
 
   val pending
-    :  ?role:Entity.Role.t
+    :  ?role:_ Entity.Role.t
     -> Entity.Label.t
     -> unit
     -> (Namespace.t * int) list Lwt.t
 end
 
 module Make (Db : Pools_sig.Sig) : RunnerSig = struct
-  (* Migrations run as the role the caller names; the database enforces its
-     rights, so their statements declare no capabilities. *)
-  let unchecked request = Request.create ~needs:[] request
+  (* Migrations run as the role the caller names (the owner by default); the
+     database enforces its rights, so their statements declare no needs. *)
+  let unchecked request = Request.create ~needs:Entity.Need.none request
   let table () = Lazy.force table_name
 
   (* Return migrations targeting [db_label], sorted by written_at ascending. *)
@@ -262,8 +262,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
         (failed "Migration '%s' failed: %s" mig)
   ;;
 
-  let with_ctx ?role db_label f =
-    Db.connection_ctx ?role db_label (fun ctx ->
+  let with_ctx ?(role = Entity.Role.owner) db_label f =
+    Db.connection_ctx ~role db_label (fun ctx ->
       let%lwt () = setup ctx in
       f ctx)
   ;;

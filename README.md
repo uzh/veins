@@ -29,7 +29,7 @@ open Veins
 
 (* The URL is typically read from an environment variable. *)
 let url = Url.create (Sys.getenv "DATABASE_URL")
-let db  = Database.create (Label.create "root") (Database.Main url)
+let db  = Database.create (Label.create "root") url
 
 module Db = Veins_mariadb.Pools.Make (struct
   let database = db
@@ -50,38 +50,44 @@ module Db = Veins.Pools.Make (struct
 end)
 ```
 
-### 2. Declare what statements need
+### 2. Declare roles and what statements need
 
-Every statement is a `Veins.Request.t`: a Caqti request plus the capabilities it needs. Capabilities are defined
-by your application, once, as values.
+A role is a part of your application with a type: the rights it has, as polymorphic variant tags you choose. A
+statement's needs are a lower bound of those tags. Declare each once, with its type:
 
 ```ocaml
-let read = Capability.create "read"
-let write = Capability.create "write"
+let read : [> `Read ] Need.t = Need.v "read"
+let write : [> `Write ] Need.t = Need.v "write"
+
+let query : [ `Read ] Role.t = Role.v "query"
+let command : [ `Read | `Write ] Role.t = Role.v "command"
 
 let find_user =
   {sql| SELECT name FROM users WHERE id = ? |sql}
   |> Caqti_type.(int ->? string)
-  |> Request.create ~needs:[ read ]
+  |> Request.create ~needs:read
 
 let create_user =
   {sql| INSERT INTO users (name) VALUES (?) |sql}
   |> Caqti_type.(string ->. unit)
-  |> Request.create ~needs:[ write ]
+  |> Request.create ~needs:Need.(read & write)
 ```
+
+`Need.none` declares no needs (e.g. `SELECT 1`, or code that hasn't declared them yet). `Role.owner` runs every
+statement.
 
 ### 3. Run them on a context
 
-A context says where statements run: `label_ctx` takes a fresh connection per statement, `connection_ctx` holds one
-connection, `transaction_ctx` holds one connection inside a transaction.
+A context says where statements run and as which role: `label_ctx` takes a fresh connection per statement,
+`connection_ctx` holds one connection, `transaction_ctx` holds one connection inside a transaction.
 
 ```ocaml
 let root = Label.create "root"
 
-let%lwt name = Db.find_opt (Db.label_ctx root) find_user 42
+let%lwt name = Db.find_opt (Db.label_ctx ~role:query root) find_user 42
 
 let%lwt () =
-  Db.transaction_ctx root (fun ctx ->
+  Db.transaction_ctx ~role:command root (fun ctx ->
     Ctx.after_commit ctx (fun () -> Logs.info (fun m -> m "user created"));
     Db.exec ctx create_user "alice")
 ```
@@ -90,31 +96,51 @@ let%lwt () =
 without knowing whether their caller opened one. Hooks registered with `Ctx.after_commit` run after the commit and
 are dropped on rollback.
 
-Errors the database reports raise `Error.Failed` with the label, role and untouched Caqti error; match on
+Errors the database reports raise `Error.Failed` with the label, login, role and untouched Caqti error; match on
 `Error.cause_of_exn exn` (e.g. `` `Unique_violation ``) instead of on messages. Only errors that mean the connection
 is gone drop and reconnect the pool.
 
-### 4. Roles
+### 4. Roles are checked by the compiler
 
-With one URL per role, each role is a database user with a set of capabilities. Veins never picks a role: every
-context names one, and statements needing capabilities the role lacks fail with `Error.Insufficient_capabilities`
-before they are sent. A held connection keeps its role.
+A context carries its role's type, so a statement the role doesn't grant doesn't compile, and functions state the
+rights they need in their signature:
 
 ```ocaml
-let reader = Role.create "reader" ~capabilities:[ read ]
-let writer = Role.create "writer" ~capabilities:[ read; write ]
+let rename ctx name = Db.exec ctx create_user name
+(* val rename : (_, [> `Read | `Write ]) Ctx.t -> string -> unit Lwt.t *)
 
-let db =
-  Database.create (Label.create "app")
-    (Database.Multiple [ reader, Url.create reader_url; writer, Url.create writer_url ])
-
-Db.find_opt (Db.label_ctx ~role:reader (Label.create "app")) find_user 42  (* ok *)
-Db.exec (Db.label_ctx ~role:reader (Label.create "app")) create_user "bob" (* Insufficient_capabilities *)
+rename (Db.label_ctx ~role:query root) "bob"
+(* Error: ... The first variant type does not allow tag(s) `Write *)
 ```
 
-A single user with all rights works too: give every role the same URL, or use a single-URL database
-(`Database.Main`), which has every capability. Naming a role on a `Main` database uses the main pool, or is rejected
-with `~role_policy:Strict`.
+This holds for nested transactions (`with_transaction` keeps the role) and for `query`, `populate` and
+`transaction`, which take `~needs`. Nothing is checked at runtime.
+
+### 5. Logins: one database user per role, or one for all
+
+Each role connects as a `Login`, the database's own URL (`Login.owner`) unless it names another. A database has the
+owner's URL and, optionally, a URL per login; a login without one connects with the owner's URL, on the owner's
+pool:
+
+```ocaml
+let query_login = Login.create "query"
+let command_login = Login.create "command"
+let query : [ `Read ] Role.t = Role.v ~login:query_login "query"
+let command : [ `Read | `Write ] Role.t = Role.v ~login:command_login "command"
+
+(* one user for everything: the types separate the roles *)
+let single = Database.create (Label.create "app") owner_url
+
+(* one user per login: the database enforces each login's grants, too *)
+let separated =
+  Database.create (Label.create "app") owner_url
+    ~logins:[ query_login, Url.create query_url; command_login, Url.create command_url ]
+```
+
+Several roles may share a login; the database then enforces only what the login is granted, and the types the rest.
+A role claiming more than its login is granted passes the compiler, but the database refuses the statement:
+`Error.Permission_denied` (MariaDB errors 1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, recognised by
+the driver packages' dialects) names the label, login, role and declared needs.
 
 ## Migrations
 
@@ -169,9 +195,8 @@ let () = Lwt_main.run
    | Error e -> failwith (Error.show e))
 ```
 
-Each runner call holds one connection. On a database with one URL per role, pass the role that may change the schema,
-e.g. `Runner.run_all ~role:migrator root ()`; migration statements declare no capabilities, the database user's
-rights limit them.
+Each runner call holds one connection, as the database owner unless you pass another role, e.g.
+`Runner.run_all ~role:migrator root ()`; migration statements declare no needs, the login's grants limit them.
 
 ### Drift detection
 
@@ -208,12 +233,12 @@ _NOTE: `initialize` initiates the main database passed via `Pools.Make(Config)`_
 
 ```ocaml
 let analytics =
-  Database.create (Label.create "analytics") (Database.Main (Url.create analytics_url))
+  Database.create (Label.create "analytics") (Url.create analytics_url)
 
 let () =
   Db.Pool.initialize ~additional_pools:[ analytics ] ();
   (* later: *)
-  let%lwt rows = Db.collect (Db.label_ctx (Label.create "analytics")) req () in
+  let%lwt rows = Db.collect (Db.label_ctx ~role:query (Label.create "analytics")) req () in
   ...
 ```
 

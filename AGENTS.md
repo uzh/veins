@@ -74,10 +74,14 @@ Call `Db.Pool.initialize ()` once at startup before any query.
 
 ### Contexts, requests, roles
 
-Statements run on a `Veins.Ctx.t` (`label_ctx`, `connection_ctx`, `transaction_ctx`, `with_transaction`) and are
-`Veins.Request.t` values (Caqti request + needed capabilities). On `Multiple` databases every context names a role,
-and statements are checked against its capabilities before they are sent. The context design is Reynir
-Björnsson's (uzh/z-pool-tool#647); keep the credit in `lib/ctx.mli`, `lib/pools.ml`, README and CHANGELOG.
+Statements run on a `('txn, 'g) Veins.Ctx.t` (`label_ctx`, `connection_ctx`, `transaction_ctx`, `with_transaction`)
+and are `Veins.Request.t` values (Caqti request + its `Need.t`). Every context names a `Role.t`; `'g` is the role's
+closed set of polymorphic variant tags and a request's needs are a lower bound (``[> `Write ]``), so a statement the
+role doesn't grant is a compile error. Nothing is checked at runtime; `test/typing` proves misuse doesn't compile,
+add a case there when adding an entry point that takes `~needs` or a request. Each role connects as a `Login`;
+`Database.create ?logins label owner_url`, logins without a URL share the owner's pool. A database refusing a
+statement the types allowed raises `Error.Permission_denied` (`Dialect.is_permission_error`). The context design is
+Reynir Björnsson's (uzh/z-pool-tool#647); keep the credit in `lib/ctx.mli`, `lib/pools.ml`, README and CHANGELOG.
 
 Never use the driver's `rollback` or caqti's `with_transaction` directly: caqti-driver-mariadb 3.1 leaves
 `autocommit` off after a rollback, `Pools.rollback` restores it (`Dialect.Sig.after_rollback`).
@@ -101,9 +105,10 @@ New migration files call `Migration.register` — no explicit list to maintain.
 
 ### Error handling
 
-Query helpers raise (not `result` returns): `Error.Failed` for what the database or driver reported (label, role,
-untouched Caqti error; match with `Error.cause_of_exn`), `Error.Exn` for errors veins detects itself (unknown label,
-missing role, missing capabilities). Only `Dialect.is_connection_error` errors drop and reconnect a pool.
+Query helpers raise (not `result` returns): `Error.Failed` for what the database or driver reported (label, login,
+role, untouched Caqti error; match with `Error.cause_of_exn`), `Error.Exn` for errors veins detects itself (unknown
+label, failed migration) and for `Permission_denied`. Only `Dialect.is_connection_error` errors drop and reconnect a
+pool.
 
 ## Conventions
 

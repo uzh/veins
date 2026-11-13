@@ -1,0 +1,14 @@
+; Statements a context's role doesn't grant must not compile. check.sh
+; compiles each case in cases/ against the library and expects the type error.
+
+(rule
+ (alias runtest)
+ (package veins)
+ (deps
+  check.sh
+  fixture.ml
+  (:cases
+   (glob_files cases/*.ml))
+  (alias ../../lib/check))
+ (action
+  (run sh %{dep:check.sh} %{workspace_root}/lib/.veins.objs/byte %{cases})))

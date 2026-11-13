@@ -21,21 +21,27 @@ struct
     | Open of caqti_pool
     | Fail of Caqti_error.t
 
-  (* One Caqti pool per label ([Main]) or per label and role ([Multiple]). *)
+  (* One Caqti pool per label for the owner, plus one per login with a URL of
+     its own. Logins without one share the owner's pool ([None]). *)
   module Key = struct
-    type t = Entity.Label.t * string option
+    type t = Entity.Label.t * Entity.Login.t option
 
     let equal (l1, r1) (l2, r2) =
-      Entity.Label.equal l1 l2 && CCOption.equal CCString.equal r1 r2
+      Entity.Label.equal l1 l2 && CCOption.equal Entity.Login.equal r1 r2
     ;;
 
-    let hash (label, role) = Hashtbl.hash (Entity.Label.value label, role)
+    let hash (label, login) =
+      Hashtbl.hash (Entity.Label.value label, CCOption.map Entity.Login.name login)
+    ;;
 
-    let show (label, role) =
-      match role with
+    let show (label, login) =
+      match login with
       | None -> Entity.Label.show label
-      | Some role -> Format.asprintf "%a (role %s)" Entity.Label.pp label role
+      | Some login ->
+        Format.asprintf "%a (login %a)" Entity.Label.pp label Entity.Login.pp login
     ;;
+
+    let login (_, login) = CCOption.value ~default:Entity.Login.owner login
   end
 
   module Pools_tbl = CCHashtbl.Make (Key)
@@ -43,7 +49,6 @@ struct
 
   type entry =
     { key : Key.t
-    ; role : Entity.Role.t option
     ; url : Entity.Url.t
     ; required : bool
     ; connection : connection
@@ -74,57 +79,30 @@ struct
          |> CCString.concat ", "))
   ;;
 
-  (* The pool [role] runs on, and the capabilities it has ([None]: all). *)
-  let resolve ?role label =
-    let label_value = Entity.Label.value label in
+  (* The pool [login] connects with. *)
+  let resolve label login =
     match Labels_tbl.find_opt databases label with
-    | None -> raise_error (Error.Database_not_registered label_value)
+    | None -> raise_error (Error.Database_not_registered (Entity.Label.value label))
     | Some database ->
-      (match Entity.Database.pool database, role with
-       | Entity.Database.Main _, None -> (label, None), None
-       | Entity.Database.Main _, Some role ->
-         (match Entity.Database.role_policy database with
-          | Entity.Database.Fallback -> (label, None), None
-          | Entity.Database.Strict ->
-            raise_error
-              (Error.Role_not_configured
-                 { label = label_value; role = Entity.Role.value role }))
-       | Entity.Database.Multiple _, None -> raise_error (Error.Role_required label_value)
-       | Entity.Database.Multiple _, Some role ->
-         (match Entity.Database.find_role database role with
-          | None ->
-            raise_error
-              (Error.Role_not_configured
-                 { label = label_value; role = Entity.Role.value role })
-          | Some role ->
-            (label, Some (Entity.Role.value role)), Some (Entity.Role.capabilities role)))
+      if Entity.Database.has_login database login then label, Some login else label, None
   ;;
 
-  (* Fails before anything is sent when [needs] exceeds the role's rights. A
-     held connection checks against the rights resolved when it was opened, so
-     it keeps working after its database was dropped. *)
-  let authorize needs ctx =
-    let label = Ctx.label ctx in
-    let role = Ctx.role ctx in
-    let capabilities =
-      match Ctx.held_capabilities ctx with
-      | Some capabilities -> capabilities
-      | None -> snd (resolve ?role label)
-    in
-    match capabilities with
-    | None -> ()
-    | Some capabilities ->
-      let missing = Entity.Capability.Set.diff needs capabilities in
-      if not (Entity.Capability.Set.is_empty missing)
-      then
-        raise_error
-          (Error.Insufficient_capabilities
-             { label = Entity.Label.value label
-             ; role = CCOption.map Entity.Role.value role
-             ; missing =
-                 Entity.Capability.Set.elements missing
-                 |> CCList.map Entity.Capability.name
-             })
+  (* A statement the database refused. [needs] and [role] only describe it,
+     for [Permission_denied]. *)
+  let statement_error ?role ?(needs = []) key error =
+    let label, _ = key in
+    let login = Key.login key in
+    if Config.Dialect.is_permission_error error
+    then
+      raise_error
+        (Error.Permission_denied
+           { label = Entity.Label.value label
+           ; login = Entity.Login.name login
+           ; role
+           ; needs
+           ; message = Caqti_error.show error
+           })
+    else raise (Error.Failed (Error.failure ?role ~login label error))
   ;;
 
   let session_setup_requests =
@@ -164,8 +142,8 @@ struct
     Caqti_lwt_unix.connect_pool ~pool_config ~post_connect (Entity.Url.to_uri url)
   ;;
 
-  let failed { key = label, _; role; _ } error =
-    Error.Failed (Error.failure ?role label error)
+  let failed { key; _ } error =
+    Error.Failed (Error.failure ~login:(Key.login key) (fst key) error)
   ;;
 
   let connect_base ?(retries = 2) entry =
@@ -221,7 +199,7 @@ struct
 
   (* Only a broken connection invalidates the pool; a constraint violation or
      a syntax error leaves it alone. *)
-  let raise_caqti_error key role input =
+  let raise_caqti_error ?role ?needs key input =
     match%lwt input with
     | Ok value -> Lwt.return value
     | Error error ->
@@ -229,13 +207,13 @@ struct
       then (
         disconnect_entry ~error key;
         log_pools ());
-      raise (Error.Failed (Error.failure ?role (fst key) error))
+      statement_error ?role ?needs key error
   ;;
 
-  let raise_on_error label role input =
+  let raise_on_error ?role ?needs key input =
     match%lwt input with
     | Ok value -> Lwt.return value
-    | Error error -> raise (Error.Failed (Error.failure ?role label error))
+    | Error error -> statement_error ?role ?needs key error
   ;;
 
   let rec fetch_key ?(retries = 2) key =
@@ -266,16 +244,11 @@ struct
   module Pool = struct
     let entries ?(required = false) database =
       let label = Entity.Database.label database in
-      let entry key role url =
-        { key; role; url; required; connection = Close; n_retries = 0 }
-      in
-      match Entity.Database.pool database with
-      | Entity.Database.Main url -> [ entry (label, None) None url ]
-      | Entity.Database.Multiple roles ->
-        CCList.map
-          (fun (role, url) ->
-             entry (label, Some (Entity.Role.value role)) (Some role) url)
-          roles
+      let entry key url = { key; url; required; connection = Close; n_retries = 0 } in
+      entry (label, None) (Entity.Database.owner database)
+      :: CCList.map
+           (fun login -> entry (label, Some login) (Entity.Database.url database login))
+           (Entity.Database.logins database)
     ;;
 
     let register ?required database =
@@ -342,12 +315,14 @@ struct
              (CCList.mem ~eq:Entity.Label.equal (Entity.Database.label database) exclude))
     ;;
 
-    let fetch ?retries ?role label = fetch_key ?retries (fst (resolve ?role label))
+    let fetch ?retries ?(login = Entity.Login.owner) label =
+      fetch_key ?retries (resolve label login)
+    ;;
 
-    let connect ?role label =
-      match resolve ?role label with
+    let connect ?(login = Entity.Login.owner) label =
+      match resolve label login with
       | exception Error.Exn error -> Error error
-      | key, _ ->
+      | key ->
         let rec connect entry =
           match entry.connection with
           | Fail error -> Error (Error.Connection_failed (Caqti_error.show error))
@@ -365,9 +340,9 @@ struct
          | Some entry -> connect entry)
     ;;
 
-    let disconnect ?error ?role label =
-      match role with
-      | Some role -> disconnect_entry ?error (fst (resolve ~role label))
+    let disconnect ?error ?login label =
+      match login with
+      | Some login -> disconnect_entry ?error (resolve label login)
       | None ->
         Pools_tbl.keys_list pools
         |> CCList.filter (fun (pool_label, _) -> Entity.Label.equal pool_label label)
@@ -375,28 +350,38 @@ struct
     ;;
   end
 
+  let role_name ctx = Entity.Role.name (Ctx.role ctx)
+
+  (* Names the login in errors of a held connection. It must not raise: the
+     connection stays usable after its database was dropped. *)
+  let held_key ctx =
+    let label = Ctx.label ctx in
+    let login = Entity.Role.login (Ctx.role ctx) in
+    try resolve label login with
+    | Error.Exn (Error.Database_not_registered _) ->
+      label, if Entity.Login.is_owner login then None else Some login
+  ;;
+
   (* Run [f] on a connection of [ctx]: the held one, serialised by its mutex,
      or a fresh one from the pool. *)
-  let run ctx f =
-    let label = Ctx.label ctx in
-    let role = Ctx.role ctx in
+  let run ~needs ctx f =
+    let role = role_name ctx in
+    let needs = Entity.Need.names needs in
     match Ctx.connection ctx, Ctx.mutex ctx with
     | Some connection, Some mutex ->
-      Lwt_mutex.with_lock mutex (fun () -> f connection |> raise_on_error label role)
+      Lwt_mutex.with_lock mutex (fun () ->
+        f connection |> raise_on_error ~role ~needs (held_key ctx))
     | _ ->
-      let key, _ = resolve ?role label in
+      let key = resolve (Ctx.label ctx) (Entity.Role.login (Ctx.role ctx)) in
       let%lwt pool = fetch_key key in
-      Caqti_lwt_unix.Pool.use f pool |> raise_caqti_error key role
+      Caqti_lwt_unix.Pool.use f pool |> raise_caqti_error ~role ~needs key
   ;;
 
-  let query ~needs ctx f =
-    authorize (Entity.Capability.Set.of_list needs) ctx;
-    run ctx f
-  ;;
+  let query ~needs ctx f = run ~needs ctx f
 
   let request ctx request f =
-    authorize (Request.needs request) ctx;
-    run ctx (fun connection -> f connection (Request.caqti request))
+    run ~needs:(Request.needs request) ctx (fun connection ->
+      f connection (Request.caqti request))
   ;;
 
   let exec ctx req input =
@@ -461,19 +446,18 @@ struct
   ;;
 
   let transaction_iter ~needs ctx fns = transaction ~needs ctx (exec_each fns)
-  let label_ctx ?tags ?role label = Ctx.label_ctx ?tags ?role label
+  let label_ctx ?tags ~role label = Ctx.label_ctx ?tags ~role label
 
   (* Borrow one connection for [f]. Connection errors, also those raised from
      within [f], drop the pool so the next statement reconnects. *)
-  let with_pool_connection ?role label f =
-    let key, capabilities = resolve ?role label in
+  let with_pool_connection ~role label f =
+    let key = resolve label (Entity.Role.login role) in
+    let role = Entity.Role.name role in
     let%lwt pool = fetch_key key in
     try%lwt
-      match%lwt
-        Caqti_lwt_unix.Pool.use (fun c -> f ~capabilities c |> Lwt_result.ok) pool
-      with
+      match%lwt Caqti_lwt_unix.Pool.use (fun c -> f c |> Lwt_result.ok) pool with
       | Ok value -> Lwt.return value
-      | Error error -> raise_caqti_error key role (Lwt.return (Error error))
+      | Error error -> raise_caqti_error ~role key (Lwt.return (Error error))
     with
     | Error.Failed { Error.error; _ } as exn when Config.Dialect.is_connection_error error
       ->
@@ -482,14 +466,14 @@ struct
       Lwt.reraise exn
   ;;
 
-  let connection_ctx ?tags ?role label f =
-    with_pool_connection ?role label (fun ~capabilities connection ->
-      f (Ctx.connection_ctx ?tags ?role ~capabilities label connection))
+  let connection_ctx ?tags ~role label f =
+    with_pool_connection ~role label (fun connection ->
+      f (Ctx.connection_ctx ?tags ~role label connection))
   ;;
 
-  let in_transaction (ctx : Ctx.transaction Ctx.t) f =
-    let label = Ctx.label ctx in
-    let role = Ctx.role ctx in
+  let in_transaction (type g) (ctx : (Ctx.transaction, g) Ctx.t) f =
+    let role = role_name ctx in
+    let key = held_key ctx in
     let connection =
       CCOption.get_exn_or "transaction context without connection" (Ctx.connection ctx)
     in
@@ -507,10 +491,10 @@ struct
       in
       Lwt.reraise exn
     in
-    let%lwt () = locked Connection.start |> raise_on_error label role in
+    let%lwt () = locked Connection.start |> raise_on_error ~role key in
     let%lwt result = Lwt.catch (fun () -> f ctx) rollback in
     let%lwt () =
-      Lwt.catch (fun () -> locked Connection.commit |> raise_on_error label role) rollback
+      Lwt.catch (fun () -> locked Connection.commit |> raise_on_error ~role key) rollback
     in
     Ctx.After_commit.run (Ctx.on_commit ctx) ~on_error:(fun exn ->
       Log.err (fun m ->
@@ -518,15 +502,15 @@ struct
     Lwt.return result
   ;;
 
-  let transaction_ctx ?tags ?role label f =
-    with_pool_connection ?role label (fun ~capabilities connection ->
-      in_transaction (Ctx.transaction_ctx ?tags ?role ~capabilities label connection) f)
+  let transaction_ctx ?tags ~role label f =
+    with_pool_connection ~role label (fun connection ->
+      in_transaction (Ctx.transaction_ctx ?tags ~role label connection) f)
   ;;
 
   let with_transaction
-        (type maybe_txn a)
-        (ctx : maybe_txn Ctx.t)
-        (f : Ctx.transaction Ctx.t -> a Lwt.t)
+        (type maybe_txn g a)
+        (ctx : (maybe_txn, g) Ctx.t)
+        (f : (Ctx.transaction, g) Ctx.t -> a Lwt.t)
     : a Lwt.t
     =
     let tags = Ctx.tags ctx in
@@ -537,19 +521,9 @@ struct
     | Ctx.No ->
       (match Ctx.connection ctx with
        | Some connection ->
-         let capabilities =
-           Ctx.held_capabilities ctx
-           |> CCOption.get_exn_or "held connection without rights"
-         in
          in_transaction
-           (Ctx.transaction_ctx
-              ~tags
-              ?role
-              ?mutex:(Ctx.mutex ctx)
-              ~capabilities
-              label
-              connection)
+           (Ctx.transaction_ctx ~tags ~role ?mutex:(Ctx.mutex ctx) label connection)
            f
-       | None -> transaction_ctx ~tags ?role label f)
+       | None -> transaction_ctx ~tags ~role label f)
   ;;
 end

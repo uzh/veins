@@ -7,17 +7,18 @@
     module Db = Veins_mariadb.Pools.Make (struct
         let database =
           let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
-          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
+          Veins.Database.create (Veins.Label.create "root") url
         ;;
       end)
 
-    (* 2. Declare what statements need *)
-    let read = Veins.Capability.create "read"
+    (* 2. Declare what statements need, and what roles grant *)
+    let read : [> `Read ] Veins.Need.t = Veins.Need.v "read"
+    let query : [ `Read ] Veins.Role.t = Veins.Role.v "query"
 
     let find_name =
       {sql| SELECT name FROM users WHERE id = ? |sql}
       |> Caqti_type.(int ->? string)
-      |> Veins.Request.create ~needs:[ read ]
+      |> Veins.Request.create ~needs:read
     ;;
 
     (* 3. Run them on a context *)
@@ -25,17 +26,25 @@
       Db.Pool.initialize ();
       let root = Veins.Label.create "root" in
       Lwt_main.run
-        (let%lwt name = Db.find_opt (Db.label_ctx root) find_name 1 in
-         Db.transaction_ctx root (fun ctx ->
+        (let%lwt name = Db.find_opt (Db.label_ctx ~role:query root) find_name 1 in
+         Db.transaction_ctx ~role:query root (fun ctx ->
            Veins.Ctx.after_commit ctx (fun () -> print_endline "committed");
            Db.find_opt ctx find_name 2))
     ;;
     ]}
 
-    {b Roles.} With one URL per role ([Database.Multiple]), each role is a
-    database user with a set of {!Capability} values. Every context names its
-    role and every statement is checked against it before it is sent. A
-    single-URL database ([Database.Main]) has every capability.
+    {b Roles.} A role ({!Role}) is a part of the application with a type:
+    the tags it grants, e.g. [[ `Read ]]. A statement's {!Need} is a lower
+    bound of tags, e.g. [[> `Write ]]. Every context carries its role's type,
+    so running a statement on a context whose role doesn't grant its needs
+    is a compile error, and a function's signature shows the rights it
+    needs.
+
+    Each role connects as a {!Login}. A database has the owner's URL and,
+    optionally, one URL per login; logins without one connect as the owner.
+    The database then enforces each login's grants, and refuses a statement
+    the types allowed with [Error.Permission_denied]; with a single URL only
+    the types separate the roles.
 
     The context design ({!Ctx}) comes from Reynir Björnsson's database
     refactoring of the pool tool (uzh/z-pool-tool#647). *)
@@ -43,12 +52,15 @@
 (** Opaque database label used as the key for pool lookups. *)
 module Label = Entity.Label
 
-(** Role name for a database user (e.g. ["readonly"], ["write"]).
-    Distinct from {!Label} to prevent accidental mixing. *)
-module Role = Entity.Role
+(** A database user a role connects as. *)
+module Login = Entity.Login
 
-(** A right a statement needs, defined by the application or library. *)
-module Capability = Entity.Capability
+(** The rights a statement needs, as a type. *)
+module Need = Entity.Need
+
+(** A part of the application, with the rights it has as a type, and the
+    login it connects as. *)
+module Role = Entity.Role
 
 (** Database connection URL.  Opaque — the raw connection string is not
     accessible after construction.  Pass the value to
@@ -77,7 +89,7 @@ module Error = Error
 (** Database contexts: a label, a held connection, or a transaction. *)
 module Ctx = Ctx
 
-(** Caqti requests with the capabilities they need. *)
+(** Caqti requests with the rights they need. *)
 module Request = Request
 
 (** SQL dialect implementations (MariaDB / PostgreSQL DDL differences). *)

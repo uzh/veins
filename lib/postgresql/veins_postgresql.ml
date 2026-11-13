@@ -5,9 +5,7 @@
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct
-        let database =
-          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
-        ;;
+        let database = Veins.Database.create (Veins.Label.create "root") url
       end)
     ]}
 
@@ -39,6 +37,18 @@ module Dialect : Veins.Dialect.Sig = struct
        | _ -> false)
     | error -> is_connection_error error
   ;;
+
+  (* 42501 insufficient_privilege *)
+  let is_permission_error : Caqti_error.t -> bool = function
+    | `Request_failed { Caqti_error.msg; _ }
+    | `Response_failed { Caqti_error.msg; _ }
+    | `Response_rejected { Caqti_error.msg; _ } ->
+      (match[@warning "-4"] msg with
+       | Caqti_driver_postgresql.Result_error_msg { sqlstate; _ } ->
+         CCString.equal sqlstate "42501"
+       | _ -> false)
+    | (_ : Caqti_error.t) -> false
+  ;;
 end
 
 (** Connection-pool functor with the PostgreSQL dialect pre-configured.
@@ -49,9 +59,7 @@ end
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct
-        let database =
-          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
-        ;;
+        let database = Veins.Database.create (Veins.Label.create "root") url
       end)
     ]}
 

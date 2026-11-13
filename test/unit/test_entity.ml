@@ -43,11 +43,11 @@ let test_dynparam () =
   ignore (t, v)
 ;;
 
-let read = Capability.create "read"
-let write = Capability.create "write"
+let read : [> `Read ] Need.t = Need.v "read"
+let write : [> `Write ] Need.t = Need.v "write"
 let url = Url.create "mariadb://user@host/db"
-let reader = Role.create "reader" ~capabilities:[ read ]
-let writer = Role.create "writer" ~capabilities:[ read; write ]
+let query_url = Url.create "mariadb://query@host/db"
+let query_login = Login.create "query"
 
 let raises_invalid_argument f =
   match f () with
@@ -55,87 +55,76 @@ let raises_invalid_argument f =
   | exception Invalid_argument _ -> ()
 ;;
 
-let test_capability_names_are_unique () =
-  Alcotest.(check string) "name" "read" (Capability.name read);
-  raises_invalid_argument (fun () -> Capability.create "read")
+let test_login () =
+  Alcotest.(check string) "name" "query" (Login.name query_login);
+  Alcotest.(check bool) "owner" true (Login.is_owner Login.owner);
+  Alcotest.(check bool) "not the owner" false (Login.is_owner query_login);
+  raises_invalid_argument (fun () -> Login.create "owner")
 ;;
 
-let test_capability_sets () =
-  let open Capability.Set in
-  Alcotest.(check bool)
-    "subset"
-    true
-    (subset (of_list [ read ]) (Role.capabilities writer));
-  Alcotest.(check bool)
-    "not subset"
-    false
-    (subset (of_list [ write ]) (Role.capabilities reader));
+let test_need_names () =
+  Alcotest.(check (list string)) "none" [] (Need.names Need.none);
   Alcotest.(check (list string))
-    "missing"
-    [ "write" ]
-    (diff (of_list [ read; write ]) (Role.capabilities reader)
-     |> elements
-     |> CCList.map Capability.name)
+    "combined, sorted, without duplicates"
+    [ "read"; "write" ]
+    (Need.names Need.(write & read & read))
 ;;
 
-let test_role_equality_by_name () =
-  Alcotest.(check bool)
-    "same name"
-    true
-    (Role.equal reader (Role.create "reader" ~capabilities:[ read; write ]))
+let test_role () =
+  let query : [ `Read ] Role.t = Role.v ~login:query_login "query" in
+  let local : [ `Read ] Role.t = Role.v "local" in
+  Alcotest.(check string) "name" "query" (Role.name query);
+  Alcotest.(check bool) "login" true (Login.equal query_login (Role.login query));
+  Alcotest.(check bool) "default login" true (Login.is_owner (Role.login local));
+  Alcotest.(check bool) "owner" true (Login.is_owner (Role.login Role.owner))
 ;;
 
-let test_database_roles () =
-  let db =
-    Database.create (Label.create "db") (Database.Multiple [ reader, url; writer, url ])
+let test_database_logins () =
+  let single = Database.create (Label.create "db") url in
+  let separated =
+    Database.create ~logins:[ query_login, query_url ] (Label.create "db") url
   in
-  Alcotest.(check (list string))
-    "roles"
-    [ "reader"; "writer" ]
-    (Database.roles db |> CCList.map Role.value);
-  (* the database's role wins: a role named like it, with other capabilities *)
-  let configured = Database.find_role db (Role.create "reader") |> Option.get in
+  Alcotest.(check int) "single: no logins" 0 (CCList.length (Database.logins single));
   Alcotest.(check bool)
-    "configured capabilities"
+    "single: a login connects as the owner"
     true
-    (Capability.Set.mem read (Role.capabilities configured));
+    (Url.equal url (Database.url single query_login));
   Alcotest.(check bool)
-    "unknown role"
+    "separated: has the login"
     true
-    (Option.is_none (Database.find_role db (Role.create "admin")));
-  raises_invalid_argument (fun () -> Database.url db);
-  raises_invalid_argument (fun () -> Database.url ~role:(Role.create "admin") db);
-  Alcotest.(check bool) "role url" true (Url.equal url (Database.url ~role:writer db))
+    (Database.has_login separated query_login);
+  Alcotest.(check bool)
+    "separated: the login's URL"
+    true
+    (Url.equal query_url (Database.url separated query_login));
+  Alcotest.(check bool)
+    "separated: the owner's URL"
+    true
+    (Url.equal url (Database.url separated Login.owner));
+  Alcotest.(check bool)
+    "separated: another login connects as the owner"
+    true
+    (Url.equal url (Database.url separated (Login.create "command")))
 ;;
 
 let test_database_create_validates () =
   raises_invalid_argument (fun () ->
-    Database.create (Label.create "db") (Database.Multiple [ reader, url; reader, url ]));
+    Database.create
+      ~logins:[ query_login, query_url; query_login, url ]
+      (Label.create "db")
+      url);
   raises_invalid_argument (fun () ->
-    Database.create (Label.create "db") (Database.Multiple []))
-;;
-
-let test_main_role_policy () =
-  let fallback = Database.create (Label.create "db") (Database.Main url) in
-  let strict =
-    Database.create ~role_policy:Database.Strict (Label.create "db") (Database.Main url)
-  in
-  Alcotest.(check bool)
-    "fallback"
-    true
-    (Url.equal url (Database.url ~role:reader fallback));
-  Alcotest.(check bool) "no role" true (Url.equal url (Database.url strict));
-  raises_invalid_argument (fun () -> Database.url ~role:reader strict)
+    Database.create ~logins:[ Login.owner, query_url ] (Label.create "db") url)
 ;;
 
 let test_request_needs () =
   let request =
-    Caqti_type.(unit ->! int) "SELECT 1" |> Request.create ~needs:[ read; read ]
+    Caqti_type.(unit ->! int) "SELECT 1" |> Request.create ~needs:Need.(read & write)
   in
   Alcotest.(check (list string))
     "needs"
-    [ "read" ]
-    (Request.needs request |> Capability.Set.elements |> CCList.map Capability.name)
+    [ "read"; "write" ]
+    (Request.needs request |> Need.names)
 ;;
 
 let () =
@@ -148,18 +137,15 @@ let () =
         ] )
     ; "status", [ Alcotest.test_case "roundtrip" `Quick test_status_roundtrip ]
     ; "dynparam", [ Alcotest.test_case "create" `Quick test_dynparam ]
-    ; ( "capability"
-      , [ Alcotest.test_case "names are unique" `Quick test_capability_names_are_unique
-        ; Alcotest.test_case "sets" `Quick test_capability_sets
-        ] )
-    ; "role", [ Alcotest.test_case "equal by name" `Quick test_role_equality_by_name ]
+    ; "login", [ Alcotest.test_case "owner is reserved" `Quick test_login ]
+    ; "need", [ Alcotest.test_case "names" `Quick test_need_names ]
+    ; "role", [ Alcotest.test_case "login" `Quick test_role ]
     ; ( "database"
-      , [ Alcotest.test_case "roles" `Quick test_database_roles
+      , [ Alcotest.test_case "logins" `Quick test_database_logins
         ; Alcotest.test_case
-            "create validates roles"
+            "create validates logins"
             `Quick
             test_database_create_validates
-        ; Alcotest.test_case "main role policy" `Quick test_main_role_policy
         ] )
     ; "request", [ Alcotest.test_case "needs" `Quick test_request_needs ]
     ]

@@ -13,66 +13,111 @@ module Label : sig
   val show : t -> string
 end
 
-(** A right a statement needs, defined by the application or library, e.g.
-    [Capability.create "billing_write"].
+(** A database user a role connects as, e.g. [Login.create "query"].
 
-    Capabilities are values: create each one once, at module level, and refer
-    to it by its OCaml name, so a typo is a compile error. The name only shows
-    up in logs and errors. Names are unique per process: creating a second
-    capability with the same name raises [Invalid_argument], so two libraries
-    can't silently share one.
+    A database has one URL of its own, the {!owner}'s, plus an optional URL
+    per login ({!Database.create}). A login without a URL of its own connects
+    with the owner's, so a database with a single user for everything needs no
+    configuration beyond that URL.
 
-    @canonical Veins.Capability *)
-module Capability : sig
+    @canonical Veins.Login *)
+module Login : sig
   type t
 
-  (** Raises [Invalid_argument] if a capability named [name] already exists. *)
+  (** The database's own URL. Roles connect as the owner unless they name
+      another login. *)
+  val owner : t
+
+  (** Raises [Invalid_argument] for ["owner"], see {!owner}. *)
   val create : string -> t
 
   val name : t -> string
+  val is_owner : t -> bool
   val equal : t -> t -> bool
   val compare : t -> t -> int
+  val hash : t -> int
   val pp : Format.formatter -> t -> unit
   val show : t -> string
-
-  module Set : sig
-    type elt = t
-    type t
-
-    val empty : t
-    val of_list : elt list -> t
-    val elements : t -> elt list
-    val mem : elt -> t -> bool
-    val union : t -> t -> t
-    val diff : t -> t -> t
-    val subset : t -> t -> bool
-    val is_empty : t -> bool
-    val equal : t -> t -> bool
-    val pp : Format.formatter -> t -> unit
-  end
 end
 
-(** A database user and the capabilities it has been granted, e.g.
-    [Role.create "reader" ~capabilities:[ read ]].
+(** The rights a statement needs, as a type.
 
-    Roles exist for privilege separation: every role of a database connects
-    to the same server and data, as a different user. Veins never picks a role
-    by itself; a context names its role, and every statement is checked
-    against that role's capabilities before it is sent.
+    The type parameter is a lower bound of polymorphic variant tags that the
+    application chooses, e.g. [`Read], [`Write], [`Ddl]. Declare each need
+    once, with its type:
 
-    Deliberately separate from {!Label} so the two cannot be accidentally
-    swapped. Roles are compared by name.
+    {[
+    let read : [> `Read ] Veins.Need.t = Veins.Need.v "read"
+    let write : [> `Write ] Veins.Need.t = Veins.Need.v "write"
+    ]}
+
+    A statement needing both has [Need.(read & write)], of type
+    [[> `Read | `Write ] Need.t]. A statement can only run on a context whose
+    role has every tag ({!Role}), which the compiler checks. The names show up
+    in errors only.
+
+    @canonical Veins.Need *)
+module Need : sig
+  type +'g t
+
+  (** [v name] is a need named [name]. Its type is whatever the declaration
+      says, so declare each need once, with a type annotation. *)
+  val v : string -> 'g t
+
+  (** Needs nothing: the statement runs on every context. For statements
+      that touch no data (e.g. [SELECT 1]) and for code that hasn't declared
+      its needs yet. *)
+  val none : 'g t
+
+  (** Both needs. *)
+  val ( & ) : 'g t -> 'g t -> 'g t
+
+  val names : _ t -> string list
+  val pp : Format.formatter -> _ t -> unit
+end
+
+(** A role: what a part of the application may do, and the {!Login} it
+    connects as.
+
+    The type parameter is the closed set of tags the role grants. Declare
+    each role once, with its type:
+
+    {[
+    let query : [ `Read ] Veins.Role.t =
+      Veins.Role.v ~login:(Veins.Login.create "query") "query"
+    ;;
+
+    let command : [ `Read | `Write ] Veins.Role.t =
+      Veins.Role.v ~login:(Veins.Login.create "command") "command"
+    ;;
+    ]}
+
+    Contexts carry their role's type ({!Ctx.t}), so a statement needing
+    [`Write] on a [query] context is a compile error. Several roles may share
+    a login: the database then enforces only what the login is granted, and
+    the types the rest.
+
+    The declaration is a claim the database has to back: if a login lacks a
+    grant its roles claim, the statement fails with
+    [Error.Permission_denied].
 
     @canonical Veins.Role *)
 module Role : sig
-  type t
+  type 'g t
 
-  val create : ?capabilities:Capability.t list -> string -> t
-  val value : t -> string
-  val capabilities : t -> Capability.Set.t
-  val equal : t -> t -> bool
-  val pp : Format.formatter -> t -> unit
-  val show : t -> string
+  (** [v ?login name] is a role named [name], connecting as [login] (default
+      {!Login.owner}). Its type is whatever the declaration says. *)
+  val v : ?login:Login.t -> string -> 'g t
+
+  (** The database owner: connects with the database's own URL and accepts
+      every statement. For migrations, tests and code that doesn't separate
+      rights. *)
+  val owner : 'g t
+
+  val name : _ t -> string
+  val login : _ t -> Login.t
+  val pp : Format.formatter -> _ t -> unit
+  val show : _ t -> string
 end
 
 (** @canonical Veins.Url *)
@@ -106,53 +151,32 @@ end
 
 (** @canonical Veins.Database *)
 module Database : sig
-  type pool =
-    | Main of Url.t (** One URL, one database user with every capability. *)
-    | Multiple of (Role.t * Url.t) list
-    (** One URL (and database user) per role. A single user with all rights
-        works too: give every role the same URL. *)
-
-  (** What a context that names a role does on a [Main] database:
-      [Fallback] (the default) uses the main pool, so code written for roles
-      runs unchanged on a single-URL setup; [Strict] rejects it with
-      [Error.Role_not_configured]. *)
-  type role_policy =
-    | Fallback
-    | Strict
-
   type t =
     { label : Label.t
     ; status : Status.t
-    ; pool : pool
-    ; role_policy : role_policy
+    ; owner : Url.t (** The database's own URL, see {!Login.owner}. *)
+    ; logins : (Login.t * Url.t) list (** URLs of the other logins. *)
     }
 
-  (** [create label pool] builds a database entry.
+  (** [create ?logins label owner_url] builds a database entry. Logins
+      missing from [logins] connect with [owner_url].
 
-      For [Multiple roles], role names must be unique and the list non-empty;
-      otherwise raises [Invalid_argument]. *)
-  val create : ?status:Status.t -> ?role_policy:role_policy -> Label.t -> pool -> t
+      Raises [Invalid_argument] for a duplicate login or {!Login.owner} in
+      [logins]. *)
+  val create : ?status:Status.t -> ?logins:(Login.t * Url.t) list -> Label.t -> Url.t -> t
 
   val label : t -> Label.t
   val status : t -> Status.t
-  val pool : t -> pool
-  val role_policy : t -> role_policy
+  val owner : t -> Url.t
 
-  (** Roles of a [Multiple] database, [[]] for [Main]. *)
-  val roles : t -> Role.t list
+  (** The logins with a URL of their own. *)
+  val logins : t -> Login.t list
 
-  (** [find_role t role] is the role of [t] named like [role], with the
-      capabilities [t] was configured with. *)
-  val find_role : t -> Role.t -> Role.t option
+  (** [true] if the login has a URL of its own. *)
+  val has_login : t -> Login.t -> bool
 
-  (** [url t] returns the connection URL for [t].
-
-      - [Main]: the URL; with [~role], only under the [Fallback] policy.
-      - [Multiple]: the URL of [~role].
-
-      Raises [Invalid_argument] if [~role] is missing for [Multiple], unknown,
-      or given for a [Strict] [Main] database. *)
-  val url : ?role:Role.t -> t -> Url.t
+  (** The URL [login] connects with: its own, or the owner's. *)
+  val url : t -> Login.t -> Url.t
 end
 
 (** @canonical Veins.Dynparam *)

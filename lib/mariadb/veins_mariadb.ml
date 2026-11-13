@@ -5,9 +5,7 @@
 
     {[
     module Db = Veins_mariadb.Pools.Make (struct
-        let database =
-          Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
-        ;;
+        let database = Veins.Database.create (Veins.Label.create "root") url
       end)
     ]}
 
@@ -33,6 +31,18 @@ module Dialect : Veins.Dialect.Sig = struct
        | Caqti_driver_mariadb.Error_msg { errno; _ } -> is_connection_errno errno
        | _ -> false)
     | error -> is_connection_error error
+  ;;
+
+  (* 1044 database access denied, 1142 table, 1143 column, 1227 needs a
+     privilege (e.g. SUPER), 1370 routine. *)
+  let is_permission_errno errno = CCList.mem errno [ 1044; 1142; 1143; 1227; 1370 ]
+
+  let is_permission_error : Caqti_error.t -> bool = function
+    | `Request_failed { Caqti_error.msg; _ } | `Response_failed { Caqti_error.msg; _ } ->
+      (match[@warning "-4"] msg with
+       | Caqti_driver_mariadb.Error_msg { errno; _ } -> is_permission_errno errno
+       | _ -> false)
+    | (_ : Caqti_error.t) -> false
   ;;
 end
 

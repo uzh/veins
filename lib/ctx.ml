@@ -15,87 +15,79 @@ end
 type no_transaction = [ `no_transaction ]
 type transaction = [ `transaction ]
 
-type !_ t =
+type (!_, 'g) t =
   | Label :
       { label : Entity.Label.t
-      ; role : Entity.Role.t option
+      ; role : 'g Entity.Role.t
       ; tags : Logs.Tag.set
       }
-      -> no_transaction t
+      -> (no_transaction, 'g) t
   | Connection :
       { connection : Caqti_lwt.connection
       ; label : Entity.Label.t
-      ; role : Entity.Role.t option
+      ; role : 'g Entity.Role.t
       ; tags : Logs.Tag.set
       ; mutex : Lwt_mutex.t
-      ; capabilities : Entity.Capability.Set.t option
       }
-      -> no_transaction t
+      -> (no_transaction, 'g) t
   | Transaction :
       { connection : Caqti_lwt.connection
       ; label : Entity.Label.t
-      ; role : Entity.Role.t option
+      ; role : 'g Entity.Role.t
       ; tags : Logs.Tag.set
       ; mutex : Lwt_mutex.t
-      ; capabilities : Entity.Capability.Set.t option
       ; on_commit : After_commit.t
       }
-      -> transaction t
+      -> (transaction, 'g) t
 
 type _ txn =
   | Yes : transaction txn
   | No : no_transaction txn
 
-type any = Any : 'maybe_txn t -> any [@@ocaml.unboxed]
+type 'g any = Any : ('maybe_txn, 'g) t -> 'g any [@@ocaml.unboxed]
 
-let txn (type maybe_txn) : maybe_txn t -> maybe_txn txn = function
+let txn (type maybe_txn g) : (maybe_txn, g) t -> maybe_txn txn = function
   | Label _ -> No
   | Connection _ -> No
   | Transaction _ -> Yes
 ;;
 
-let is_transaction (type maybe_txn) (ctx : maybe_txn t) =
+let is_transaction (type maybe_txn g) (ctx : (maybe_txn, g) t) =
   match txn ctx with
   | Yes -> true
   | No -> false
 ;;
 
-let label (type maybe_txn) : maybe_txn t -> Entity.Label.t = function
+let label (type maybe_txn g) : (maybe_txn, g) t -> Entity.Label.t = function
   | Label { label; _ } | Connection { label; _ } | Transaction { label; _ } -> label
 ;;
 
-let role (type maybe_txn) : maybe_txn t -> Entity.Role.t option = function
+let role (type maybe_txn g) : (maybe_txn, g) t -> g Entity.Role.t = function
   | Label { role; _ } | Connection { role; _ } | Transaction { role; _ } -> role
 ;;
 
-let tags (type maybe_txn) : maybe_txn t -> Logs.Tag.set = function
+let tags (type maybe_txn g) : (maybe_txn, g) t -> Logs.Tag.set = function
   | Label { tags; _ } | Connection { tags; _ } | Transaction { tags; _ } -> tags
 ;;
 
-let mutex (type maybe_txn) : maybe_txn t -> Lwt_mutex.t option = function
+let mutex (type maybe_txn g) : (maybe_txn, g) t -> Lwt_mutex.t option = function
   | Label _ -> None
   | Connection { mutex; _ } | Transaction { mutex; _ } -> Some mutex
 ;;
 
-let connection (type maybe_txn) : maybe_txn t -> Caqti_lwt.connection option = function
+let connection (type maybe_txn g) : (maybe_txn, g) t -> Caqti_lwt.connection option
+  = function
   | Label _ -> None
   | Connection { connection; _ } | Transaction { connection; _ } -> Some connection
 ;;
 
-let held_capabilities (type maybe_txn)
-  : maybe_txn t -> Entity.Capability.Set.t option option
-  = function
-  | Label _ -> None
-  | Connection { capabilities; _ } | Transaction { capabilities; _ } -> Some capabilities
-;;
-
-let after_commit (type maybe_txn) (ctx : maybe_txn t) f =
+let after_commit (type maybe_txn g) (ctx : (maybe_txn, g) t) f =
   match ctx with
   | Transaction { on_commit; _ } -> After_commit.add on_commit f
   | Label _ | Connection _ -> f ()
 ;;
 
-let on_commit (Transaction { on_commit; _ } : transaction t) = on_commit
+let on_commit (type g) (Transaction { on_commit; _ } : (transaction, g) t) = on_commit
 
 let label_tag : Entity.Label.t Logs.Tag.def =
   Logs.Tag.def "database_label" ~doc:"Database label" Entity.Label.pp
@@ -105,34 +97,20 @@ let make_tags label tags =
   CCOption.value ~default:Logs.Tag.empty tags |> Logs.Tag.add label_tag label
 ;;
 
-let label_ctx ?tags ?role label = Label { label; role; tags = make_tags label tags }
+let label_ctx ?tags ~role label = Label { label; role; tags = make_tags label tags }
 
-let connection_ctx ?tags ?role ~capabilities label connection =
+let connection_ctx ?tags ~role label connection =
   Connection
-    { connection
-    ; label
-    ; role
-    ; tags = make_tags label tags
-    ; mutex = Lwt_mutex.create ()
-    ; capabilities
-    }
+    { connection; label; role; tags = make_tags label tags; mutex = Lwt_mutex.create () }
 ;;
 
-let transaction_ctx
-      ?tags
-      ?role
-      ?(mutex = Lwt_mutex.create ())
-      ~capabilities
-      label
-      connection
-  =
+let transaction_ctx ?tags ~role ?(mutex = Lwt_mutex.create ()) label connection =
   Transaction
     { connection
     ; label
     ; role
     ; tags = make_tags label tags
     ; mutex
-    ; capabilities
     ; on_commit = After_commit.create ()
     }
 ;;
