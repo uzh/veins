@@ -8,6 +8,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # a hanging test otherwise holds the runner for GitHub's 6 hour default
+    timeout-minutes: 30
 
     services:
       mariadb:
