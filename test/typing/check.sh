@@ -2,6 +2,8 @@
 # Compiles fixture.ml against veins, then every case in cases/, each of which
 # must fail with a type error naming the tag its role doesn't grant.
 set -eu
+# CI forces colours, and their escape codes would break the grep below.
+export OCAML_COLOR=never
 objs=$1
 shift
 out=$(mktemp -d)
