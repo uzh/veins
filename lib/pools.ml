@@ -342,9 +342,21 @@ struct
       requests
   ;;
 
+  (* caqti-driver-mariadb 3.1 turns autocommit off in [start] and back on in [commit], but
+     not in [rollback]: the connection went back to the pool inside a transaction that was
+     never committed, holding its locks. *)
+  let restore_autocommit = (Caqti_type.unit ->. Caqti_type.unit) "SET autocommit = 1"
+
   let rollback label connection exn =
     let (module C : Caqti_lwt.CONNECTION) = connection in
-    let%lwt rollback_result = C.rollback () in
+    let%lwt rollback_result =
+      let open Lwt_result.Infix in
+      C.rollback ()
+      >>= fun () ->
+      match C.dialect with
+      | Caqti.Template.Dialect.Mysql _ -> C.exec restore_autocommit ()
+      | _ -> Lwt_result.return ()
+    in
     (match rollback_result with
      | Ok () ->
        Log.debug (fun m -> m "Rolled back transaction on '%s'" (Entity.Label.show label))
