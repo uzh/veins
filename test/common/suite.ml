@@ -593,13 +593,24 @@ module Make (D : Dialect) = struct
 
   module Runner = Migration.Make (Db)
 
+  (* The suite may share its database with an application: only ever touch
+     the migration state of the suite's own namespaces. *)
+  let forget_test_migrations () =
+    let%lwt (_ : _ list) = Runner.status root () in
+    Db.exec
+      (root_ctx ())
+      (direct
+         T.(unit -->. unit)
+         "DELETE FROM veins_migration_state WHERE namespace LIKE 'veins_test_%'"
+       |> Request.create ~needs:Roles.write)
+      ()
+  ;;
+
   let test_migration () =
     let ns =
       Migration.Namespace.create (Format.asprintf "veins_test_mig_%d" (Random.int 100000))
     in
-    let%lwt () =
-      Db.exec (root_ctx ()) (ddl "DROP TABLE IF EXISTS veins_migration_state") ()
-    in
+    let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_mig") () in
     let mig =
       Migration.(
@@ -640,6 +651,7 @@ module Make (D : Dialect) = struct
     let%lwt () = Runner.down root mig |> Lwt.map (ok "down") in
     let%lwt n = applied () in
     Alcotest.(check int) "reverted" 0 n;
+    let%lwt () = forget_test_migrations () in
     Db.exec (root_ctx ()) (drop_table "veins_t_mig") ()
   ;;
 
@@ -688,6 +700,7 @@ module Make (D : Dialect) = struct
     Alcotest.(check int) "only the second step ran" 1 rows;
     let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
     Alcotest.(check int) "nothing pending" 0 (CCList.length pending);
+    let%lwt () = forget_test_migrations () in
     Db.exec (root_ctx ()) (drop_table "veins_t_import") ()
   ;;
 
