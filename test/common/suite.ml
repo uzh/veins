@@ -532,6 +532,25 @@ module Make (D : Dialect) = struct
          Net.Proxy.stop proxy)
   ;;
 
+  (* A server that accepts and never answers. caqti-driver-postgresql connects
+     blocking, so without a connect timeout this froze the whole process. *)
+  let test_unresponsive_server_fails () =
+    let%lwt server = Net.Unresponsive.start () in
+    let scheme = Uri.scheme (Uri.of_string url) |> CCOption.value ~default:"" in
+    let label = Label.create "veins_unresponsive" in
+    Lwt.finalize
+      (fun () ->
+         Db.Pool.add
+           (Database.create label (Url.create (Net.Unresponsive.url server ~scheme)));
+         expect_exn
+           "unresponsive server"
+           (fun () -> Db.find (Db.label_ctx ~role:owner label) ping ())
+           (fun (_ : exn) -> ()))
+      (fun () ->
+         Db.Pool.drop label;
+         Net.Unresponsive.stop server)
+  ;;
+
   (* {1 Roles} *)
 
   let as_role role = Db.label_ctx ~role roles_label
@@ -817,6 +836,7 @@ module Make (D : Dialect) = struct
       , [ case "clear drains pools" `Quick test_clear_drains_pools
         ; case "drop with an open connection" `Quick test_drop_with_open_connection
         ; case "outage and recovery" `Slow test_outage_and_recovery
+        ; case "unresponsive server fails" `Slow test_unresponsive_server_fails
         ] )
     ; ( "roles"
       , [ case "roles run their statements" `Quick test_roles_run_their_statements

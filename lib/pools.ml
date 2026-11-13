@@ -135,9 +135,23 @@ struct
        | Ok () -> restored)
   ;;
 
+  (* caqti-driver-postgresql connects with libpq's blocking PQconnectdb, which holds up
+     the whole Lwt loop until the handshake is done, and libpq waits indefinitely by
+     default. Bound it unless the URL sets its own connect_timeout. *)
+  let with_connect_timeout uri =
+    match Uri.scheme uri with
+    | Some ("postgresql" | "postgres")
+      when Option.is_none (Uri.get_query_param uri "connect_timeout") ->
+      Uri.add_query_param' uri ("connect_timeout", "5")
+    | Some _ | None -> uri
+  ;;
+
   let connect_pool url =
     let pool_config = Caqti.Pool.Config.create ~max_size:Config.database_pool_size () in
-    Caqti_lwt_unix.connect_pool ~pool_config ~post_connect (Entity.Url.to_uri url)
+    Caqti_lwt_unix.connect_pool
+      ~pool_config
+      ~post_connect
+      (Entity.Url.to_uri url |> with_connect_timeout)
   ;;
 
   let failed { key; _ } error =

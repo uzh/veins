@@ -88,6 +88,8 @@ from #624, #637 and #657 there.
 - Databases with per-login URLs are listed by `Pool.find_all`, and adding one twice no longer replaces (and leaks)
   its pools.
 - Turning off foreign key checks for a migration step runs on the same connection as the step.
+- PostgreSQL URLs get `connect_timeout=5` unless they set their own: caqti-driver-postgresql connects blocking
+  (libpq's `PQconnectdb`), and an unresponsive server used to freeze the whole process.
 
 
 💥 The start of using the changelog. Preparations for our pilot version 0.1.0.
