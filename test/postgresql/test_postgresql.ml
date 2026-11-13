@@ -17,7 +17,7 @@ module Suite = Suite.Make (struct
         let database_pool_size = 5
         let expected_databases = 4
 
-        module Dialect = Veins_postgresql.Dialect
+        module Driver = Veins_postgresql.Driver
       end)
 
     let utc_offset_sql = "SELECT EXTRACT(TIMEZONE FROM now())::int"

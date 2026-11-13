@@ -11,7 +11,7 @@ module Db = Veins.Pools.Make (struct
     let database_pool_size = 1
     let expected_databases = 1
 
-    module Dialect = Veins.Dialect.Mariadb
+    module Driver = Veins.Driver.Generic
   end)
 
 let read : [> `Read ] Veins.Need.t = Veins.Need.v "read"

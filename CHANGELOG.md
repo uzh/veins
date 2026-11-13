@@ -47,16 +47,22 @@ from #624, #637 and #657 there.
 - `Veins.Login` and per-login URLs: `Database.create ?logins label owner_url`. A login without a URL of its own
   connects with the owner's, on the owner's pool, so a database with a single user needs only its URL.
 - `Error.Permission_denied` (label, login, role, declared needs): the database refused a statement the types
-  allowed, i.e. a login lacks a grant its roles claim. `Dialect.is_permission_error` recognises it (MariaDB errnos
+  allowed, i.e. a login lacks a grant its roles claim. `Driver.is_permission_error` recognises it (MariaDB errnos
   1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, in the driver libraries).
 - `Error.Failed` carrying label, login, role and the untouched Caqti error, with `Error.cause` /
   `Error.cause_of_exn`.
-- `Dialect.session_setup` (every session is pinned to UTC) and `Dialect.is_connection_error`; the driver libraries
+- Every session is pinned to UTC (`Dialect.set_utc`), and `Driver.is_connection_error`; the driver libraries
   recognise their driver's "connection lost" errors (MariaDB errnos, PostgreSQL SQLSTATE class 08).
 - `Migration.Id.derive` for stable step ids of migrations written without ids.
 
 #### Changed
 
+- **No dialect configuration:** veins' SQL is rendered from the dialect of the connection it runs on (Caqti 3
+  dialect-aware requests, `Dialect.request`), so the same pool code runs on MariaDB and PostgreSQL. `Dialect` is a
+  set of SQL functions taking the connection's dialect; `Dialect.Sig`, `Dialect.Mariadb` / `Dialect.Postgresql`,
+  `Dialect.of_url` and `insert_row` are gone. What stays per driver is reading its errors: `Driver.Sig`
+  (`is_connection_error`, `is_permission_error`), implemented by `Veins_mariadb.Driver` /
+  `Veins_postgresql.Driver`; `Pools_sig.ConfigSig` takes `module Driver` instead of `module Dialect`.
 - Built on the Caqti 3 API (`Caqti.Template`, `Caqti.Error`, `Caqti.Pool.Config`); veins and its driver libraries no
   longer link `caqti.classic`. Requests built with the Caqti 2 API still work: `Caqti_request.t` is
   `Caqti.Template.Request.t`.

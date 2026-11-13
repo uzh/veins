@@ -1,115 +1,96 @@
-(** SQL dialect abstraction for database-specific DDL differences.
+(** SQL that differs between database systems.
 
-    Provide an implementation of {!Sig} as the [Dialect] field of a
-    {!Pools_sig.ConfigSig} to let the migration engine generate correct SQL
-    for the target database.
+    Caqti tells every connection's dialect ([Caqti.Template.Dialect.t]), and a
+    Caqti 3 request may render its SQL from it. Veins builds its own requests
+    that way ({!request}), so one pool works on MariaDB and PostgreSQL alike,
+    without configuring a dialect. The functions here are the SQL veins needs,
+    by {!kind}; applications may use them to build their own dialect-dependent
+    requests, or with a fixed kind where the database is known (e.g. a
+    package for MariaDB only).
 
-    Two implementations are provided out of the box:
-    - {!Mariadb} — for MariaDB / MySQL
-    - {!Postgresql} — for PostgreSQL
+    PostgreSQL gets PostgreSQL's SQL, everything else MariaDB's: Caqti also
+    renders requests for logging, with a dialect that names no database, so
+    none of these may fail.
 
     @canonical Veins.Dialect *)
 
-(** The interface a dialect module must satisfy. *)
-module type Sig = sig
-  (** Statements run on every new connection, before it is used. Both
-      dialects pin the session to UTC here, so [NOW()] / [CURRENT_TIMESTAMP]
-      agree with the UTC values caqti writes for [Ptime.t], whatever the
-      server's time zone. *)
-  val session_setup : string list
+type t = Caqti.Template.Dialect.t
 
-  (** [true] when the error means the connection is gone, so the pool must be
-      dropped and reconnected. Any other error (a constraint violation, a
-      syntax error, …) leaves the pool alone.
+type kind =
+  | Mariadb (** MariaDB or MySQL; also every dialect other than PostgreSQL. *)
+  | Postgresql
 
-      The implementations here only know connect and load errors; the driver
-      packages ([Veins_mariadb.Dialect], [Veins_postgresql.Dialect]) also
-      recognise the driver's own "connection lost" errors. *)
-  val is_connection_error : Caqti.Error.t -> bool
+val kind : t -> kind
 
-  (** [true] when the database refused a statement for lack of privileges;
-      veins then raises [Error.Permission_denied]. Like
-      {!is_connection_error}, only the driver packages' dialects recognise
-      these errors; the implementations here always answer [false]. *)
-  val is_permission_error : Caqti.Error.t -> bool
+(** [request policy request_type sql] is a request rendering [sql kind] for
+    the dialect of the connection it runs on, e.g.
+    {[
+    Dialect.request
+      Caqti.Template.Request.Static
+      Caqti.Templater.T.(string -->. unit)
+      (fun dialect ->
+         Format.asprintf
+           "DELETE FROM t WHERE id = %s"
+           (Dialect.uuid_value_fragment dialect "?"))
+    ]}
+    The string is parsed like [Caqti.Templater.static]'s ([?] parameters). *)
+val request
+  :  Caqti.Template.Request.prepare_policy
+  -> ('a, 'b, 'm) Caqti.Template.Request_type.t
+  -> (kind -> string)
+  -> ('a, 'b, 'm) Caqti.Template.Request.t
 
-  (** Statements run on a connection after rolling back a transaction, before
-      it is used again. MariaDB restores [autocommit]: caqti-driver-mariadb
-      (3.1) turns it off to start a transaction and back on when committing,
-      but not when rolling back, so the next statements on that pooled
-      connection would run in a transaction that is never committed. *)
-  val after_rollback : string list
+(** {1 Sessions} *)
 
-  (** DDL to create (or ensure the existence of) the migration-state tracking
-      table.
+(** Pins the session's time zone to UTC, so [NOW()] / [CURRENT_TIMESTAMP]
+    agree with the UTC values Caqti writes for [Ptime.t], whatever the
+    server's time zone. Runs on every new connection. *)
+val set_utc : kind -> string
 
-      @param table
-        Fully-qualified table name, e.g.
-        ["veins_migration_state"].  May be overridden at runtime
-        via the [VEINS_MIGRATION_TABLE] environment variable. *)
-  val create_migration_table : table:string -> string
+(** Run on a connection after rolling back a transaction, before it is used
+    again. MariaDB restores [autocommit]: caqti-driver-mariadb (3.1) turns it
+    off to start a transaction and back on when committing, but not when
+    rolling back, so the next statements on that pooled connection would run
+    in a transaction that is never committed. [None] for PostgreSQL. *)
+val restore_autocommit : kind -> string option
 
-  (** Whether [SET FOREIGN_KEY_CHECKS = 0 / 1] is supported by this
-      dialect.  [true] for MariaDB / MySQL; [false] for PostgreSQL.
+(** [SET FOREIGN_KEY_CHECKS = 0 / 1] on MariaDB; [None] where foreign key
+    checks can't be switched off for a session (PostgreSQL). *)
+val set_fk_checks : kind -> bool -> string option
 
-      When a migration step sets [~check_fk:false] the runner wraps it in
-      [SET FOREIGN_KEY_CHECKS = 0 … 1] only if this flag is [true]. *)
-  val fk_checks_supported : bool
+(** {1 UUIDs} *)
 
-  (** [SELECT id FROM <table>] — returns every applied step ID. *)
-  val select_applied_ids : table:string -> string
+(** Wraps a column to return a UUID stored in the dialect's native format as
+    a lowercase dashed string.
 
-  (** [SELECT id, namespace FROM <table>] — returns every applied step with
-      its namespace.  Used by the drift-detection ([Migration.RunnerSig.check]) pass. *)
-  val select_applied_rows : table:string -> string
+    - MariaDB ([BINARY(16)]): [LOWER(CONCAT(SUBSTR(HEX(<field>),1,8),'-',...))]
+    - PostgreSQL ([UUID]): [<field>::text] *)
+val uuid_select_fragment : kind -> field:string -> string
 
-  (** [INSERT INTO <table> (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?)]
-      — records a newly-applied step.  Placeholders: id, namespace, label, created_at, updated_at.
-  *)
-  val insert_applied_step : table:string -> string
+(** Wraps a [?] placeholder (or any expression) for a column storing UUIDs in
+    the dialect's native format.
 
-  (** [DELETE FROM <table> WHERE id = ?] — removes a step record during a
-      down migration. *)
-  val delete_applied_step : table:string -> string
+    - MariaDB ([BINARY(16)]): [UNHEX(REPLACE(<name>,'-',''))]
+    - PostgreSQL ([UUID]): [<name>::uuid] *)
+val uuid_value_fragment : kind -> string -> string
 
-  (** [INSERT INTO <table> (<col1>, ...) VALUES (?, ...)] — generic single-row
-      insert with one [?] placeholder per column.  Used by
-      [Pools_sig.Sig.populate]. *)
-  val insert_row : table:string -> columns:string list -> string
+(** {1 Migration state}
 
-  (** Wrap a column name for use in a [SELECT] to return a UUID stored in
-      the dialect's native format as a lowercase dashed string.
+    The table defaults to [veins_migration_state], see [VEINS_MIGRATION_TABLE]
+    in {!Migration}. *)
 
-      - MariaDB ([BINARY(16)]): [LOWER(CONCAT(SUBSTR(HEX(<field>),1,8),'-',...))]
-      - PostgreSQL ([UUID]):    [<field>::text] *)
-  val uuid_select_fragment : field:string -> string
+val create_migration_table : kind -> table:string -> string
 
-  (** Wrap a [?] placeholder for use in an [INSERT] or [WHERE] clause
-      when the target column stores UUIDs in the dialect's native format.
+(** [SELECT id FROM <table>]: every applied step id. *)
+val select_applied_ids : kind -> table:string -> string
 
-      - MariaDB ([BINARY(16)]): [UNHEX(REPLACE(<name>,'-',''))]
-      - PostgreSQL ([UUID]):    [<name>::uuid] *)
-  val uuid_value_fragment : string -> string
-end
+(** [SELECT id, namespace FROM <table>]: every applied step with its
+    namespace, for drift detection. *)
+val select_applied_rows : kind -> table:string -> string
 
-(** MariaDB / MySQL dialect.
+(** Records an applied step. Parameters: id, namespace, label, created_at,
+    updated_at. *)
+val insert_applied_step : kind -> table:string -> string
 
-    Table engine: [InnoDB], character set: [utf8mb4], collation:
-    [utf8mb4_unicode_ci].  FK-check suppression is supported. *)
-module Mariadb : Sig
-
-(** PostgreSQL dialect.
-
-    Standard [CREATE TABLE].  FK-check suppression is {b not} supported
-    ([fk_checks_supported = false]). *)
-module Postgresql : Sig
-
-(** Infer the dialect from a connection URL's scheme.
-
-    Returns [Some (module Mariadb)] for [mariadb://] or [mysql://] URLs,
-    [Some (module Postgresql)] for [postgresql://] or [postgres://] URLs, and
-    [None] for unrecognised schemes.
-
-    Useful for validating that a registered database URL matches the
-    dialect the pool was configured with. *)
-val of_url : Entity.Url.t -> (module Sig) option
+(** Removes a step's record. Parameter: id. *)
+val delete_applied_step : kind -> table:string -> string

@@ -90,7 +90,7 @@ struct
   let statement_error ?role ?(needs = []) key error =
     let label, _ = key in
     let login = Key.login key in
-    if Config.Dialect.is_permission_error error
+    if Config.Driver.is_permission_error error
     then
       raise_error
         (Error.Permission_denied
@@ -103,28 +103,32 @@ struct
     else raise (Error.Failed (Error.failure ?role ~login label error))
   ;;
 
-  let session_setup_requests =
-    CCList.map Caqti.Templater.(static T.(unit -->. unit)) Config.Dialect.session_setup
+  (* Both render their SQL from the dialect of the connection they run on. *)
+  let set_utc =
+    Dialect.request
+      Caqti.Template.Request.Static
+      Caqti.Templater.T.(unit -->. unit)
+      Dialect.set_utc
   ;;
 
-  let exec_requests (module Connection : Caqti_lwt.CONNECTION) requests =
-    CCList.fold_left
-      (fun acc request -> Lwt_result.bind acc (fun () -> Connection.exec request ()))
-      (Lwt_result.return ())
-      requests
+  let restore_autocommit =
+    Dialect.request
+      Caqti.Template.Request.Static
+      Caqti.Templater.T.(unit -->. unit)
+      (fun kind -> Dialect.restore_autocommit kind |> CCOption.get_or ~default:"")
   ;;
 
-  let post_connect connection = exec_requests connection session_setup_requests
-
-  let after_rollback_requests =
-    CCList.map Caqti.Templater.(static T.(unit -->. unit)) Config.Dialect.after_rollback
-  ;;
+  let post_connect (module Connection : Caqti_lwt.CONNECTION) = Connection.exec set_utc ()
 
   (* Never use the driver's [rollback] (or caqti's [with_transaction]) alone,
-     see [Dialect.Sig.after_rollback]. *)
-  let rollback ((module Connection : Caqti_lwt.CONNECTION) as connection) =
+     see [Dialect.restore_autocommit]. *)
+  let rollback (module Connection : Caqti_lwt.CONNECTION) =
     let%lwt rolled_back = Connection.rollback () in
-    let%lwt restored = exec_requests connection after_rollback_requests in
+    let%lwt restored =
+      match Dialect.restore_autocommit (Dialect.kind Connection.dialect) with
+      | None -> Lwt_result.return ()
+      | Some (_ : string) -> Connection.exec restore_autocommit ()
+    in
     Lwt.return
       (match rolled_back with
        | Error _ as error -> error
@@ -197,7 +201,7 @@ struct
     match%lwt input with
     | Ok value -> Lwt.return value
     | Error error ->
-      if Config.Dialect.is_connection_error error
+      if Config.Driver.is_connection_error error
       then (
         disconnect_entry ~error key;
         log_pools ());
@@ -453,7 +457,7 @@ struct
       | Ok value -> Lwt.return value
       | Error error -> raise_caqti_error ~role key (Lwt.return (Error error))
     with
-    | Error.Failed { Error.error; _ } as exn when Config.Dialect.is_connection_error error
+    | Error.Failed { Error.error; _ } as exn when Config.Driver.is_connection_error error
       ->
       disconnect_entry ~error key;
       log_pools ();

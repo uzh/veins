@@ -1,7 +1,7 @@
 ; Tests without a database: they run anywhere `dune test` runs.
 
 (tests
- (names test_entity test_migration)
+ (names test_entity test_migration test_dialect)
  (package veins)
  (libraries veins caqti lwt alcotest containers uuidm)
  (preprocess

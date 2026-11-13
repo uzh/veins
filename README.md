@@ -4,7 +4,8 @@ Database connection pooling and schema migration library for OCaml.
 
 - **Connection pools** — label-based multi-database pool management backed by [Caqti](https://github.com/paurkedal/ocaml-caqti) and Lwt
 - **Migrations** — ordered, versioned, up/down migration steps with a global registry and drift detection
-- **MariaDB and PostgreSQL** — use the driver library you need (`veins.mariadb` or `veins.postgresql`)
+- **MariaDB and PostgreSQL** — veins' SQL follows each connection's dialect; use the driver library you need
+  (`veins.mariadb` or `veins.postgresql`)
 - **Roles or a single user** — statements checked against typed roles at compile time, or `Plain` pools without
   roles for applications with one database user
 - **`veins-gen`** — CLI tool to generate migration file boilerplate
@@ -52,11 +53,11 @@ end)
 let () = Db.Pool.initialize ()
 ```
 
-For custom pool sizes, or when you need to wire up the dialect yourself:
+For custom pool sizes, or when you need to wire up the driver yourself:
 
 ```ocaml
 module Db = Veins.Pools.Make (struct
-  module Dialect      = Veins_mariadb.Dialect
+  module Driver       = Veins_mariadb.Driver
   let database        = db
   let database_pool_size = 25
   let expected_databases = 1
@@ -153,7 +154,7 @@ let separated =
 Several roles may share a login; the database then enforces only what the login is granted, and the types the rest.
 A role claiming more than its login is granted passes the compiler, but the database refuses the statement:
 `Error.Permission_denied` (MariaDB errors 1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, recognised by
-the driver libraries' dialects) names the label, login, role and declared needs.
+the driver libraries) names the label, login, role and declared needs.
 
 ### 6. Without roles: one database user for everything
 
@@ -268,14 +269,19 @@ One opam package, `veins`, with three libraries:
 
 | Library (dune)     | Module             | Needs                     | Purpose                                                              |
 |--------------------|--------------------|---------------------------|----------------------------------------------------------------------|
-| `veins`            | `Veins`            |                           | Pools, migrations, dialect abstraction                               |
-| `veins.mariadb`    | `Veins_mariadb`    | `caqti-driver-mariadb`    | `Dialect`, and `Pools.Make` / `Plain.Make` with it pre-configured    |
-| `veins.postgresql` | `Veins_postgresql` | `caqti-driver-postgresql` | `Dialect`, and `Pools.Make` / `Plain.Make` with it pre-configured    |
+| `veins`            | `Veins`            |                           | Pools, migrations, the SQL of both dialects (`Veins.Dialect`)        |
+| `veins.mariadb`    | `Veins_mariadb`    | `caqti-driver-mariadb`    | `Driver`, and `Pools.Make` / `Plain.Make` with it pre-configured     |
+| `veins.postgresql` | `Veins_postgresql` | `caqti-driver-postgresql` | `Driver`, and `Pools.Make` / `Plain.Make` with it pre-configured     |
 
 The Caqti drivers are optional dependencies (`depopts`) of `veins`: a driver library is built and installed only
 when its driver is in the switch, so nobody needs `libpq` for a MariaDB application. opam has no way to ask for a
 part of a package, so an application names the driver itself, next to `veins`. Installing a driver later makes
 opam rebuild `veins` with its library.
+
+The driver libraries only exist to read their driver's errors: Caqti classifies constraint violations, but not a
+lost connection or a missing privilege, which veins needs to reconnect pools and to raise
+`Error.Permission_denied`. The SQL veins sends doesn't depend on them: Caqti 3 renders each request for the dialect
+of the connection it runs on (`Veins.Dialect.request`).
 
 The `veins-gen` executable is installed as part of the `veins` package.
 

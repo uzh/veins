@@ -157,44 +157,65 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
 
   let is_applied = Hashtbl.mem
 
+  (* The state table's SQL follows the dialect of the connection it runs on. *)
+  let state_request request_type sql =
+    Dialect.request Caqti.Template.Request.Direct request_type (fun kind ->
+      sql kind ~table:(table ()))
+    |> unchecked
+  ;;
+
   let setup ctx =
-    let sql = Db.Config.Dialect.create_migration_table ~table:(table ()) in
-    Db.exec ctx (direct T.(unit -->. unit) sql |> unchecked) ()
+    Db.exec ctx (state_request T.(unit -->. unit) Dialect.create_migration_table) ()
   ;;
 
   let get_applied_ids ctx =
-    let sql = Db.Config.Dialect.select_applied_ids ~table:(table ()) in
-    let%lwt ids = Db.collect ctx (direct T.(unit -->* string) sql |> unchecked) () in
+    let%lwt ids =
+      Db.collect ctx (state_request T.(unit -->* string) Dialect.select_applied_ids) ()
+    in
     Lwt.return (CCList.map Id.create ids)
   ;;
 
   let insert_applied_step ctx namespace { Step.id; label; _ } =
     let n = now () in
-    let sql = Db.Config.Dialect.insert_applied_step ~table:(table ()) in
     let req =
-      direct T.(t2 (t3 string string string) (t2 ptime ptime) -->. unit) sql |> unchecked
+      state_request
+        T.(t2 (t3 string string string) (t2 ptime ptime) -->. unit)
+        Dialect.insert_applied_step
     in
     Db.exec ctx req ((Id.value id, Namespace.value namespace, label), (n, n))
   ;;
 
   let delete_applied_step ctx (step_id : Id.t) =
-    let sql = Db.Config.Dialect.delete_applied_step ~table:(table ()) in
-    Db.exec ctx (direct T.(string -->. unit) sql |> unchecked) (Id.value step_id)
+    Db.exec
+      ctx
+      (state_request T.(string -->. unit) Dialect.delete_applied_step)
+      (Id.value step_id)
+  ;;
+
+  let dialect_kind ctx =
+    Db.query
+      ~needs:Entity.Need.none
+      ctx
+      (fun (module Connection : Caqti_lwt.CONNECTION) ->
+         Lwt_result.return (Dialect.kind Connection.dialect))
   ;;
 
   (* [SET FOREIGN_KEY_CHECKS] is session state: [ctx] holds one connection, so
      both toggles and the step run on it. *)
   let with_fk_disabled ctx f =
-    if not Db.Config.Dialect.fk_checks_supported
-    then f ()
-    else (
-      let set value =
-        Format.asprintf "SET FOREIGN_KEY_CHECKS = %d" value
-        |> direct T.(unit -->. unit)
+    let%lwt kind = dialect_kind ctx in
+    match Dialect.set_fk_checks kind false with
+    | None -> f ()
+    | Some (_ : string) ->
+      let set enabled =
+        Dialect.request
+          Caqti.Template.Request.Direct
+          T.(unit -->. unit)
+          (fun kind -> Dialect.set_fk_checks kind enabled |> CCOption.get_or ~default:"")
         |> unchecked
       in
-      let%lwt () = Db.exec ctx (set 0) () in
-      Lwt.finalize f (fun () -> Db.exec ctx (set 1) ()))
+      let%lwt () = Db.exec ctx (set false) () in
+      Lwt.finalize f (fun () -> Db.exec ctx (set true) ())
   ;;
 
   (* The step and its state row commit together where the dialect has
@@ -326,8 +347,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   let check ?role db_label () =
     with_ctx ?role db_label
     @@ fun ctx ->
-    let sql = Db.Config.Dialect.select_applied_rows ~table:(table ()) in
-    let req = direct T.(unit -->* t2 string string) sql |> unchecked in
+    let req = state_request T.(unit -->* t2 string string) Dialect.select_applied_rows in
     let%lwt raw_rows = Db.collect ctx req () in
     let applied_rows =
       CCList.map (fun (id, ns) -> Id.create id, Namespace.create ns) raw_rows

@@ -127,8 +127,12 @@ module Plain : module type of struct
   include Plain
 end
 
-(** SQL dialect implementations (MariaDB / PostgreSQL DDL differences). *)
+(** The SQL that differs between MariaDB and PostgreSQL, rendered from each
+    connection's dialect. *)
 module Dialect = Dialect
+
+(** Reading the driver's errors (lost connection, missing privilege). *)
+module Driver = Driver
 
 (** {1 Building requests} *)
 

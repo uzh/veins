@@ -11,15 +11,16 @@
 
     [database_pool_size] defaults to [10] and [expected_databases] to [5].
     For custom values use {!Veins.Pools.Make} directly with
-    [module Dialect = Veins_postgresql.Dialect].
+    [module Driver = Veins_postgresql.Driver].
 
     With one database user for everything, {!Plain} gives the same pools
     without roles and needs. *)
 
-(** PostgreSQL dialect: {!Veins.Dialect.Postgresql}, plus the driver's errors
-    that mean the connection is gone. *)
-module Dialect : Veins.Dialect.Sig = struct
-  include Veins.Dialect.Postgresql
+(** How veins reads the PostgreSQL driver's errors: lost connections and
+    missing privileges. The SQL veins sends follows the connection's dialect,
+    see {!Veins.Dialect}. *)
+module Driver : Veins.Driver.Sig = struct
+  include Veins.Driver.Generic
 
   (* SQLSTATE class 08 (connection exception) and 57P01-57P03 (admin/crash
      shutdown, cannot connect now). *)
@@ -54,11 +55,11 @@ module Dialect : Veins.Dialect.Sig = struct
   ;;
 end
 
-(** Connection-pool functor with the PostgreSQL dialect pre-configured.
+(** Connection-pool functor with the PostgreSQL driver pre-configured.
 
     Only [database] is required; [database_pool_size] defaults to [10] and
     [expected_databases] defaults to [5].  Use instead of [Veins.Pools.Make]
-    to avoid specifying the dialect manually:
+    to avoid specifying the driver manually:
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct
@@ -67,10 +68,7 @@ end
     ]}
 
     For custom pool sizes, use {!Veins.Pools.Make} directly with
-    [module Dialect = Veins_postgresql.Dialect] in your config.
-
-    The [database] URL must use the [postgresql://] or [postgres://] scheme;
-    use {!Veins.Dialect.of_url} to validate this at runtime if needed. *)
+    [module Driver = Veins_postgresql.Driver] in your config. *)
 module Pools = struct
   module Make (C : sig
       val database : Veins.Database.t
@@ -80,12 +78,12 @@ module Pools = struct
       let database_pool_size = 10
       let expected_databases = 5
 
-      module Dialect = Dialect
+      module Driver = Driver
     end)
 end
 
-(** Pools for one database user, with the PostgreSQL dialect pre-configured: no
-    roles, logins or needs, see {!Veins.Plain}.
+(** Pools for one database user, with {!Driver} pre-configured: no roles,
+    logins or needs, see {!Veins.Plain}.
 
     {[
     module Db = Veins_postgresql.Plain.Make (struct

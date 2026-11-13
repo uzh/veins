@@ -13,7 +13,7 @@ module Db = Pools.Make (struct
     let database_pool_size = 5
     let expected_databases = 4
 
-    module Dialect = Veins_mariadb.Dialect
+    module Driver = Veins_mariadb.Driver
   end)
 
 let ping =
@@ -164,8 +164,8 @@ let test_mariadb_permission_errors () =
       ~query:"INSERT INTO t VALUES (1)"
       (Caqti_driver_mariadb.Error_msg { errno; error = "denied" })
   in
-  let is_permission errno = Veins_mariadb.Dialect.is_permission_error (error errno) in
-  let is_connection errno = Veins_mariadb.Dialect.is_connection_error (error errno) in
+  let is_permission errno = Veins_mariadb.Driver.is_permission_error (error errno) in
+  let is_connection errno = Veins_mariadb.Driver.is_connection_error (error errno) in
   CCList.iter
     (fun errno ->
        Alcotest.(check bool)
