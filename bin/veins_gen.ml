@@ -115,7 +115,7 @@ let () =
   then die (Format.asprintf "File already exists: %s" filename);
   let module_name = module_name_of_slug slug in
   let content = template ~module_name ~namespace:slug ~written_at in
-  (match open_out filename with
+  (match open_out_bin filename with
    | exception Sys_error msg -> die (Format.asprintf "Cannot create %s: %s" filename msg)
    | oc ->
      (match

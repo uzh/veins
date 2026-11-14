@@ -1,0 +1,20 @@
+; Integration tests against a live PostgreSQL, see POSTGRES_URL in the README.
+
+(tests
+ (names test_postgresql)
+ (package veins-postgresql)
+ (libraries
+  veins
+  veins_test_common
+  caqti
+  caqti.classic
+  caqti-lwt
+  caqti-lwt.unix
+  caqti-driver-postgresql
+  lwt
+  lwt.unix
+  alcotest
+  alcotest-lwt
+  containers)
+ (preprocess
+  (pps lwt_ppx)))

@@ -13,7 +13,14 @@ depends: [
   "dune" {>= "3.17"}
   "ocaml" {>= "5.0.0"}
   "veins" {= version}
-  "caqti-driver-postgresql" {>= "2.1.0"}
+  "caqti-driver-postgresql" {>= "3.0.0"}
+  "alcotest" {with-test & >= "1.7.0"}
+  "alcotest-lwt" {with-test & >= "1.7.0"}
+  "caqti" {with-test & >= "3.0.0"}
+  "caqti-lwt" {with-test & >= "3.0.0"}
+  "containers" {with-test & >= "3.13.0"}
+  "lwt" {with-test & >= "5.7.0"}
+  "lwt_ppx" {with-test & >= "2.1.0"}
   "odoc" {with-doc}
 ]
 build: [

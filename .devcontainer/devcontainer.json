@@ -2,10 +2,8 @@
 // https://github.com/microsoft/vscode-dev-containers/tree/master/containers/python-3 or the
 // devcontainer docu https://code.visualstudio.com/docs/remote/containers#_devcontainerjson-reference
 {
-  "name": "VenaLumo Dev",
-  "dockerComposeFile": [
-    "./docker-compose.yml"
-  ],
+  "name": "Veins",
+  "dockerComposeFile": "./docker-compose.yml",
   "service": "dev",
   "runServices": [
     "dev",
@@ -13,10 +11,24 @@
     "database-postgres"
   ],
   "workspaceFolder": "/workspace",
-  "mounts": [
-    "source=${localEnv:HOME}/.gitconfig,target=/home/opam/.gitconfig,type=bind,consistency=cached,readonly"
-  ],
-  "postCreateCommand": ".devcontainer/post-create.sh",
+  "remoteUser": "opam",
+  // NOTE: Dev Containers forwards the host's SSH agent into every terminal and extension,
+  // clear it so remote access only works with the scoped PAT from .env (see postCreate.sh)
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": ""
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "opam",
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "installOhMyZsh": true,
+      "installOhMyZshConfig": true,
+      // base image is already updated, keep the build reproducible
+      "upgradePackages": false
+    }
+  },
+  "postCreateCommand": "/bin/bash .devcontainer/wait-for-database.sh -d db-mariadb/test -d db-postgres/18/docker/base .devcontainer/postCreate.sh",
   // Use 'settings' to set *default* container specific settings.json values on container create.
   // You can edit these settings after create using File > Preferences > Settings > Remote.
   "customizations": {
@@ -37,18 +49,18 @@
         },
         "ocaml.sandbox": {
           "kind": "opam",
-          "switch": "5.4"
+          "switch": "5.5.2"
         }
       },
       // Add the IDs of extensions you want installed when the container is created in the array below.
       "extensions": [
+        "Anthropic.claude-code",
+        "DavidAnson.vscode-markdownlint",
         "donjayamanne.githistory",
-        "eamodio.gitlens",
         "exiasr.hadolint",
         "irongeek.vscode-env",
-        "ocamllabs.ocaml-platform",
-        "DavidAnson.vscode-markdownlint",
-        "ms-vscode.makefile-tools"
+        "ms-vscode.makefile-tools",
+        "ocamllabs.ocaml-platform"
       ]
     }
   }

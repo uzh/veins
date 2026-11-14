@@ -7,6 +7,13 @@ open Veins
 
 let default_url = "mariadb://admin:password@database-mariadb/development"
 
+(* The extra pools connect to the same server as the main one. *)
+let url =
+  match Sys.getenv_opt "MARIADB_URL" with
+  | Some s when not (CCString.is_empty s) -> s
+  | _ -> default_url
+;;
+
 module MariaDb = Pools.Make (struct
     let database = Test_helpers.db_of_env_or "MARIADB_URL" default_url
     let database_pool_size = 5
@@ -52,13 +59,13 @@ let test_pool_reset () =
 ;;
 
 let test_multi_disconnect_reconnect () =
-  Test_helpers.multi_disconnect_reconnect_test (module MariaDb) default_url ()
+  Test_helpers.multi_disconnect_reconnect_test (module MariaDb) url ()
 ;;
 
-let test_role_pool () = Test_helpers.role_pool_test (module MariaDb) default_url ()
+let test_role_pool () = Test_helpers.role_pool_test (module MariaDb) url ()
 
 let test_pool_add_and_drop () =
-  let extra_url = default_url in
+  let extra_url = url in
   let extra_db =
     Database.(create (Label.create "mariadb_extra") (Main (Url.create extra_url)))
   in

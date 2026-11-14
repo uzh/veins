@@ -36,17 +36,17 @@
     :with-test
     (>= 1.7.0)))
   (caqti
-   (>= 2.1.0))
+   (>= 3.0.0))
   (caqti-driver-mariadb
    (and
     :with-test
-    (>= 2.1.0)))
+    (>= 3.0.0)))
   (caqti-driver-postgresql
    (and
     :with-test
-    (>= 2.1.0)))
+    (>= 3.0.0)))
   (caqti-lwt
-   (>= 2.1.0))
+   (>= 3.0.0))
   (containers
    (>= 3.13.0))
   (dune
@@ -84,7 +84,35 @@
   (veins
    (= :version))
   (caqti-driver-mariadb
-   (>= 2.1.0))))
+   (>= 3.0.0))
+  (alcotest
+   (and
+    :with-test
+    (>= 1.7.0)))
+  (alcotest-lwt
+   (and
+    :with-test
+    (>= 1.7.0)))
+  (caqti
+   (and
+    :with-test
+    (>= 3.0.0)))
+  (caqti-lwt
+   (and
+    :with-test
+    (>= 3.0.0)))
+  (containers
+   (and
+    :with-test
+    (>= 3.13.0)))
+  (lwt
+   (and
+    :with-test
+    (>= 5.7.0)))
+  (lwt_ppx
+   (and
+    :with-test
+    (>= 2.1.0)))))
 
 (package
  (name veins-postgresql)
@@ -97,4 +125,32 @@
   (veins
    (= :version))
   (caqti-driver-postgresql
-   (>= 2.1.0))))
+   (>= 3.0.0))
+  (alcotest
+   (and
+    :with-test
+    (>= 1.7.0)))
+  (alcotest-lwt
+   (and
+    :with-test
+    (>= 1.7.0)))
+  (caqti
+   (and
+    :with-test
+    (>= 3.0.0)))
+  (caqti-lwt
+   (and
+    :with-test
+    (>= 3.0.0)))
+  (containers
+   (and
+    :with-test
+    (>= 3.13.0)))
+  (lwt
+   (and
+    :with-test
+    (>= 5.7.0)))
+  (lwt_ppx
+   (and
+    :with-test
+    (>= 2.1.0)))))

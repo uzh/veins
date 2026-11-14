@@ -7,6 +7,13 @@ open Veins
 
 let default_url = "postgresql://root:root@database-postgres/development"
 
+(* The extra pools connect to the same server as the main one. *)
+let url =
+  match Sys.getenv_opt "POSTGRES_URL" with
+  | Some s when not (CCString.is_empty s) -> s
+  | _ -> default_url
+;;
+
 module PostgresDb = Pools.Make (struct
     let database = Test_helpers.db_of_env_or "POSTGRES_URL" default_url
     let database_pool_size = 5
@@ -57,14 +64,14 @@ let test_pool_reset () =
 ;;
 
 let test_multi_disconnect_reconnect () =
-  Test_helpers.multi_disconnect_reconnect_test (module PostgresDb) default_url ()
+  Test_helpers.multi_disconnect_reconnect_test (module PostgresDb) url ()
 ;;
 
-let test_role_pool () = Test_helpers.role_pool_test (module PostgresDb) default_url ()
+let test_role_pool () = Test_helpers.role_pool_test (module PostgresDb) url ()
 
 let test_multi_pool () =
   (* Second pool with its own label pointing to the same DB *)
-  let alt_url = default_url in
+  let alt_url = url in
   let alt_db = Database.(create (Label.create "pg_alt") (Main (Url.create alt_url))) in
   PostgresDb.Pool.add alt_db;
   let alt_label = Label.create "pg_alt" in

@@ -4,10 +4,173 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  OCAML_VERSION: "5.5.2"
+  OPAM_DUNE_LINT: opam-dune-lint.0.6
+  OPAM_AUDIT: opam-audit.0.0.2
+  SEMGREP_VERSION: "1.183.0"
+  GITLEAKS_VERSION: "8.30.1"
 
 jobs:
-  build-and-test:
+  setup:
+    name: Setup
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      deps-key: ${{ steps.keys.outputs.deps }}
+      tools-key: ${{ steps.keys.outputs.tools }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute cache keys
+        id: keys
+        run: |
+          echo "deps=veins-deps-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-${OCAML_VERSION}-${{ hashFiles('*.opam', '.ocamlformat') }}" >> "$GITHUB_OUTPUT"
+          echo "tools=veins-tools-v1-${{ runner.os }}-${{ runner.arch }}-ocaml-${OCAML_VERSION}-${OPAM_DUNE_LINT}-${OPAM_AUDIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Look up the dependency switch
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: _opam
+          key: ${{ steps.keys.outputs.deps }}
+          lookup-only: true
+
+      - name: Look up the dependency list
+        id: export
+        uses: actions/cache/restore@v6
+        with:
+          path: veins-deps.export
+          key: ${{ steps.keys.outputs.deps }}-export
+          lookup-only: true
+
+      - name: Look up the tools switch
+        id: tools
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/tools/_opam
+          key: ${{ steps.keys.outputs.tools }}
+          lookup-only: true
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ env.OCAML_VERSION }}
+
+      - name: Install veins' dependencies
+        if: steps.deps.outputs.cache-hit != 'true' || steps.export.outputs.cache-hit != 'true'
+        run: |
+          opam install . --deps-only --with-test --with-doc
+          opam install "ocamlformat.$(sed -n 's/^version *= *//p' .ocamlformat)"
+          opam switch export veins-deps.export
+
+      - name: Save the dependency switch
+        if: steps.deps.outputs.cache-hit != 'true' || steps.export.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: _opam
+          key: ${{ steps.keys.outputs.deps }}
+
+      - name: Save the dependency list
+        if: steps.deps.outputs.cache-hit != 'true' || steps.export.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: veins-deps.export
+          key: ${{ steps.keys.outputs.deps }}-export
+
+      - name: Install the CI tools in a switch of their own
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          opam switch create ~/tools "ocaml-base-compiler.${OCAML_VERSION}" --no-switch
+          opam install --switch ~/tools "$OPAM_DUNE_LINT" "$OPAM_AUDIT"
+
+      - name: Save the tools switch
+        if: steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/tools/_opam
+          key: ${{ steps.keys.outputs.tools }}
+
+  formatting:
+    name: Code formatting
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ env.OCAML_VERSION }}
+      - name: Restore veins' dependencies
+        uses: actions/cache/restore@v6
+        with:
+          path: _opam
+          key: ${{ needs.setup.outputs.deps-key }}
+          fail-on-cache-miss: true
+
+      - name: ocamlformat
+        run: opam exec -- dune build @fmt
+
+  linting:
+    name: Code linting
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ env.OCAML_VERSION }}
+      - name: Restore veins' dependencies
+        uses: actions/cache/restore@v6
+        with:
+          path: _opam
+          key: ${{ needs.setup.outputs.deps-key }}
+          fail-on-cache-miss: true
+      - name: Restore the CI tools
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/tools/_opam
+          key: ${{ needs.setup.outputs.tools-key }}
+          fail-on-cache-miss: true
+
+      - name: Generated opam files are up to date
+        run: |
+          opam exec -- dune build veins.opam veins-mariadb.opam veins-postgresql.opam
+          git diff --exit-code -- '*.opam'
+
+      - name: opam lint
+        if: success() || failure()
+        run: opam lint ./*.opam
+
+      - name: Dependencies declared (opam-dune-lint)
+        if: success() || failure()
+        env:
+          OPAMSWITCH: ${{ github.workspace }}
+        run: opam exec -- ~/tools/_opam/bin/opam-dune-lint
+
+      - name: Documentation (odoc warnings are errors)
+        if: success() || failure()
+        env:
+          ODOC_WARN_ERROR: "true"
+        run: opam exec -- dune build @doc
+
+  test:
+    name: Type checking and tests
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       mariadb:
@@ -17,6 +180,7 @@ jobs:
           MYSQL_PASSWORD: password
           MYSQL_DATABASE: development
           MYSQL_ROOT_PASSWORD: password
+          TZ: Europe/Zurich
         ports:
           - 3306:3306
         options: >-
@@ -31,6 +195,7 @@ jobs:
           POSTGRES_USER: admin
           POSTGRES_PASSWORD: password
           POSTGRES_DB: development
+          TZ: Europe/Zurich
         ports:
           - 5432:5432
         options: >-
@@ -40,48 +205,92 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up OCaml
-        uses: ocaml/setup-ocaml@v3
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: "5"
+          ocaml-compiler: ${{ env.OCAML_VERSION }}
+      - name: Restore veins' dependencies
+        uses: actions/cache/restore@v6
+        with:
+          path: _opam
+          key: ${{ needs.setup.outputs.deps-key }}
+          fail-on-cache-miss: true
 
-      - name: Install dependencies
-        run: opam install . --deps-only --with-test
+      - name: Install the switch's system libraries
+        run: |
+          packages=$(opam list --installed --external)
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends $packages
 
-      - name: Build
+      - name: Build and type-check
         run: opam exec -- dune build @all
+
+      - name: Create test databases and role users
+        run: |
+          docker exec -i ${{ job.services.mariadb.id }} mariadb -uroot -ppassword < .devcontainer/init-mariadb/01.sql
+          docker exec -i ${{ job.services.postgres.id }} psql -v ON_ERROR_STOP=1 -U admin -d development < .devcontainer/init-postgres/01.sql
 
       - name: Run tests
         env:
-          MARIADB_URL: mariadb://admin:password@mariadb/development
-          POSTGRES_URL: postgresql://admin:password@postgres/development
+          MARIADB_URL: mariadb://admin:password@127.0.0.1:3306/development
+          MARIADB_READER_URL: mariadb://veins_reader:reader@127.0.0.1:3306/development
+          MARIADB_WRITER_URL: mariadb://veins_writer:writer@127.0.0.1:3306/development
+          MARIADB_MIGRATOR_URL: mariadb://veins_migrator:migrator@127.0.0.1:3306/development
+          POSTGRES_URL: postgresql://admin:password@127.0.0.1:5432/development
+          POSTGRES_READER_URL: postgresql://veins_reader:reader@127.0.0.1:5432/development
+          POSTGRES_WRITER_URL: postgresql://veins_writer:writer@127.0.0.1:5432/development
+          POSTGRES_MIGRATOR_URL: postgresql://veins_migrator:migrator@127.0.0.1:5432/development
         run: opam exec -- dune test
 
-  lint-fmt:
+  package-scan:
+    name: Package security scan
+    needs: setup
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: ocaml/setup-ocaml@v3
+      - name: Restore the CI tools
+        uses: actions/cache/restore@v6
         with:
-          ocaml-compiler: "5"
-      - uses: ocaml/setup-ocaml/lint-fmt@v3
+          path: ~/tools/_opam
+          key: ${{ needs.setup.outputs.tools-key }}
+          fail-on-cache-miss: true
+      - name: Restore the dependency list
+        uses: actions/cache/restore@v6
+        with:
+          path: veins-deps.export
+          key: ${{ needs.setup.outputs.deps-key }}-export
+          fail-on-cache-miss: true
 
-  lint-doc:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5"
-      - uses: ocaml/setup-ocaml/lint-doc@v3
+      - name: opam-audit
+        run: ~/tools/_opam/bin/opam-audit --switch-export veins-deps.export
 
-  lint-opam:
+  sast:
+    name: SAST
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-      - uses: ocaml/setup-ocaml@v3
+      - uses: actions/checkout@v7
+      - name: Semgrep (OCaml rules)
+        run: >-
+          pipx run --spec "semgrep==${SEMGREP_VERSION}" semgrep scan
+          --config p/ocaml --error --metrics=off
+
+  secret-detection:
+    name: Secret detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
         with:
-          ocaml-compiler: "5"
-      - uses: ocaml/setup-ocaml/lint-opam@v3
+          fetch-depth: 0
+      - name: Install gitleaks
+        working-directory: ${{ runner.temp }}
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "${base}/${archive}"
+          curl -sSfLO "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " ${archive}\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "${archive}" gitleaks
+      - name: gitleaks
+        run: ${{ runner.temp }}/gitleaks git --redact --verbose .

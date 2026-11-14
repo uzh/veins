@@ -1,15 +1,18 @@
-(executables
- (names test_entity test_migration test_mariadb test_postgresql)
+; Integration tests against a live MariaDB, see MARIADB_URL in the README.
+
+(tests
+ (names test_mariadb)
+ (package veins-mariadb)
  (libraries
   veins
+  veins_test_common
   caqti
+  caqti.classic
   caqti-lwt
   caqti-lwt.unix
   caqti-driver-mariadb
-  caqti-driver-postgresql
   lwt
   lwt.unix
-  uri
   alcotest
   alcotest-lwt
   containers)

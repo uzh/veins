@@ -4,6 +4,7 @@
  (libraries
   containers
   caqti
+  caqti.classic
   caqti-lwt
   caqti-lwt.unix
   lwt
