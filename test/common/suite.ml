@@ -23,6 +23,9 @@ module type Dialect = sig
 
   (** The database user of the current connection, as a string. *)
   val current_user_sql : string
+
+  (** The session's statement timeout in seconds, as an int. *)
+  val statement_timeout_sql : string
 end
 
 let env_opt var =
@@ -376,6 +379,146 @@ module Make (D : Dialect) = struct
     Lwt.return (Alcotest.(check int) "the write after the rollback was committed" 1 n)
   ;;
 
+  let wait_closed pool =
+    let rec wait attempts =
+      if Caqti_lwt_unix.Pool.size pool = 0 || attempts = 0
+      then Lwt.return_unit
+      else (
+        let%lwt () = Lwt_unix.sleep 0.05 in
+        wait (attempts - 1))
+    in
+    wait 100
+  ;;
+
+  (* caqti-driver-mariadb 3.1's own populate returns after a failing row
+     without rolling back: the rows before it stayed in a transaction left
+     open on the pooled connection, with autocommit off. *)
+  let test_failed_populate_leaves_nothing () =
+    Single.Pool.initialize ();
+    with_table "populate"
+    @@ fun table ->
+    let ctx = Single.label_ctx ~role:owner root in
+    let%lwt () =
+      expect_exn
+        "duplicate row"
+        (fun () ->
+           Single.populate
+             ~needs:Roles.write
+             ctx
+             table
+             [ "id"; "val" ]
+             T.(t2 int int)
+             [ 1, 1; 2, 2; 1, 3 ])
+        (function
+          | Error.Failed _ -> ()
+          | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))
+    in
+    let%lwt () = Single.exec ctx (insert table) (4, 4) in
+    (* another connection sees only what was committed *)
+    let%lwt rows = Db.collect (root_ctx ()) (rows table) () in
+    let%lwt pool = Single.Pool.fetch root in
+    Single.Pool.clear ();
+    let%lwt () = wait_closed pool in
+    Lwt.return
+      (Alcotest.(check (list (pair int int)))
+         "no row of the failed populate, the later write committed"
+         [ 4, 4 ]
+         rows)
+  ;;
+
+  (* Code that gets a connection from veins may use all of its interface:
+     the driver's own rollback, with_transaction and populate are fixed. *)
+  let test_connection_interface_is_fixed () =
+    Single.Pool.initialize ();
+    with_table "raw"
+    @@ fun table ->
+    let ctx = Single.label_ctx ~role:owner root in
+    let insert = Request.caqti (insert table) in
+    let failing f =
+      Lwt.catch
+        (fun () -> Single.query ~needs:Need.none ctx f)
+        (function
+          | Error.Failed _ -> Lwt.return_unit
+          | exn -> Lwt.reraise exn)
+    in
+    let duplicate = Caqti_lwt.Stream.of_list [ 1, 1; 1, 2 ] in
+    let ( let* ) = Lwt_result.bind in
+    (* start / rollback *)
+    let%lwt () =
+      Single.query ~needs:Need.none ctx (fun (module C : Caqti_lwt.CONNECTION) ->
+        let* () = C.start () in
+        let* () = C.exec insert (10, 10) in
+        C.rollback ())
+    in
+    (* with_transaction returning an error *)
+    let%lwt () =
+      failing (fun (module C : Caqti_lwt.CONNECTION) ->
+        C.with_transaction (fun () ->
+          let* () = C.exec insert (11, 11) in
+          C.exec insert (11, 12)))
+    in
+    (* populate failing on a row *)
+    let%lwt () =
+      failing (fun (module C : Caqti_lwt.CONNECTION) ->
+        C.populate ~table ~columns:[ "id"; "val" ] T.(t2 int int) duplicate
+        |> Lwt.map Caqti.Error.uncongested)
+    in
+    (* populate inside a transaction that is rolled back afterwards *)
+    let%lwt () =
+      Single.query ~needs:Need.none ctx (fun (module C : Caqti_lwt.CONNECTION) ->
+        let* () = C.start () in
+        let* () =
+          C.populate
+            ~table
+            ~columns:[ "id"; "val" ]
+            T.(t2 int int)
+            (Caqti_lwt.Stream.of_list [ 12, 12 ])
+          |> Lwt.map Caqti.Error.uncongested
+        in
+        let* () = C.exec insert (13, 13) in
+        C.rollback ())
+    in
+    let%lwt () = Single.exec ctx (Request.create ~needs:Roles.write insert) (20, 20) in
+    let%lwt rows = Db.collect (root_ctx ()) (rows table) () in
+    let%lwt pool = Single.Pool.fetch root in
+    Single.Pool.clear ();
+    let%lwt () = wait_closed pool in
+    Lwt.return
+      (Alcotest.(check (list (pair int int)))
+         "only the write after them, committed"
+         [ 20, 20 ]
+         rows)
+  ;;
+
+  (* In a transaction the rows belong to it, and so does what follows:
+     caqti-driver-mariadb 3.1's populate committed the transaction it ran in. *)
+  let test_populate_joins_transaction () =
+    with_table "populate_txn"
+    @@ fun table ->
+    let%lwt () =
+      ignore_exit (fun () ->
+        Db.transaction_ctx ~role:owner root (fun ctx ->
+          let%lwt () = Db.exec ctx (insert table) (1, 1) in
+          let%lwt () =
+            Db.populate
+              ~needs:Roles.write
+              ctx
+              table
+              [ "id"; "val" ]
+              T.(t2 int int)
+              [ 2, 2; 3, 3 ]
+          in
+          let%lwt () = Db.exec ctx (insert table) (4, 4) in
+          Lwt.fail Exit))
+    in
+    let%lwt () = check_count table 0 in
+    let%lwt () =
+      Db.transaction_ctx ~role:owner root (fun ctx ->
+        Db.populate ~needs:Roles.write ctx table [ "id"; "val" ] T.(t2 int int) [ 5, 5 ])
+    in
+    check_count table 1
+  ;;
+
   (* {1 Errors} *)
 
   let test_query_error_keeps_pool () =
@@ -551,6 +694,68 @@ module Make (D : Dialect) = struct
          Net.Unresponsive.stop server)
   ;;
 
+  let test_ping () =
+    let%lwt answered = Db.Pool.ping root in
+    Alcotest.(check bool) "the database answers" true (Result.is_ok answered);
+    let%lwt unknown = Db.Pool.ping (Label.create "veins_unknown") in
+    Lwt.return
+      (match unknown with
+       | Error (Error.Database_not_registered _) -> ()
+       | Error error -> Alcotest.failf "unknown label: %s" (Error.show error)
+       | Ok () -> Alcotest.fail "unknown label: expected an error")
+  ;;
+
+  (* Pools with a statement timeout and a single connection that statements
+     wait for half a second at most. *)
+  module Tuned =
+    Pools.Make_with_options
+      (struct
+        let database = database
+        let database_pool_size = 1
+        let expected_databases = 1
+
+        module Driver = Db.Config.Driver
+      end)
+      (struct
+        let options =
+          Pool_options.
+            { default with
+              statement_timeout = Some 7.
+            ; acquire_timeout = Some 0.5
+            ; max_idle_age = Some 0.2
+            ; max_use_count = Some 50
+            }
+        ;;
+      end)
+
+  let test_options () =
+    Tuned.Pool.initialize ();
+    let ctx = Tuned.label_ctx ~role:owner root in
+    let%lwt timeout = Tuned.find ctx (int_query D.statement_timeout_sql) () in
+    Alcotest.(check int) "statement timeout of the session" 7 timeout;
+    let%lwt () =
+      Tuned.connection_ctx ~role:owner root (fun held ->
+        let%lwt (_ : int) = Tuned.find held ping () in
+        expect_exn
+          "exhausted pool"
+          (fun () -> Tuned.find ctx ping ())
+          (function
+            | Error.Exn (Error.Connection_failed _) -> ()
+            | exn ->
+              Alcotest.failf "expected Connection_failed, got %s" (Printexc.to_string exn)))
+    in
+    (* the abandoned request doesn't keep the connection *)
+    let%lwt one = Tuned.find ctx ping () in
+    Alcotest.(check int) "pool usable again" 1 one;
+    (* idle connections are closed *)
+    let%lwt pool = Tuned.Pool.fetch root in
+    let%lwt () = wait_closed pool in
+    Alcotest.(check int) "idle connection closed" 0 (Caqti_lwt_unix.Pool.size pool);
+    let%lwt one = Tuned.find ctx ping () in
+    Tuned.Pool.clear ();
+    Lwt.return (Alcotest.(check int) "reconnects" 1 one)
+  ;;
+
   (* {1 Roles} *)
 
   let as_role role = Db.label_ctx ~role roles_label
@@ -615,7 +820,8 @@ module Make (D : Dialect) = struct
   (* The suite may share its database with an application: only ever touch
      the migration state of the suite's own namespaces. *)
   let forget_test_migrations () =
-    let%lwt (_ : _ list) = Runner.status root () in
+    (* creates the state table if there is none *)
+    let%lwt (_ : (unit, Error.t) result) = Runner.run_all ~migrations:[] root () in
     Db.exec
       (root_ctx ())
       (direct
@@ -723,6 +929,43 @@ module Make (D : Dialect) = struct
     Db.exec (root_ctx ()) (drop_table "veins_t_import") ()
   ;;
 
+  (* Instances of an application starting together: each step runs once. *)
+  let test_migration_runs_once () =
+    let namespace = Format.asprintf "veins_test_lock_%d" (Random.int 100000) in
+    let id index = Migration.Id.(create (derive ~namespace ~index)) in
+    let mig =
+      Migration.(
+        create
+          (Namespace.create namespace)
+          ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
+        |> add_step
+             (Step.create
+                ~id:(id 0)
+                ~label:"create table"
+                "CREATE TABLE veins_t_lock (id INTEGER PRIMARY KEY)")
+        |> add_step
+             (Step.create
+                ~id:(id 1)
+                ~label:"insert row"
+                "INSERT INTO veins_t_lock (id) VALUES (1)"))
+    in
+    let%lwt () = forget_test_migrations () in
+    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_lock") () in
+    let%lwt results =
+      Lwt.all
+        (CCList.init 4 (fun (_ : int) -> Runner.run_all ~migrations:[ mig ] root ()))
+    in
+    CCList.iter
+      (function
+        | Ok () -> ()
+        | Error e -> Alcotest.failf "concurrent run_all: %s" (Error.show e))
+      results;
+    let%lwt rows = Db.find (root_ctx ()) (count "veins_t_lock") () in
+    Alcotest.(check int) "the steps ran once" 1 rows;
+    let%lwt () = forget_test_migrations () in
+    Db.exec (root_ctx ()) (drop_table "veins_t_lock") ()
+  ;;
+
   (* {1 Without roles} *)
 
   module Plain_db = Veins.Plain.Make (Db)
@@ -815,7 +1058,15 @@ module Make (D : Dialect) = struct
   let cases =
     let open Alcotest_lwt in
     let case name speed f = test_case name speed (fun (_ : Lwt_switch.t) () -> f ()) in
-    [ "statements", [ case "roundtrip" `Quick test_roundtrip ]
+    [ ( "statements"
+      , [ case "roundtrip" `Quick test_roundtrip
+        ; case "failed populate leaves nothing" `Quick test_failed_populate_leaves_nothing
+        ; case "populate joins its transaction" `Quick test_populate_joins_transaction
+        ; case
+            "the connection's own interface is fixed"
+            `Quick
+            test_connection_interface_is_fixed
+        ] )
     ; ( "contexts"
       , [ case "held connection is kept" `Quick test_held_connection_is_kept
         ; case "held connection serialises" `Quick test_held_connection_serialises
@@ -837,6 +1088,8 @@ module Make (D : Dialect) = struct
         ; case "drop with an open connection" `Quick test_drop_with_open_connection
         ; case "outage and recovery" `Slow test_outage_and_recovery
         ; case "unresponsive server fails" `Slow test_unresponsive_server_fails
+        ; case "ping" `Quick test_ping
+        ; case "options" `Quick test_options
         ] )
     ; ( "roles"
       , [ case "roles run their statements" `Quick test_roles_run_their_statements
@@ -851,6 +1104,7 @@ module Make (D : Dialect) = struct
     ; ( "migrations"
       , [ case "run_all, check, down" `Quick test_migration
         ; case "import another engine's state" `Quick test_migration_import
+        ; case "concurrent runners apply once" `Quick test_migration_runs_once
         ] )
     ]
   ;;

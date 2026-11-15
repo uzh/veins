@@ -24,7 +24,14 @@ let test_url_redacts_password () =
   assert (CCString.mem ~sub:"admin" shown);
   assert (CCString.mem ~sub:"host" shown);
   let u_no_pass = Url.create "postgresql://admin@host/mydb" in
-  assert (Url.show u_no_pass = "postgresql://admin@host/mydb")
+  assert (Url.show u_no_pass = "postgresql://admin@host/mydb");
+  let in_query =
+    Url.show
+      (Url.create "postgresql://host/mydb?user=admin&password=s3cr3t&sslpassword=k3y")
+  in
+  assert (not (CCString.mem ~sub:"s3cr3t" in_query));
+  assert (not (CCString.mem ~sub:"k3y" in_query));
+  assert (CCString.mem ~sub:"user=admin" in_query)
 ;;
 
 let test_status_roundtrip () =

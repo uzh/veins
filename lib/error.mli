@@ -30,6 +30,13 @@ type t =
       types allowed it, so the login is missing a grant its role claims, or
       the statement declared fewer needs than it has: a setup bug. Only the
       driver packages' dialects recognise these errors. *)
+  | Login_not_configured of
+      { label : string
+      ; login : string
+      }
+  (** A role connects as a login the database has no URL for, and the
+      database doesn't let logins share the owner's
+      ([Database.create ~strict_logins:true]). *)
   | Migration_failed of string (** A migration step returned an error. *)
   | Unsupported of string (** The driver doesn't support an operation. *)
 

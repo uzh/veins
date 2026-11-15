@@ -70,12 +70,29 @@ module Url = struct
 
   let create s = s
   let to_uri = Uri.of_string
+  let secret_params = [ "password"; "sslpassword" ]
 
   let redact s =
     let u = Uri.of_string s in
-    match Uri.password u with
-    | None | Some "" -> s
-    | Some _ -> Uri.with_password u (Some "***") |> Uri.to_string
+    let with_password =
+      match Uri.password u with
+      | None | Some "" -> None
+      | Some _ -> Some (Uri.with_password u (Some "***"))
+    in
+    let query = Uri.query u in
+    let is_secret (name, _) =
+      CCList.mem ~eq:CCString.equal (CCString.lowercase_ascii name) secret_params
+    in
+    if Option.is_none with_password && not (CCList.exists is_secret query)
+    then s
+    else
+      Uri.with_query
+        (CCOption.value ~default:u with_password)
+        (CCList.map
+           (fun ((name, _) as param) ->
+              if is_secret param then name, [ "***" ] else param)
+           query)
+      |> Uri.to_string
   ;;
 
   let equal = CCString.equal
@@ -136,9 +153,11 @@ module Database = struct
     ; status : Status.t
     ; owner : Url.t
     ; logins : (Login.t * Url.t) list
+    ; strict_logins : bool
     }
 
-  let create ?(status = Status.Active) ?(logins = []) label owner =
+  let create ?(status = Status.Active) ?(logins = []) ?(strict_logins = false) label owner
+    =
     let seen = Hashtbl.create (CCList.length logins) in
     CCList.iter
       (fun (login, _) ->
@@ -150,7 +169,7 @@ module Database = struct
              (Format.asprintf "Database.create: duplicate login %a" Login.pp login);
          Hashtbl.add seen login ())
       logins;
-    { label; status; owner; logins }
+    { label; status; owner; logins; strict_logins }
   ;;
 
   let label { label; _ } = label
@@ -158,6 +177,7 @@ module Database = struct
   let owner { owner; _ } = owner
   let with_status status database = { database with status }
   let logins { logins; _ } = CCList.map fst logins
+  let strict_logins { strict_logins; _ } = strict_logins
   let has_login { logins; _ } login = CCList.mem_assoc ~eq:Login.equal login logins
 
   let url { owner; logins; _ } login =

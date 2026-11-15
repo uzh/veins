@@ -23,6 +23,7 @@ module Suite = Suite.Make (struct
     let utc_offset_sql = "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW())"
     let connection_id_sql = "SELECT CONNECTION_ID()"
     let current_user_sql = "SELECT CURRENT_USER()"
+    let statement_timeout_sql = "SELECT CAST(@@max_statement_time AS SIGNED)"
   end)
 
 let () = Suite.run "Veins MariaDB"

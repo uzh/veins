@@ -79,6 +79,15 @@ let test_session_sql () =
     (Dialect.set_fk_checks Dialect.Postgresql false)
 ;;
 
+let test_identifiers () =
+  CCList.iter
+    (fun name -> Alcotest.(check bool) name true (Dialect.is_identifier name))
+    [ "veins_migration_state"; "_t"; "T1" ];
+  CCList.iter
+    (fun name -> Alcotest.(check bool) name false (Dialect.is_identifier name))
+    [ ""; "1t"; "a b"; "t; DROP TABLE x"; "a.b"; "t`"; CCString.make 65 'a' ]
+;;
+
 let () =
   Alcotest.run
     "Veins Dialect"
@@ -89,6 +98,7 @@ let () =
             `Quick
             test_one_request_per_dialect
         ; Alcotest.test_case "session SQL" `Quick test_session_sql
+        ; Alcotest.test_case "identifiers" `Quick test_identifiers
         ] )
     ]
 ;;

@@ -22,11 +22,16 @@
 module Driver : Veins.Driver.Sig = struct
   include Veins.Driver.Generic
 
-  (* Client errors (2xxx, e.g. 2006 server gone away, 2013 lost connection)
-     and server-side terminations (1053 shutdown, 1927 killed, 4031 idle
-     timeout). *)
+  (* Client errors (2xxx, e.g. 2006 server gone away, 2013 lost connection),
+     server-side terminations (1053 shutdown, 1927 killed, 4031 idle timeout)
+     and the server's network errors (1152 aborting connection, 1154-1161
+     read / write errors and timeouts). Not 1153, a packet over
+     max_allowed_packet: a new connection wouldn't take that statement
+     either. *)
   let is_connection_errno errno =
-    (errno >= 2000 && errno < 3000) || CCList.mem errno [ 1053; 1927; 4031 ]
+    (errno >= 2000 && errno < 3000)
+    || (errno >= 1154 && errno <= 1161)
+    || CCList.mem errno [ 1053; 1152; 1927; 4031 ]
   ;;
 
   let is_connection_error : Caqti.Error.t -> bool = function

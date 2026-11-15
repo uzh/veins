@@ -5,16 +5,28 @@
 open Veins
 module T = Caqti.Templater.T
 
-module Db = Pools.Make (struct
-    let database =
-      Database.create (Label.create "unused") (Url.create "mariadb://unused/x")
-    ;;
+module Config = struct
+  let database = Database.create (Label.create "unused") (Url.create "mariadb://unused/x")
+  let database_pool_size = 5
+  let expected_databases = 4
 
-    let database_pool_size = 5
-    let expected_databases = 4
+  module Driver = Veins_mariadb.Driver
+end
 
-    module Driver = Veins_mariadb.Driver
-  end)
+(* Reconnects on every statement, so the tests can count connections. *)
+module Db =
+  Pools.Make_with_options
+    (Config)
+    (struct
+      let options = Pool_options.{ default with reconnect_backoff = 0., 0. }
+    end)
+
+module Backoff =
+  Pools.Make_with_options
+    (Config)
+    (struct
+      let options = Pool_options.{ default with reconnect_backoff = 2., 2. }
+    end)
 
 let ping =
   Caqti.Templater.static T.(unit -->! int) "SELECT 1" |> Request.create ~needs:Roles.read
@@ -84,6 +96,83 @@ let test_failed_pool_retries () =
        "later calls still reach the server"
        true
        (server.Net.Unresponsive.accepted > after_two))
+;;
+
+(* The first connection error reconnects right away. When that fails too,
+   the pool fails without connecting until its backoff is over, then lets one
+   statement try again. *)
+let test_backoff () =
+  with_server
+  @@ fun server ->
+  let label = Label.create "veins_backoff" in
+  Backoff.Pool.add (Database.create label (url server));
+  let attempt () =
+    let started = Unix.gettimeofday () in
+    let%lwt () =
+      Lwt.catch
+        (fun () ->
+           Backoff.find (Backoff.label_ctx ~role:Role.owner label) ping ()
+           |> Lwt.map (fun (_ : int) -> ()))
+        (function
+          | Error.Failed _ -> Lwt.return_unit
+          | exn -> Lwt.reraise exn)
+    in
+    Lwt.return (Unix.gettimeofday () -. started)
+  in
+  let%lwt (_ : float) = attempt () in
+  let%lwt (_ : float) = attempt () in
+  let after_first = server.Net.Unresponsive.accepted in
+  Alcotest.(check int) "the reconnect is tried right away" 2 after_first;
+  let%lwt waited = attempt () in
+  let%lwt (_ : float) = attempt () in
+  Alcotest.(check int)
+    "no connection attempt during the backoff"
+    after_first
+    server.Net.Unresponsive.accepted;
+  Alcotest.(check bool) "failed right away" true (waited < 0.2);
+  let%lwt pinged = Backoff.Pool.ping label in
+  Alcotest.(check bool) "ping fails during the backoff" true (Result.is_error pinged);
+  let%lwt () = Lwt_unix.sleep 2.1 in
+  (* one statement tries, the ones arriving meanwhile still fail right away *)
+  let trying = attempt () in
+  let%lwt waited = attempt () in
+  Alcotest.(check bool) "others don't wait for the attempt" true (waited < 0.2);
+  let%lwt (_ : float) = trying in
+  Backoff.Pool.drop label;
+  Lwt.return
+    (Alcotest.(check int)
+       "one attempt after the backoff"
+       (after_first + 1)
+       server.Net.Unresponsive.accepted)
+;;
+
+(* A database that separates its users refuses a login it has no URL for,
+   instead of running its roles as the owner. *)
+let test_strict_logins () =
+  with_server
+  @@ fun server ->
+  let label = Label.create "veins_strict" in
+  Db.Pool.add
+    (Database.create
+       ~strict_logins:true
+       ~logins:[ Roles.writer_login, url server ]
+       label
+       (url server));
+  let%lwt () =
+    expect
+      "login without URL"
+      (fun () -> Db.find (Db.label_ctx ~role:Roles.reader label) ping ())
+      (function
+        | Error.Exn (Error.Login_not_configured { login; _ }) ->
+          Alcotest.(check string) "login" "reader" login
+        | exn ->
+          Alcotest.failf "expected Login_not_configured, got %s" (Printexc.to_string exn))
+  in
+  Alcotest.(check int) "nothing was sent" 0 server.Net.Unresponsive.accepted;
+  let%lwt (_ : _ Caqti_lwt_unix.Pool.t) = Db.Pool.fetch label in
+  let%lwt (_ : _ Caqti_lwt_unix.Pool.t) = Db.Pool.fetch ~login:Roles.writer_login label in
+  Db.Pool.drop label;
+  Lwt.return_unit
 ;;
 
 (* Without a URL of its own, a login connects with the owner's pool: a
@@ -184,6 +273,20 @@ let test_mariadb_permission_errors () =
          false
          (is_permission errno))
     [ 1062; 1146; 2013 ];
+  CCList.iter
+    (fun errno ->
+       Alcotest.(check bool)
+         (Format.asprintf "%d drops the pool" errno)
+         true
+         (is_connection errno))
+    [ 1053; 1152; 1158; 1161; 1927; 2006; 2013; 4031 ];
+  CCList.iter
+    (fun errno ->
+       Alcotest.(check bool)
+         (Format.asprintf "%d keeps the pool" errno)
+         false
+         (is_connection errno))
+    [ 1062; 1146; 1153; 1205 ];
   Lwt.return_unit
 ;;
 
@@ -199,11 +302,13 @@ let () =
                `Slow
                test_unreachable_database_settles_every_query
            ; case "failed pool retries" `Quick test_failed_pool_retries
+           ; case "backoff" `Slow test_backoff
            ] )
        ; ( "logins"
          , [ case "logins share the owner's pool" `Quick test_logins_share_the_owner_pool
            ; case "registry" `Quick test_registry
-           ; case "MariaDB permission errors" `Quick test_mariadb_permission_errors
+           ; case "strict logins" `Quick test_strict_logins
+           ; case "MariaDB error classes" `Quick test_mariadb_permission_errors
            ] )
        ]
 ;;

@@ -13,6 +13,7 @@
   fmt
   uri
   ptime
+  mtime
   uuidm)
  (wrapped true)
  (modules_without_implementation pools_sig)

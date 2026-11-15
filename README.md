@@ -130,6 +130,20 @@ rename (Db.label_ctx ~role:query root) "bob"
 This holds for nested transactions (`with_transaction` keeps the role) and for `query`, `populate` and
 `transaction`, which take `~needs`. Nothing is checked at runtime.
 
+Functions that get the Caqti connection itself (`query`, `transaction`) get a `Veins.Connection.fixed` one: on
+MariaDB its `rollback`, `with_transaction` and `populate` work around caqti-driver-mariadb 3.1 (autocommit left off
+after a rollback; `populate` not rolling back a failing row and committing the transaction it is called in), so
+the whole `Caqti_lwt.CONNECTION` interface is safe to use. Only connections taken from `Pool.fetch`'s Caqti pool
+are the driver's own; pass those through `Veins.Connection.fixed`.
+
+`populate` inserts all rows or none, and joins the transaction of a transaction context. Its table and column
+names go into the SQL as they are, like the fragments of `Veins.Dialect`: never build them from user input.
+
+A label context checks its connection before every statement (on MariaDB a ping, i.e. one more round trip); code
+running several statements is faster on one `connection_ctx` or transaction. Don't share a held context between
+concurrent threads that use transactions: only statements are serialised, so one thread's statement would join
+the transaction another has open.
+
 ### 5. Logins: one database user per role, or one for all
 
 Each role connects as a `Login`, the database's own URL (`Login.owner`) unless it names another. A database has the
@@ -148,8 +162,13 @@ let single = Database.create (Label.create "app") owner_url
 (* one user per login: the database enforces each login's grants, too *)
 let separated =
   Database.create (Label.create "app") owner_url
+    ~strict_logins:true
     ~logins:[ query_login, Url.create query_url; command_login, Url.create command_url ]
 ```
+
+A login without a URL runs with the owner's rights; veins logs that once per login. For a database meant to
+separate its users, pass `~strict_logins:true`: a role whose login has no URL (a misspelt login, a URL missing
+from the configuration) then fails with `Error.Login_not_configured` instead of quietly running as the owner.
 
 Several roles may share a login; the database then enforces only what the login is granted, and the types the rest.
 A role claiming more than its login is granted passes the compiler, but the database refuses the statement:
@@ -188,7 +207,8 @@ transactions, errors and `Pool` behave as above. Two bridges to code written wit
 - `Plain.Ctx.with_roles ctx` is the same context for functions that state their needs, e.g. those of a library:
   the single user grants whatever is asked for, and the statements join `ctx`'s transaction.
 
-For other pool sizes, apply `Veins.Plain.Make` to the pools you made: `Veins.Plain.Make (Veins.Pools.Make (Config))`.
+For other pool sizes or `Pool_options`, apply `Veins.Plain.Make` to the pools you made:
+`Veins.Plain.Make (Veins.Pools.Make_with_options (Config) (Options))`.
 
 ## Migrations
 
@@ -246,6 +266,12 @@ let () = Lwt_main.run
 Each runner call holds one connection, as the database owner unless you pass another role, e.g.
 `Runner.run_all ~role:migrator root ()`; migration statements declare no needs, the login's grants limit them.
 
+`run_all`, `up`, `down` and `mark_applied` hold a lock on the database while they run (MariaDB `GET_LOCK`,
+PostgreSQL advisory lock), so instances starting together apply each step once; the others wait, at most
+`VEINS_MIGRATION_LOCK_TIMEOUT` seconds (default 600). `status`, `pending` and `check` only read: no lock, no DDL,
+so a read-only role can call them. The state table is `veins_migration_state`, or the plain table name in
+`VEINS_MIGRATION_TABLE`.
+
 ### Drift detection
 
 ```ocaml
@@ -288,6 +314,55 @@ answers, by default indefinitely. Veins adds `connect_timeout=5` (seconds) to Po
 put `?connect_timeout=N` in the URL to choose another limit.
 
 The `veins-gen` executable is installed as part of the `veins` package.
+
+---
+
+## Pool tuning and lost databases
+
+`Pools.Make` (and the driver libraries' `Pools.Make`) use `Pool_options.default`. `Pools.Make_with_options` takes
+your own:
+
+```ocaml
+module Db =
+  Veins.Pools.Make_with_options
+    (struct
+      let database = Database.create (Label.create "root") url
+      let database_pool_size = 10
+      let expected_databases = 5
+
+      module Driver = Veins_mariadb.Driver
+    end)
+    (struct
+      let options =
+        Veins.Pool_options.{ default with statement_timeout = Some 30.; acquire_timeout = Some 10. }
+    end)
+```
+
+| Option              | Default       | Meaning                                                                             |
+|---------------------|---------------|-------------------------------------------------------------------------------------|
+| `max_use_count`     | `None`        | Close a connection after this many uses (Caqti's own default is 100)                |
+| `max_idle_size`     | pool size     | Connections kept open while idle                                                    |
+| `max_idle_age`      | `Some 300.`   | Seconds after which an idle connection is closed                                    |
+| `statement_timeout` | `None`        | Seconds after which the database aborts a statement; migrations run without it      |
+| `acquire_timeout`   | `None`        | Seconds a statement waits for a connection of an exhausted pool before it fails     |
+| `reconnect_backoff` | `(0.5, 30.)`  | Initial and longest wait before a pool that lost its database tries to reconnect    |
+
+**Connections.** There is one pool per label for the owner and one per login with a URL of its own, each opening
+up to `database_pool_size` connections: with many databases, keep that product under the server's connection
+limit. Idle connections are closed after `max_idle_age`.
+
+**Lost databases.** A connection error drops the pool, and the next statement reconnects. If that fails too, the
+pool backs off: statements fail right away with the last connection error, and after the wait a single statement
+tries again. The wait doubles up to the maximum and resets once a statement reached the database.
+`Pool.ping label` tells whether a database answers; `Pool.connect` only sets the pool up.
+
+**Timeouts.** PostgreSQL URLs get `connect_timeout=5` (see above). caqti-driver-mariadb takes no timeout from the
+URL: set `connect-timeout` (and `read-timeout` / `write-timeout`) in the `[caqti]` group of the client's `my.cnf`,
+or another group named with `?config-group=` in the URL.
+
+**TLS.** Veins doesn't touch the transport: for a database on another host, require TLS in the URL
+(`?sslmode=verify-full` on PostgreSQL) or, for MariaDB, in the `my.cnf` group (`ssl-ca`, `ssl-verify-server-cert`).
+`Url.pp` / `Url.show` mask the password, also one given as a `password` or `sslpassword` query parameter.
 
 ---
 

@@ -75,6 +75,15 @@ end)
 
 Call `Db.Pool.initialize ()` once at startup before any query.
 
+`Pools.Make_with_options (Config) (struct let options = ... end)` takes a `Pool_options.t` (connection recycling,
+`statement_timeout`, `acquire_timeout`, `reconnect_backoff`); `Pools.Make` is that with `Pool_options.default`. New
+tuning goes into `Pool_options`, not into `ConfigSig` (its consumers build that module by hand).
+
+A connection error drops only the pool it happened on (`settle` / `disconnect_entry ~pool`), then the pool backs
+off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one statement (`probe`) until that
+settled. Every path that takes a pool from `fetch_key` must go through `settle`, or the probe is never released.
+Caqti's `connect_pool` is lazy, only a statement (or `Pool.ping`) tells whether the database answers.
+
 ### Contexts, requests, roles
 
 Statements run on a `('txn, 'g) Veins.Ctx.t` (`label_ctx`, `connection_ctx`, `transaction_ctx`, `with_transaction`)
@@ -82,7 +91,8 @@ and are `Veins.Request.t` values (Caqti request + its `Need.t`). Every context n
 closed set of polymorphic variant tags and a request's needs are a lower bound (``[> `Write ]``), so a statement the
 role doesn't grant is a compile error. Nothing is checked at runtime; `test/typing` proves misuse doesn't compile,
 add a case there when adding an entry point that takes `~needs` or a request. Each role connects as a `Login`;
-`Database.create ?logins label owner_url`, logins without a URL share the owner's pool. A database refusing a
+`Database.create ?logins ?strict_logins label owner_url`, logins without a URL share the owner's pool (logged
+once) or, with `~strict_logins:true`, raise `Error.Login_not_configured`. A database refusing a
 statement the types allowed raises `Error.Permission_denied` (`Driver.is_permission_error`). The context design is
 Reynir Björnsson's (uzh/z-pool-tool#647); keep the credit in `lib/ctx.mli`, `lib/pools.ml`, README and CHANGELOG.
 
@@ -91,8 +101,12 @@ the after-commit hooks) are in `Ctx.Internal`, which `lib/veins.mli` removes fro
 make a transaction context of a connection without a transaction, or pair a role with another login's connection.
 Use `Ctx.Internal` from veins' own modules only.
 
-Never use the driver's `rollback` or caqti's `with_transaction` directly: caqti-driver-mariadb 3.1 leaves
-`autocommit` off after a rollback, `Pools.rollback` restores it (`Dialect.restore_autocommit`).
+caqti-driver-mariadb 3.1 leaves `autocommit` off after a rollback (also in caqti's `with_transaction`), and its
+`populate` starts and commits a transaction of its own and doesn't roll back when a row fails. `Connection.fixed`
+(`lib/connection.ml`) wraps a connection with these fixed, tracking whether a transaction is open from the
+`start` / `commit` / `rollback` calls on the wrapper. `Pools` wraps every connection once per borrow from the
+Caqti pool (`run`, `with_pool_connection`), so contexts and callbacks only ever see fixed connections: never pass
+on a connection taken from the Caqti pool without it, and add new driver workarounds there.
 
 ### Migrations
 
@@ -102,6 +116,10 @@ Steps are tracked individually by UUID (not per-namespace counters). `run_all` a
 module Runner = Migration.Make (Db)
 (* then: Runner.run_all, Runner.up, Runner.down, Runner.check, Runner.status, Runner.pending *)
 ```
+
+`run_all`, `up`, `down` and `mark_applied` go through `with_ctx`: one held connection, the migration lock
+(`Dialect.try_lock`, session-scoped, so it must stay on that connection), the state table created, no statement
+timeout. `status`, `pending` and `check` go through `with_read_ctx` and must stay free of DDL and locks.
 
 Generate boilerplate with `veins-gen "label text"` → `migration_<timestamp>_<slug>.ml`.
 New migration files call `Migration.register` — no explicit list to maintain.

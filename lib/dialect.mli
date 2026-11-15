@@ -44,7 +44,9 @@ val request
 
 (** Pins the session's time zone to UTC, so [NOW()] / [CURRENT_TIMESTAMP]
     agree with the UTC values Caqti writes for [Ptime.t], whatever the
-    server's time zone. Runs on every new connection. *)
+    server's time zone. Caqti's MariaDB and PostgreSQL drivers do this on
+    every new connection themselves, so veins doesn't send it; it is here for
+    sessions that changed their time zone. *)
 val set_utc : kind -> string
 
 (** Run on a connection after rolling back a transaction, before it is used
@@ -58,7 +60,31 @@ val restore_autocommit : kind -> string option
     checks can't be switched off for a session (PostgreSQL). *)
 val set_fk_checks : kind -> bool -> string option
 
-(** {1 UUIDs} *)
+(** {1 Identifiers and locks} *)
+
+(** [true] for a plain SQL identifier: letters, digits and [_], not starting
+    with a digit, at most 64 characters. The functions here taking a table,
+    a field or a name put it into the SQL as it is: check names that don't
+    come from the source code, and never pass user input. *)
+val is_identifier : string -> bool
+
+(** Counts the tables of the given name in the connection's database (its
+    schema search path on PostgreSQL). Parameter: the table name. *)
+val table_exists : kind -> string
+
+(** Tries to take a lock that the session holds until {!unlock} or until it
+    ends, without waiting: selects [1] if it got it, [0] if another session
+    holds it. The lock belongs to the connection's database. MariaDB
+    [GET_LOCK], PostgreSQL [pg_try_advisory_lock]. Parameter: the lock's
+    name. *)
+val try_lock : kind -> string
+
+(** Releases a lock taken with {!try_lock}. Parameter: the lock's name. *)
+val unlock : kind -> string
+
+(** {1 UUIDs}
+
+    [field] and the expression go into the SQL as they are. *)
 
 (** Wraps a column to return a UUID stored in the dialect's native format as
     a lowercase dashed string.

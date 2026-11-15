@@ -21,6 +21,8 @@ end
 module type Sig = sig
   module With_roles : Pools_sig.Sig
 
+  val options : Pool_options.t
+
   module Pool : sig
     val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit
     val add : ?required:bool -> Entity.Database.t -> unit
@@ -40,6 +42,7 @@ module type Sig = sig
       -> (Caqti_lwt.connection, Caqti.Error.t) Caqti_lwt_unix.Pool.t Lwt.t
 
     val connect : Entity.Label.t -> (unit, Error.t) result
+    val ping : Entity.Label.t -> (unit, Error.t) Lwt_result.t
     val disconnect : ?error:Caqti.Error.t -> Entity.Label.t -> unit
   end
 
@@ -113,6 +116,8 @@ end
 module Make (Db : Pools_sig.Sig) = struct
   module With_roles = Db
 
+  let options = Db.options
+
   module Pool = struct
     let initialize = Db.Pool.initialize
     let add = Db.Pool.add
@@ -123,6 +128,7 @@ module Make (Db : Pools_sig.Sig) = struct
     let find_all = Db.Pool.find_all
     let fetch label = Db.Pool.fetch label
     let connect label = Db.Pool.connect label
+    let ping label = Db.Pool.ping label
     let disconnect ?error label = Db.Pool.disconnect ?error label
   end
 

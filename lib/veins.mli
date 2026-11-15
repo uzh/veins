@@ -107,6 +107,10 @@ module Ctx : module type of struct
   end
   with module Internal := Ctx.Internal
 
+(** Caqti connections with the driver bugs veins knows of worked around;
+    veins only hands out such connections. *)
+module Connection = Connection
+
 (** Error types and exceptions raised by query helpers. *)
 module Error = Error
 
@@ -127,14 +131,18 @@ module Plain : module type of struct
   include Plain
 end
 
-(** The SQL that differs between MariaDB and PostgreSQL, rendered from each
-    connection's dialect. *)
-module Dialect = Dialect
+(** Tuning of the pools: recycling of connections, timeouts, reconnect
+    backoff. *)
+module Pool_options = Pool_options
 
 (** Reading the driver's errors (lost connection, missing privilege). *)
 module Driver = Driver
 
 (** {1 Building requests} *)
+
+(** The SQL that differs between MariaDB and PostgreSQL, rendered from each
+    connection's dialect. *)
+module Dialect = Dialect
 
 (** Caqti row types with custom encoders and decoders, written as lists. *)
 module Caqti_encoders = Caqti_encoders

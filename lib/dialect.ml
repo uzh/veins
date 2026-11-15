@@ -46,6 +46,48 @@ let uuid_value_fragment dialect name =
   | Postgresql -> Format.asprintf "%s::uuid" name
 ;;
 
+let is_identifier name =
+  let length = CCString.length name in
+  length > 0
+  && length <= 64
+  && CCString.for_all
+       (function
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+         | _ -> false)
+       name
+  &&
+  match CCString.get name 0 with
+  | '0' .. '9' -> false
+  | _ -> true
+;;
+
+let table_exists dialect =
+  match dialect with
+  | Mariadb ->
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND \
+     table_name = ?"
+  | Postgresql ->
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ANY \
+     (current_schemas(false)) AND table_name = LOWER(?)"
+;;
+
+(* MariaDB's lock names are global to the server and at most 64 characters:
+   hash the name together with the database. PostgreSQL's advisory locks
+   belong to the database. *)
+let mariadb_lock_name = "CONCAT('veins:', MD5(CONCAT(DATABASE(), ':', ?)))"
+
+let try_lock dialect =
+  match dialect with
+  | Mariadb -> Format.asprintf "SELECT COALESCE(GET_LOCK(%s, 0), 0)" mariadb_lock_name
+  | Postgresql -> "SELECT CASE WHEN pg_try_advisory_lock(hashtext(?)) THEN 1 ELSE 0 END"
+;;
+
+let unlock dialect =
+  match dialect with
+  | Mariadb -> Format.asprintf "SELECT COALESCE(RELEASE_LOCK(%s), 0)" mariadb_lock_name
+  | Postgresql -> "SELECT CASE WHEN pg_advisory_unlock(hashtext(?)) THEN 1 ELSE 0 END"
+;;
+
 let create_migration_table dialect ~table =
   match dialect with
   | Mariadb ->

@@ -62,10 +62,12 @@
   (ocaml
    (>= 5.0.0))
   (ocaml-lsp-server :with-dev-setup)
+  (mtime
+   (>= 2.0.0))
   (ocamlformat
    (and
     (>= 0.18.0)
-    (or :with-dev-setup :with-test)))
+    :with-dev-setup))
   (ptime
    (>= 1.1.0))
   (uuidm

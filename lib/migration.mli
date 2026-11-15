@@ -217,7 +217,24 @@ type drift =
     failure; MariaDB commits DDL implicitly).
 
     [run_all], [check], [status] and [pending] work on the migrations
-    registered for the label, or on [?migrations] when given. *)
+    registered for the label, or on [?migrations] when given.
+
+    {b One runner at a time.} [run_all], [up], [down] and [mark_applied]
+    hold a lock on the database while they run (MariaDB [GET_LOCK],
+    PostgreSQL advisory lock), so instances of an application starting
+    together apply each step once: the others wait, for at most
+    [VEINS_MIGRATION_LOCK_TIMEOUT] seconds (default 600), then fail with
+    [Error.Migration_failed]. They also create the state table if it is
+    missing, and run without the pools' statement timeout
+    ([Pool_options.statement_timeout]).
+
+    [check], [status] and [pending] only read: they take no lock and run no
+    DDL, so a role that may only read can call them, and a database without
+    a state table has nothing applied.
+
+    The state table is [veins_migration_state], or the plain table name in
+    [VEINS_MIGRATION_TABLE] (letters, digits and [_]; anything else raises
+    [Invalid_argument]). *)
 module type RunnerSig = sig
   (** Apply all unapplied steps for every migration registered for
       [db_label], oldest [written_at] first. Returns [Error _] on the first

@@ -16,6 +16,7 @@
   uri
   lwt
   lwt.unix
+  unix
   alcotest
   alcotest-lwt
   containers)
