@@ -83,6 +83,9 @@ module Database = Entity.Database
 (** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
 module Dynparam = Entity.Dynparam
 
+(** Caqti row types with custom encoders and decoders, written as lists. *)
+module Caqti_encoders = Caqti_encoders
+
 (** Error types and exceptions raised by query helpers. *)
 module Error = Error
 

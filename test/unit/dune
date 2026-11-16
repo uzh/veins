@@ -6,3 +6,8 @@
  (libraries veins caqti lwt alcotest containers uuidm)
  (preprocess
   (pps lwt_ppx)))
+
+(test
+ (name test_caqti_encoders)
+ (package veins)
+ (libraries veins caqti alcotest))

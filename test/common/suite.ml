@@ -150,6 +150,50 @@ module Make (D : Dialect) = struct
     Lwt.return (Alcotest.(check (option int)) "find_opt" None missing)
   ;;
 
+  (* A row type built with Caqti_encoders, through the database: encoding,
+     decoding, and a rejecting encoder failing the statement. *)
+  let test_custom_row_type () =
+    with_table "custom_row_type"
+    @@ fun table ->
+    let ctx = root_ctx () in
+    let entry =
+      let open Caqti_encoders in
+      let encode (id, value) : (_ Data.t, _) result =
+        if value < 0 then Error "negative" else Ok Data.[ id; value ]
+      in
+      let decode (id, (value, ())) = Ok (id, value) in
+      custom ~encode ~decode Schema.[ T.int; T.int ]
+    in
+    let insert =
+      direct
+        T.(entry -->. unit)
+        (Format.asprintf "INSERT INTO %s (id, val) VALUES (?, ?)" table)
+      |> Request.create ~needs:Need.(Roles.read & Roles.write)
+    in
+    let select =
+      direct
+        T.(unit -->* entry)
+        (Format.asprintf "SELECT id, val FROM %s ORDER BY id" table)
+      |> Request.create ~needs:Roles.read
+    in
+    let%lwt () = Db.exec ctx insert (1, 10) in
+    let%lwt () = Db.exec ctx insert (2, 20) in
+    let%lwt rows = Db.collect ctx select () in
+    Alcotest.(check (list (pair int int))) "rows" [ 1, 10; 2, 20 ] rows;
+    (* Caqti 3.1 lets the encoder's [Row_type.Reject] escape instead of
+       returning [Encode_rejected]: Request_utils.encode_param only guards the
+       partial application of the product encoder. *)
+    let%lwt rejected =
+      Lwt.catch
+        (fun () -> Db.exec ctx insert (3, -1) |> Lwt.map (fun () -> false))
+        (function
+          | Error.Failed _ | Caqti.Template.Row_type.Reject _ -> Lwt.return_true
+          | exn -> Lwt.reraise exn)
+    in
+    Alcotest.(check bool) "encode error fails the statement" true rejected;
+    check_count table 2
+  ;;
+
   (* {1 Contexts} *)
 
   let test_held_connection_is_kept () =
@@ -594,6 +638,7 @@ module Make (D : Dialect) = struct
         ; case "held connection serialises" `Quick test_held_connection_serialises
         ; case "session is UTC" `Quick test_session_is_utc
         ] )
+    ; "row types", [ case "custom row type" `Quick test_custom_row_type ]
     ; ( "transactions"
       , [ case "commit and rollback" `Quick test_commit_and_rollback
         ; case "nested transaction joins" `Quick test_nested_transaction_joins

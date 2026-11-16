@@ -25,6 +25,9 @@ from #624, #637 and #657 there.
   statement the role doesn't grant is a compile error, also in nested transactions and for `query`, `populate`
   and `transaction` (`~needs`). Every context names its role; `Role.owner` runs everything. `test/typing` checks
   that misuse doesn't compile.
+- `Veins.Caqti_encoders`: row types with custom encoders and decoders written as lists
+  (`custom ~encode ~decode Schema.[ int; string ]`, encoders returning `Data.[ id; name ]`), moved from the pool
+  tool's database module.
 - `Veins.Login` and per-login URLs: `Database.create ?logins label owner_url`. A login without a URL of its own
   connects with the owner's, on the owner's pool, so a database with a single user needs only its URL.
 - `Error.Permission_denied` (label, login, role, declared needs): the database refused a statement the types
