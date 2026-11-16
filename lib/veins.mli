@@ -49,22 +49,14 @@
     The context design ({!Ctx}) comes from Reynir Björnsson's database
     refactoring of the pool tool (uzh/z-pool-tool#647). *)
 
-(** Opaque database label used as the key for pool lookups. *)
+(** {1 Databases} *)
+
+(** The name a database is registered under, and the key of its pools. *)
 module Label = Entity.Label
 
-(** A database user a role connects as. *)
-module Login = Entity.Login
-
-(** The rights a statement needs, as a type. *)
-module Need = Entity.Need
-
-(** A part of the application, with the rights it has as a type, and the
-    login it connects as. *)
-module Role = Entity.Role
-
-(** Database connection URL.  Opaque — the raw connection string is not
-    accessible after construction.  Pass the value to
-    {!Database.create}. *)
+(** Database connection URL. Opaque: the raw connection string is not
+    accessible after construction, and [pp] / [show] mask its password. Pass
+    the value to {!Database.create}. *)
 module Url : sig
   type t = Entity.Url.t
 
@@ -74,20 +66,29 @@ module Url : sig
   val show : t -> string
 end
 
+(** A database user a role connects as. *)
+module Login = Entity.Login
+
 (** Connection and migration status of a database entry. *)
 module Status = Entity.Status
 
-(** Named database connection record. *)
+(** A database to register: its label, the owner's URL and the URLs of its
+    other logins. *)
 module Database = Entity.Database
 
-(** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
-module Dynparam = Entity.Dynparam
+(** {1 Roles} *)
 
-(** Caqti row types with custom encoders and decoders, written as lists. *)
-module Caqti_encoders = Caqti_encoders
+(** The rights a statement needs, as a type. *)
+module Need = Entity.Need
 
-(** Error types and exceptions raised by query helpers. *)
-module Error = Error
+(** A part of the application, with the rights it has as a type, and the
+    login it connects as. *)
+module Role = Entity.Role
+
+(** {1 Statements} *)
+
+(** Caqti requests with the rights they need. *)
+module Request = Request
 
 (** Database contexts: a label, a held connection, or a transaction. Built
     by a pool ({!Pools_sig.Sig}). *)
@@ -96,18 +97,33 @@ module Ctx : module type of struct
   end
   with module Internal := Ctx.Internal
 
-(** Caqti requests with the rights they need. *)
-module Request = Request
+(** Error types and exceptions raised by query helpers. *)
+module Error = Error
+
+(** {1 Pools} *)
+
+(** The main pool functor. Apply [Pools.Make(Config)] to obtain a
+    database module for one pool family; the driver packages
+    ([Veins_mariadb.Pools.Make], [Veins_postgresql.Pools.Make]) need only
+    the database. *)
+module Pools = Pools
+
+(** Module-type signatures for the pool functor: its configuration and what
+    it returns (pool lifecycle, contexts, statements). *)
+module Pools_sig = Pools_sig
 
 (** SQL dialect implementations (MariaDB / PostgreSQL DDL differences). *)
 module Dialect = Dialect
 
-(** Module-type signatures for the pool functor. *)
-module Pools_sig = Pools_sig
+(** {1 Building requests} *)
 
-(** The main pool functor. Apply [Pools.Make(Config)] to obtain a
-    database module for one pool family. *)
-module Pools = Pools
+(** Caqti row types with custom encoders and decoders, written as lists. *)
+module Caqti_encoders = Caqti_encoders
+
+(** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
+module Dynparam = Entity.Dynparam
+
+(** {1 Migrations} *)
 
 (** Standalone migration module.  Types and registry at the top level;
     apply [Migration.Make(Db)] to get a runner for a specific pool. *)

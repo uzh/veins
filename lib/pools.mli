@@ -1,7 +1,5 @@
-(** Public interface for {!Pools}.Make.
-
-    Re-exposes {!Pools_sig.Sig} so callers only need to open {!Veins} and use
-    [Veins.Pools.Make] to instantiate a pool.
+(** Makes pools. The configuration ({!Pools_sig.ConfigSig}) and what an
+    application gets ({!Pools_sig.Sig}) are in {!Pools_sig}.
 
     @canonical Veins.Pools *)
 

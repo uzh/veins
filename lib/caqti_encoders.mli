@@ -39,7 +39,7 @@ module Schema : sig
 
   (** The row type the schema stands for.
 
-      @raise Invalid_argument if the schema is empty. *)
+      Raises [Invalid_argument] if the schema is empty. *)
   val make_type : 'a t -> 'a Caqti.Template.Row_type.t
 end
 
@@ -47,7 +47,7 @@ end
     [schema]. An [Error] from [encode] or [decode] fails the statement with
     Caqti's encode / decode error.
 
-    @raise Invalid_argument if the schema is empty. *)
+    Raises [Invalid_argument] if the schema is empty. *)
 val custom
   :  encode:('b -> ('a Data.t, string) result)
   -> decode:('a -> ('b, string) result)
