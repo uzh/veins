@@ -112,6 +112,3 @@ module Pools = Pools
 (** Standalone migration module.  Types and registry at the top level;
     apply [Migration.Make(Db)] to get a runner for a specific pool. *)
 module Migration = Migration
-
-(** Global in-process registry of named {!Database.t} entries. *)
-module Databases = Databases

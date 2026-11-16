@@ -50,6 +50,7 @@ from #624, #637 and #657 there.
   `Pool.connect` and `Pool.disconnect` take `?login` instead of `?role`. `Database.t` is a private record: its
   fields can be read, building one goes through `Database.create`, which checks the logins, and
   `Database.with_status` changes its status.
+- **Breaking:** `Veins.Databases`, a global registry of databases nothing used, is gone: the pools keep their own (`Pool.add`, `Pool.find`, `Pool.find_all`).
 - `Pool.drop`, `Pool.reset` and `Pool.disconnect` return `unit` and close connections in the background.
 - Pools connect lazily, on first use.
 
