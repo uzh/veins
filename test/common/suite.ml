@@ -244,6 +244,106 @@ module Make (D : Dialect) = struct
     Db.exec (root_ctx ()) (table_ddl (fun kind -> Dialect.drop kind ~table)) ()
   ;;
 
+  (* {1 Foreign key checks} *)
+
+  let fk_parent = "veins_t_fk_parent"
+  let fk_child = "veins_t_fk_child"
+
+  let create_fk_tables () =
+    let%lwt () =
+      Db.exec
+        (root_ctx ())
+        (table_ddl (fun (_ : Dialect.kind) ->
+           Format.asprintf "CREATE TABLE %s (id INTEGER PRIMARY KEY)" fk_parent))
+        ()
+    in
+    Db.exec
+      (root_ctx ())
+      (table_ddl (fun kind ->
+         Format.asprintf
+           "CREATE TABLE %s (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL, FOREIGN \
+            KEY (parent_id) REFERENCES %s (id))%s"
+           fk_child
+           fk_parent
+           (match kind with
+            | Dialect.Mariadb -> " ENGINE=InnoDB"
+            | Dialect.Postgresql -> "")))
+      ()
+  ;;
+
+  let drop_fk_tables () =
+    let drop table =
+      Db.exec (root_ctx ()) (table_ddl (fun kind -> Dialect.drop kind ~table)) ()
+    in
+    let%lwt () = drop fk_child in
+    drop fk_parent
+  ;;
+
+  let insert_child =
+    direct
+      T.(t2 int int -->. unit)
+      (Format.asprintf "INSERT INTO %s (id, parent_id) VALUES (?, ?)" fk_child)
+  ;;
+
+  let test_without_fk_checks () =
+    let%lwt () = drop_fk_tables () in
+    let%lwt () = create_fk_tables () in
+    Lwt.finalize
+      (fun () ->
+         Db.connection_ctx ~role:owner root (fun ctx ->
+           Db.query
+             ~needs:Need.(Roles.read & Roles.write)
+             ctx
+             (fun ((module C : Caqti_lwt.CONNECTION) as connection) ->
+                let switches = Dialect.kind C.dialect = Dialect.Mariadb in
+                (* an orphan row is refused: the checks are on *)
+                let checks_on name id =
+                  if switches
+                  then (
+                    match%lwt C.exec insert_child (id, 999) with
+                    | Ok () -> Alcotest.failf "%s: the orphan row was accepted" name
+                    | Error (_ : Caqti.Error.t) -> Lwt.return_unit)
+                  else Lwt.return_unit
+                in
+                let%lwt () = checks_on "before" 1 in
+                (* f succeeds *)
+                let%lwt result =
+                  Connection.without_fk_checks connection (fun () ->
+                    if switches
+                    then Lwt_result.map (fun () -> 42) (C.exec insert_child (2, 999))
+                    else Lwt_result.return 42)
+                in
+                (match result with
+                 | Ok n -> Alcotest.(check int) "f's result" 42 n
+                 | Error error ->
+                   Alcotest.failf "without_fk_checks: %a" Caqti.Error.pp error);
+                let%lwt () = checks_on "after Ok" 3 in
+                (* f fails: its error is kept *)
+                let%lwt result =
+                  Connection.without_fk_checks connection (fun () ->
+                    C.exec (direct T.(unit -->. unit) "DELETE FROM veins_t_missing") ())
+                in
+                (match result with
+                 | Error error ->
+                   Alcotest.(check bool)
+                     (Format.asprintf "f's error: %a" Caqti.Error.pp error)
+                     true
+                     (CCString.mem ~sub:"veins_t_missing" (Caqti.Error.show error))
+                 | Ok () -> Alcotest.fail "expected f's error");
+                let%lwt () = checks_on "after Error" 4 in
+                (* f raises: re-raised *)
+                let%lwt () =
+                  ignore_exit (fun () ->
+                    let%lwt (_ : (unit, Caqti.Error.t) result) =
+                      Connection.without_fk_checks connection (fun () -> Lwt.fail Exit)
+                    in
+                    Alcotest.fail "expected Exit")
+                in
+                let%lwt () = checks_on "after an exception" 5 in
+                Lwt_result.return ())))
+      drop_fk_tables
+  ;;
+
   (* {1 Contexts} *)
 
   let test_held_connection_is_kept () =
@@ -1128,6 +1228,7 @@ module Make (D : Dialect) = struct
         ; case "nested transaction joins" `Quick test_nested_transaction_joins
         ; case "after_commit hooks" `Quick test_after_commit
         ; case "rollback restores autocommit" `Quick test_rollback_restores_autocommit
+        ; case "without_fk_checks" `Quick test_without_fk_checks
         ] )
     ; ( "errors"
       , [ case "query error keeps the pool" `Quick test_query_error_keeps_pool

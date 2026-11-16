@@ -1,3 +1,7 @@
+let src = Logs.Src.create "veins.connection"
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 let restore_autocommit =
   Dialect.request
     Caqti.Template.Request.Static
@@ -85,4 +89,42 @@ let fixed ((module C : Caqti_lwt.CONNECTION) as connection) : Caqti_lwt.connecti
   match Dialect.kind C.dialect with
   | Dialect.Postgresql -> connection
   | Dialect.Mariadb -> (module Fixed_mariadb (C))
+;;
+
+let set_fk_checks enabled =
+  Dialect.request
+    Caqti.Template.Request.Direct
+    Caqti.Templater.T.(unit -->. unit)
+    (fun kind -> Dialect.set_fk_checks kind enabled |> CCOption.get_or ~default:"")
+;;
+
+let disable_fk_checks = set_fk_checks false
+let enable_fk_checks = set_fk_checks true
+
+let without_fk_checks (module C : Caqti_lwt.CONNECTION) f =
+  match Dialect.set_fk_checks (Dialect.kind C.dialect) false with
+  | None -> f ()
+  | Some (_ : string) ->
+    let enable () =
+      match%lwt C.exec enable_fk_checks () with
+      | Ok () -> Lwt.return_unit
+      | Error error ->
+        Lwt.return
+          (Log.err (fun m ->
+             m "Failed to turn foreign key checks back on: %a" Caqti.Error.pp error))
+    in
+    (match%lwt C.exec disable_fk_checks () with
+     | Error _ as error -> Lwt.return error
+     | Ok () ->
+       (match%lwt f () with
+        | Ok value ->
+          (match%lwt C.exec enable_fk_checks () with
+           | Ok () -> Lwt_result.return value
+           | Error _ as error -> Lwt.return error)
+        | Error _ as error ->
+          let%lwt () = enable () in
+          Lwt.return error
+        | exception exn ->
+          let%lwt () = enable () in
+          Lwt.reraise exn))
 ;;

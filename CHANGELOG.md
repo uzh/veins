@@ -76,6 +76,8 @@ from #624, #637 and #657 there.
 - `Dialect.list_tables`, `Dialect.truncate` and `Dialect.drop` (PostgreSQL with `CASCADE`), and
   `Migration.state_table`, the name of the migration state table (`VEINS_MIGRATION_TABLE` honoured), for code that
   empties every table but that one.
+- `Connection.without_fk_checks`: runs a function with a connection's foreign key checks off and turns them back on
+  however it ends (a no-op on PostgreSQL). Migration steps with `check_fk:false` use it.
 
 #### Changed
 

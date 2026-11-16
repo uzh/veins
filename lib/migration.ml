@@ -259,30 +259,20 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       (Id.value step_id)
   ;;
 
-  let dialect_kind ctx =
-    Db.query
-      ~needs:Entity.Need.none
-      ctx
-      (fun (module Connection : Caqti_lwt.CONNECTION) ->
-         Lwt_result.return (Dialect.kind Connection.dialect))
-  ;;
-
-  (* [SET FOREIGN_KEY_CHECKS] is session state: [ctx] holds one connection, so
-     both toggles and the step run on it. *)
+  (* [SET FOREIGN_KEY_CHECKS] is session state: runner contexts hold one
+     connection, so both toggles and the step run on it. The step's own
+     statements go through [ctx], whose mutex [Db.query] would hold. *)
   let with_fk_disabled ctx f =
-    let%lwt kind = dialect_kind ctx in
-    match Dialect.set_fk_checks kind false with
-    | None -> f ()
-    | Some (_ : string) ->
-      let set enabled =
-        Dialect.request
-          Caqti.Template.Request.Direct
-          T.(unit -->. unit)
-          (fun kind -> Dialect.set_fk_checks kind enabled |> CCOption.get_or ~default:"")
-        |> unchecked
-      in
-      let%lwt () = Db.exec ctx (set false) () in
-      Lwt.finalize f (fun () -> Db.exec ctx (set true) ())
+    let connection =
+      Ctx.Internal.connection ctx
+      |> CCOption.get_exn_or "migration context without connection"
+    in
+    let%lwt result =
+      Connection.without_fk_checks connection (fun () -> Lwt_result.ok (f ()))
+    in
+    (* raises veins' usual exception, with label and role, on [Error] *)
+    Db.query ~needs:Entity.Need.none ctx (fun (_ : Caqti_lwt.connection) ->
+      Lwt.return result)
   ;;
 
   (* The step and its state row commit together where the dialect has
