@@ -24,7 +24,7 @@ services:
     image: mariadb:10.6
     restart: unless-stopped
     command: --max_allowed_packet=629145600
-    ports: [ "127.0.0.1:3344:3306" ]
+    ports: [ 3344:3306 ]
     environment:
       TZ: Europe/Zurich
       MYSQL_USER: admin
@@ -38,7 +38,7 @@ services:
   database-postgres:
     image: postgres:18
     restart: unless-stopped
-    ports: [ "127.0.0.1:3345:5432" ]
+    ports: [ 3345:5432 ]
     environment:
       TZ: Europe/Zurich
       POSTGRES_PASSWORD: root
