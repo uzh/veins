@@ -39,8 +39,9 @@ make test
 |------|---------|
 | `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
 | `lib/veins.mli` | The public interface: every module of `lib/` an application may use, in sections |
-| `lib/mariadb/` | `veins.mariadb` library (optional) — dialect + pre-configured `Pools.Make` |
-| `lib/postgresql/` | `veins.postgresql` library (optional) — dialect + pre-configured `Pools.Make` |
+| `lib/plain.ml` | `Veins.Plain` — the pools without roles, logins and needs (one database user) |
+| `lib/mariadb/` | `veins.mariadb` library (optional) — dialect + pre-configured `Pools.Make` / `Plain.Make` |
+| `lib/postgresql/` | `veins.postgresql` library (optional) — dialect + pre-configured `Pools.Make` / `Plain.Make` |
 | `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
 | `test/unit/` | Tests without a database (run anywhere) |
 | `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |

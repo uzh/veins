@@ -46,6 +46,10 @@
     the types allowed with [Error.Permission_denied]; with a single URL only
     the types separate the roles.
 
+    {b Without roles.} An application with one database user for everything
+    takes {!Plain} instead ([Veins_mariadb.Plain.Make]): contexts without
+    a role, plain Caqti requests, no [~role] and no [~needs].
+
     {b Libraries.} The opam package [veins] installs the library [veins]
     and, when their Caqti driver is installed, [veins.mariadb]
     ([Veins_mariadb], needs [caqti-driver-mariadb]) and [veins.postgresql]
@@ -117,6 +121,11 @@ module Pools = Pools
 (** Module-type signatures for the pool functor: its configuration and what
     it returns (pool lifecycle, contexts, statements). *)
 module Pools_sig = Pools_sig
+
+(** Pools for one database user: no roles, logins or needs. *)
+module Plain : module type of struct
+  include Plain
+end
 
 (** SQL dialect implementations (MariaDB / PostgreSQL DDL differences). *)
 module Dialect = Dialect

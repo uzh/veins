@@ -11,7 +11,10 @@
 
     [database_pool_size] defaults to [10] and [expected_databases] to [5].
     For custom values use {!Veins.Pools.Make} directly with
-    [module Dialect = Veins_postgresql.Dialect]. *)
+    [module Dialect = Veins_postgresql.Dialect].
+
+    With one database user for everything, {!Plain} gives the same pools
+    without roles and needs. *)
 
 (** PostgreSQL dialect: {!Veins.Dialect.Postgresql}, plus the driver's errors
     that mean the connection is gone. *)
@@ -79,4 +82,21 @@ module Pools = struct
 
       module Dialect = Dialect
     end)
+end
+
+(** Pools for one database user, with the PostgreSQL dialect pre-configured: no
+    roles, logins or needs, see {!Veins.Plain}.
+
+    {[
+    module Db = Veins_postgresql.Plain.Make (struct
+        let database = Veins.Database.create (Veins.Label.create "root") url
+      end)
+
+    let name = Db.find_opt (Db.label_ctx root) find_name 1
+    ]} *)
+module Plain = struct
+  module Make (C : sig
+      val database : Veins.Database.t
+    end) =
+    Veins.Plain.Make (Pools.Make (C))
 end

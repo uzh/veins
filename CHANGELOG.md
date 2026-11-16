@@ -14,6 +14,14 @@ To be released as 0.2.0.
   optional dependencies of `veins`. In an application, depend on `veins` and the driver in the opam file, and name
   `veins.mariadb` / `veins.postgresql` in dune.
 
+### Added: pools without roles
+
+- `Veins.Plain` (`Veins_mariadb.Plain.Make`, `Veins_postgresql.Plain.Make`, or `Veins.Plain.Make` over any
+  pools): the pools for an application with one database user. Contexts carry no role (`'txn Plain.Ctx.t`),
+  statements are plain Caqti requests, and nothing takes `~role`, `~login` or `~needs`. `Db.With_roles` are the
+  pools underneath (e.g. for `Migration.Make`), and `Plain.Ctx.with_roles` passes a context to code that states
+  its needs.
+
 ### 💥 Breaking: database contexts, typed roles and logins
 
 The connection handling of the pool tool's database module moved here. The context design (`Veins.Ctx`: label,

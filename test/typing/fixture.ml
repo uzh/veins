@@ -39,3 +39,17 @@ let (_ : string option Lwt.t) = Db.find_opt (Db.label_ctx ~role:query label) fin
 let (_ : string option Lwt.t) = Db.find_opt (Db.label_ctx ~role:command label) find 1
 let (_ : unit Lwt.t) = save (Db.label_ctx ~role:command label) 1
 let (_ : unit Lwt.t) = save (Db.label_ctx ~role:Veins.Role.owner label) 1
+
+(* Without roles: plain Caqti requests on contexts that name no role, and
+   statements with needs through [with_roles]. *)
+module Plain = Veins.Plain.Make (Db)
+
+let plain_find =
+  Caqti.Templater.static T.(int -->? string) "SELECT name FROM t WHERE id = ?"
+;;
+
+let (_ : string option Lwt.t) = Plain.find_opt (Plain.label_ctx label) plain_find 1
+
+let (_ : unit Lwt.t) =
+  Plain.transaction_ctx label (fun ctx -> save (Veins.Plain.Ctx.with_roles ctx) 1)
+;;

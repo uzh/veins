@@ -629,6 +629,95 @@ module Make (D : Dialect) = struct
     Db.exec (root_ctx ()) (drop_table "veins_t_mig") ()
   ;;
 
+  (* {1 Without roles} *)
+
+  module Plain_db = Veins.Plain.Make (Db)
+
+  (* The statements above as plain Caqti requests. *)
+  let plain = Request.caqti
+
+  let test_plain_statements () =
+    with_table "plain"
+    @@ fun table ->
+    let ctx = Plain_db.label_ctx root in
+    let%lwt () = Plain_db.exec ctx (plain (insert table)) (1, 10) in
+    let%lwt () =
+      Plain_db.populate ctx table [ "id"; "val" ] T.(t2 int int) [ 2, 20; 3, 30 ]
+    in
+    let%lwt found = Plain_db.collect ctx (plain (rows table)) () in
+    Alcotest.(check (list (pair int int))) "rows" [ 1, 10; 2, 20; 3, 30 ] found;
+    let%lwt n = Plain_db.find ctx (plain (count table)) () in
+    Alcotest.(check int) "count" 3 n;
+    let%lwt n =
+      Plain_db.query ctx (fun connection ->
+        let module Connection = (val connection : Caqti_lwt.CONNECTION) in
+        Connection.find (plain (count table)) ())
+    in
+    Alcotest.(check int) "count on the connection" 3 n;
+    let%lwt ids =
+      Plain_db.connection_ctx root (fun ctx ->
+        let%lwt first = Plain_db.find ctx (plain (int_query D.connection_id_sql)) () in
+        let%lwt second = Plain_db.find ctx (plain (int_query D.connection_id_sql)) () in
+        Lwt.return (first, second))
+    in
+    Alcotest.(check bool) "one held connection" true (fst ids = snd ids);
+    Lwt.return_unit
+  ;;
+
+  let test_plain_transactions () =
+    with_table "plain_txn"
+    @@ fun table ->
+    let insert = plain (insert table) in
+    let committed = ref [] in
+    let note name ctx =
+      Veins.Plain.Ctx.after_commit ctx (fun () -> committed := name :: !committed)
+    in
+    let%lwt () =
+      Plain_db.transaction_ctx root (fun ctx ->
+        note "outer" ctx;
+        let%lwt () = Plain_db.exec ctx insert (1, 1) in
+        Plain_db.with_transaction ctx (fun inner ->
+          note "inner" inner;
+          Alcotest.(check bool)
+            "in a transaction"
+            true
+            (Veins.Plain.Ctx.is_transaction inner);
+          Plain_db.exec inner insert (2, 2)))
+    in
+    let%lwt () =
+      ignore_exit (fun () ->
+        Plain_db.transaction_ctx root (fun ctx ->
+          note "rolled back" ctx;
+          let%lwt () = Plain_db.exec ctx insert (3, 3) in
+          Lwt.fail Exit))
+    in
+    Alcotest.(check (list string))
+      "hooks of the commit only"
+      [ "inner"; "outer" ]
+      !committed;
+    check_count table 2
+  ;;
+
+  (* Statements with needs run on a single-user context, in its
+     transaction. *)
+  let test_plain_with_roles () =
+    with_table "plain_roles"
+    @@ fun table ->
+    let%lwt () =
+      Plain_db.transaction_ctx root (fun ctx ->
+        let%lwt () = Db.exec (Veins.Plain.Ctx.with_roles ctx) (insert table) (1, 1) in
+        let%lwt n = Plain_db.find ctx (plain (count table)) () in
+        Lwt.return (Alcotest.(check int) "seen in the transaction" 1 n))
+    in
+    let%lwt () =
+      ignore_exit (fun () ->
+        Plain_db.transaction_ctx root (fun ctx ->
+          let%lwt () = Db.exec (Veins.Plain.Ctx.with_roles ctx) (insert table) (2, 2) in
+          Lwt.fail Exit))
+    in
+    check_count table 1
+  ;;
+
   let cases =
     let open Alcotest_lwt in
     let case name speed f = test_case name speed (fun (_ : Lwt_switch.t) () -> f ()) in
@@ -658,6 +747,11 @@ module Make (D : Dialect) = struct
       , [ case "roles run their statements" `Quick test_roles_run_their_statements
         ; case "roles run as their user" `Quick test_roles_run_as_their_user
         ; case "overstated role is refused" `Quick test_overstated_role_is_refused
+        ] )
+    ; ( "without roles"
+      , [ case "statements" `Quick test_plain_statements
+        ; case "transactions and hooks" `Quick test_plain_transactions
+        ; case "statements with needs join" `Quick test_plain_with_roles
         ] )
     ; "migrations", [ case "run_all, check, down" `Quick test_migration ]
     ]
