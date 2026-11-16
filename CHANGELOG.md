@@ -41,7 +41,9 @@ from #624, #637 and #657 there.
 - Query helpers take a context and a `Request.t`; `query`, `populate`, `transaction` and `transaction_iter` take
   `~needs`. The migration runner takes `?role` (default `Role.owner`) and runs on one held connection.
 - `Database.create` takes the owner's URL and optional `~logins` instead of `Main` / `Multiple`; `Pool.fetch`,
-  `Pool.connect` and `Pool.disconnect` take `?login` instead of `?role`.
+  `Pool.connect` and `Pool.disconnect` take `?login` instead of `?role`. `Database.t` is a private record: its
+  fields can be read, building one goes through `Database.create`, which checks the logins, and
+  `Database.with_status` changes its status.
 - `Pool.drop`, `Pool.reset` and `Pool.disconnect` return `unit` and close connections in the background.
 - Pools connect lazily, on first use.
 

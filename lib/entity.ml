@@ -156,6 +156,7 @@ module Database = struct
   let label { label; _ } = label
   let status { status; _ } = status
   let owner { owner; _ } = owner
+  let with_status status database = { database with status }
   let logins { logins; _ } = CCList.map fst logins
   let has_login { logins; _ } login = CCList.mem_assoc ~eq:Login.equal login logins
 

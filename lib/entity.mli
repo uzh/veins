@@ -151,7 +151,8 @@ end
 
 (** @canonical Veins.Database *)
 module Database : sig
-  type t =
+  (** Built with {!create} only, which checks the logins. *)
+  type t = private
     { label : Label.t
     ; status : Status.t
     ; owner : Url.t (** The database's own URL, see {!Login.owner}. *)
@@ -168,6 +169,9 @@ module Database : sig
   val label : t -> Label.t
   val status : t -> Status.t
   val owner : t -> Url.t
+
+  (** [with_status status database] is [database] with its status changed. *)
+  val with_status : Status.t -> t -> t
 
   (** The logins with a URL of their own. *)
   val logins : t -> Login.t list
