@@ -1005,13 +1005,13 @@ module Make (D : Dialect) = struct
         create ns ~written_at:(ptime_of_string "2024-01-01T00:00:00Z")
         |> add_step
              (Step.create
-                ~id:(Id.create (Id.derive ~namespace:(Namespace.value ns) ~index:0))
+                ~id:(Id.derive ~namespace:(Namespace.value ns) ~index:0)
                 ~label:"create table"
                 ~down:"DROP TABLE IF EXISTS veins_t_mig"
                 "CREATE TABLE veins_t_mig (id INTEGER PRIMARY KEY)")
         |> add_step
              (Step.create
-                ~id:(Id.create (Id.derive ~namespace:(Namespace.value ns) ~index:1))
+                ~id:(Id.derive ~namespace:(Namespace.value ns) ~index:1)
                 ~label:"insert row without FK checks"
                 ~check_fk:false
                 ~down:"DELETE FROM veins_t_mig WHERE id = 42"
@@ -1047,7 +1047,7 @@ module Make (D : Dialect) = struct
      exists), [mark_applied] records it, [up] runs only the rest. *)
   let test_migration_import () =
     let namespace = Format.asprintf "veins_test_import_%d" (Random.int 100000) in
-    let id index = Migration.Id.(create (derive ~namespace ~index)) in
+    let id index = Migration.Id.derive ~namespace ~index in
     let mig =
       Migration.(
         create
@@ -1095,7 +1095,7 @@ module Make (D : Dialect) = struct
   (* Instances of an application starting together: each step runs once. *)
   let test_migration_runs_once () =
     let namespace = Format.asprintf "veins_test_lock_%d" (Random.int 100000) in
-    let id index = Migration.Id.(create (derive ~namespace ~index)) in
+    let id index = Migration.Id.derive ~namespace ~index in
     let mig =
       Migration.(
         create

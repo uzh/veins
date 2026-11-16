@@ -72,8 +72,10 @@ module Id : sig
       0-based position [index] of [namespace]. Use it for migrations written
       without step ids, e.g. when importing the state of a counter-based
       migration table: the same namespace and position always give the same
-      id. *)
-  val derive : namespace:string -> index:int -> string
+      id.
+
+      Raises [Invalid_argument] for a negative [index]. *)
+  val derive : namespace:string -> index:int -> t
 
   val value : t -> string
   val equal : t -> t -> bool
