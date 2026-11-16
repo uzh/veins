@@ -67,6 +67,14 @@ module Id : sig
   type t
 
   val create : string -> t
+
+  (** [derive ~namespace ~index] is a stable UUID (v5) for the step at
+      0-based position [index] of [namespace]. Use it for migrations written
+      without step ids, e.g. when importing the state of a counter-based
+      migration table: the same namespace and position always give the same
+      id. *)
+  val derive : namespace:string -> index:int -> string
+
   val value : t -> string
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
@@ -200,47 +208,50 @@ type drift =
       ; step_ids : Id.t list
       }
 
-(** Interface satisfied by the output of {!Make}. *)
+(** Interface satisfied by the output of {!Make}.
+
+    Every function runs on one connection held for the whole call, as
+    [?role] (default {!Veins.Role.owner}, i.e. the database's own URL).
+    Migration statements declare no needs: the login's grants are what
+    limits them. Each step runs in a
+    transaction together with its state row (PostgreSQL rolls back both on
+    failure; MariaDB commits DDL implicitly). *)
 module type RunnerSig = sig
   (** Apply all unapplied steps for every migration registered for
-      [db_label] (in registration order).  Returns [Ok ()] when all steps
-      are applied or already up to date.  Returns [Error _] on the first
-      failure, leaving remaining migrations unattempted. *)
-  val run_all : Entity.Label.t -> unit -> (unit, Error.t) Lwt_result.t
+      [db_label], oldest [written_at] first. Returns [Error _] on the first
+      failure, leaving the remaining migrations unattempted. *)
+  val run_all
+    :  ?role:_ Entity.Role.t
+    -> Entity.Label.t
+    -> unit
+    -> (unit, Error.t) Lwt_result.t
 
-  (** Apply all unapplied steps in [migration] to [db_label].
-      Already-applied steps (identified by their [id] UUID) are skipped.
-      Returns [Error _] on the first step failure. *)
-  val up : Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
+  (** Apply the unapplied steps of [migration] to [db_label]. *)
+  val up : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
 
-  (** Revert all applied steps in [migration] from [db_label] in {b reverse} order.  Steps whose [down] is [None] are logged and
-      skipped.  Returns [Error _] on the first failure. *)
-  val down : Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
+  (** Revert the applied steps of [migration] in reverse order. Steps without
+      [down] are logged and skipped. *)
+  val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
 
-  (** Compare the in-process registry against the migration-state table
-      and return every detected {!drift}.  An empty list means the
-      database is fully in sync with the registry.
+  (** Compare the registry with the state table and return every {!drift}
+      ([[]] when in sync). Also logs each one as a warning. *)
+  val check : ?role:_ Entity.Role.t -> Entity.Label.t -> unit -> drift list Lwt.t
 
-      Emits a [Warn]-level log message for each discrepancy found, so
-      calling this during application startup provides an operational
-      signal without requiring the caller to inspect the return value.
+  (** [(namespace, applied_count, total_count)] for every migration
+      registered for [db_label]. *)
+  val status
+    :  ?role:_ Entity.Role.t
+    -> Entity.Label.t
+    -> unit
+    -> (Namespace.t * int * int) list Lwt.t
 
-      Detected drift kinds:
-      - {!Pending}: steps in the registry not yet applied to the DB.
-      - {!Orphaned}: step IDs in the state table absent from the
-        registry (migration removed after deploy). *)
-  val check : Entity.Label.t -> unit -> drift list Lwt.t
-
-  (** Return [(namespace, applied_count, total_count)] for every
-      migration registered for [db_label].  Only covers migrations
-      present in the current process registry; steps applied by a
-      previous deployment that are no longer registered are not
-      included. *)
-  val status : Entity.Label.t -> unit -> (Namespace.t * int * int) list Lwt.t
-
-  (** [(namespace, pending_step_count)] for every migration that has at
-      least one unapplied step. *)
-  val pending : Entity.Label.t -> unit -> (Namespace.t * int) list Lwt.t
+  (** [(namespace, pending_step_count)] for every migration with unapplied
+      steps. *)
+  val pending
+    :  ?role:_ Entity.Role.t
+    -> Entity.Label.t
+    -> unit
+    -> (Namespace.t * int) list Lwt.t
 end
 
 (** Instantiate a migration runner backed by [Db].

@@ -50,27 +50,97 @@ module Db = Veins.Pools.Make (struct
 end)
 ```
 
-### 2. Run queries
+### 2. Declare roles and what statements need
+
+A role is a part of your application with a type: the rights it has, as polymorphic variant tags you choose. A
+statement's needs are a lower bound of those tags. Declare each once, with its type:
 
 ```ocaml
-let find_user id =
-  let req = Caqti_type.(int ->? string) "SELECT name FROM users WHERE id = ?" in
-  Db.find_opt (Label.create "root") req id
+let read : [> `Read ] Need.t = Need.v "read"
+let write : [> `Write ] Need.t = Need.v "write"
 
-let create_user name =
-  let req = Caqti_type.(string ->. unit) "INSERT INTO users (name) VALUES (?)" in
-  Db.exec (Label.create "root") req name
+let query : [ `Read ] Role.t = Role.v "query"
+let command : [ `Read | `Write ] Role.t = Role.v "command"
+
+let find_user =
+  {sql| SELECT name FROM users WHERE id = ? |sql}
+  |> Caqti_type.(int ->? string)
+  |> Request.create ~needs:read
+
+let create_user =
+  {sql| INSERT INTO users (name) VALUES (?) |sql}
+  |> Caqti_type.(string ->. unit)
+  |> Request.create ~needs:Need.(read & write)
 ```
 
-### 3. Transactions
+`Need.none` declares no needs (e.g. `SELECT 1`, or code that hasn't declared them yet). `Role.owner` runs every
+statement.
+
+### 3. Run them on a context
+
+A context says where statements run and as which role: `label_ctx` takes a fresh connection per statement,
+`connection_ctx` holds one connection, `transaction_ctx` holds one connection inside a transaction.
 
 ```ocaml
-Db.transaction (Label.create "root") (fun () ->
-  let%lwt () = Db.exec (Label.create "root") insert_req row in
-  Lwt.return_unit)
+let root = Label.create "root"
+
+let%lwt name = Db.find_opt (Db.label_ctx ~role:query root) find_user 42
+
+let%lwt () =
+  Db.transaction_ctx ~role:command root (fun ctx ->
+    Ctx.after_commit ctx (fun () -> Logs.info (fun m -> m "user created"));
+    Db.exec ctx create_user "alice")
 ```
 
----
+`Db.with_transaction ctx f` joins `ctx` when it is a transaction already, so functions can ask for a transaction
+without knowing whether their caller opened one. Hooks registered with `Ctx.after_commit` run after the commit and
+are dropped on rollback.
+
+Errors the database reports raise `Error.Failed` with the label, login, role and untouched Caqti error; match on
+`Error.cause_of_exn exn` (e.g. `` `Unique_violation ``) instead of on messages. Only errors that mean the connection
+is gone drop and reconnect the pool.
+
+### 4. Roles are checked by the compiler
+
+A context carries its role's type, so a statement the role doesn't grant doesn't compile, and functions state the
+rights they need in their signature:
+
+```ocaml
+let rename ctx name = Db.exec ctx create_user name
+(* val rename : (_, [> `Read | `Write ]) Ctx.t -> string -> unit Lwt.t *)
+
+rename (Db.label_ctx ~role:query root) "bob"
+(* Error: ... The first variant type does not allow tag(s) `Write *)
+```
+
+This holds for nested transactions (`with_transaction` keeps the role) and for `query`, `populate` and
+`transaction`, which take `~needs`. Nothing is checked at runtime.
+
+### 5. Logins: one database user per role, or one for all
+
+Each role connects as a `Login`, the database's own URL (`Login.owner`) unless it names another. A database has the
+owner's URL and, optionally, a URL per login; a login without one connects with the owner's URL, on the owner's
+pool:
+
+```ocaml
+let query_login = Login.create "query"
+let command_login = Login.create "command"
+let query : [ `Read ] Role.t = Role.v ~login:query_login "query"
+let command : [ `Read | `Write ] Role.t = Role.v ~login:command_login "command"
+
+(* one user for everything: the types separate the roles *)
+let single = Database.create (Label.create "app") owner_url
+
+(* one user per login: the database enforces each login's grants, too *)
+let separated =
+  Database.create (Label.create "app") owner_url
+    ~logins:[ query_login, Url.create query_url; command_login, Url.create command_url ]
+```
+
+Several roles may share a login; the database then enforces only what the login is granted, and the types the rest.
+A role claiming more than its login is granted passes the compiler, but the database refuses the statement:
+`Error.Permission_denied` (MariaDB errors 1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, recognised by
+the driver packages' dialects) names the label, login, role and declared needs.
 
 ## Migrations
 
@@ -125,6 +195,9 @@ let () = Lwt_main.run
    | Error e -> failwith (Error.show e))
 ```
 
+Each runner call holds one connection, as the database owner unless you pass another role, e.g.
+`Runner.run_all ~role:migrator root ()`; migration statements declare no needs, the login's grants limit them.
+
 ### Drift detection
 
 ```ocaml
@@ -159,16 +232,24 @@ The `veins-gen` executable is installed as part of the `veins` package.
 _NOTE: `initialize` initiates the main database passed via `Pools.Make(Config)`_
 
 ```ocaml
-let analytics = Database.create (Label.create "analytics") analytics_url
+let analytics =
+  Database.create (Label.create "analytics") (Url.create analytics_url)
 
 let () =
   Db.Pool.initialize ~additional_pools:[ analytics ] ();
   (* later: *)
-  let%lwt rows = Db.collect (Label.create "analytics") req () in
+  let%lwt rows = Db.collect (Db.label_ctx ~role:query (Label.create "analytics")) req () in
   ...
 ```
 
 ---
+
+## Credits
+
+The context design (`Veins.Ctx`: label, held connection and transaction contexts, the phantom transaction marker,
+after-commit hooks) is Reynir Björnsson's database refactoring of the
+[pool tool](https://github.com/uzh/z-pool-tool) ([#647](https://github.com/uzh/z-pool-tool/pull/647)), moved here
+together with the pool tool's reconnect fixes.
 
 ## Development
 

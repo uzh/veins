@@ -13,6 +13,14 @@
   lwt.unix
   alcotest
   alcotest-lwt
-  containers)
+  containers
+  uri
+  logs
+  logs.fmt
+  threads.posix
+  unix)
+ ; tests match one expected error and fail on anything else
+ (flags
+  (:standard -w -4))
  (preprocess
   (pps lwt_ppx)))

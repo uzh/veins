@@ -3,4 +3,4 @@
 (library
  (name veins_mariadb)
  (public_name veins-mariadb)
- (libraries veins caqti-driver-mariadb))
+ (libraries veins caqti caqti.classic caqti-driver-mariadb containers))

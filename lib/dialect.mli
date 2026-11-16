@@ -12,6 +12,34 @@
 
 (** The interface a dialect module must satisfy. *)
 module type Sig = sig
+  (** Statements run on every new connection, before it is used. Both
+      dialects pin the session to UTC here, so [NOW()] / [CURRENT_TIMESTAMP]
+      agree with the UTC values caqti writes for [Ptime.t], whatever the
+      server's time zone. *)
+  val session_setup : string list
+
+  (** [true] when the error means the connection is gone, so the pool must be
+      dropped and reconnected. Any other error (a constraint violation, a
+      syntax error, …) leaves the pool alone.
+
+      The implementations here only know connect and load errors; the driver
+      packages ([Veins_mariadb.Dialect], [Veins_postgresql.Dialect]) also
+      recognise the driver's own "connection lost" errors. *)
+  val is_connection_error : Caqti_error.t -> bool
+
+  (** [true] when the database refused a statement for lack of privileges;
+      veins then raises [Error.Permission_denied]. Like
+      {!is_connection_error}, only the driver packages' dialects recognise
+      these errors; the implementations here always answer [false]. *)
+  val is_permission_error : Caqti_error.t -> bool
+
+  (** Statements run on a connection after rolling back a transaction, before
+      it is used again. MariaDB restores [autocommit]: caqti-driver-mariadb
+      (3.1) turns it off to start a transaction and back on when committing,
+      but not when rolling back, so the next statements on that pooled
+      connection would run in a transaction that is never committed. *)
+  val after_rollback : string list
+
   (** DDL to create (or ensure the existence of) the migration-state tracking
       table.
 
@@ -32,7 +60,7 @@ module type Sig = sig
   val select_applied_ids : table:string -> string
 
   (** [SELECT id, namespace FROM <table>] — returns every applied step with
-      its namespace.  Used by the drift-detection ({!Migration.RunnerSig.check}) pass. *)
+      its namespace.  Used by the drift-detection ([Migration.RunnerSig.check]) pass. *)
   val select_applied_rows : table:string -> string
 
   (** [INSERT INTO <table> (id, namespace, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?)]
@@ -46,7 +74,7 @@ module type Sig = sig
 
   (** [INSERT INTO <table> (<col1>, ...) VALUES (?, ...)] — generic single-row
       insert with one [?] placeholder per column.  Used by
-      {!Pools_sig.Sig.populate}. *)
+      [Pools_sig.Sig.populate]. *)
   val insert_row : table:string -> columns:string list -> string
 
   (** Wrap a column name for use in a [SELECT] to return a UUID stored in

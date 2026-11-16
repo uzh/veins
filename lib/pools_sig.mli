@@ -1,197 +1,199 @@
 (** Module-type signatures for the Veins pool functor.
 
     Application code instantiates a pool by applying {!Pools.Make} to a
-    module satisfying {!ConfigSig}.  The resulting module satisfies {!Sig}.
+    module satisfying {!ConfigSig}. The resulting module satisfies {!Sig}.
 
     @canonical Veins.Pools_sig *)
 
 (** Configuration required to instantiate a connection pool. *)
 module type ConfigSig = sig
-  (** The primary database for this pool instance.
-      Its label becomes the canonical name used throughout the pool and serves
-      as the default target for query helpers. *)
+  (** The primary database, registered by [Pool.initialize]. *)
   val database : Entity.Database.t
 
-  (** Maximum number of open connections Caqti will maintain per pool.
-      Tune this to match the connection limit of the database server. *)
+  (** Maximum number of open connections Caqti keeps per pool (one pool per
+      label for the owner, plus one per login with a URL of its own). *)
   val database_pool_size : int
 
-  (** Hint for the initial hashtable capacity.  Set this to the number of
-      additional databases you expect to register via [Pool.add] beyond the
-      primary one (default: 5). *)
+  (** Hint for the initial hashtable capacity. *)
   val expected_databases : int
 
-  (** SQL dialect for DDL/DML differences between MariaDB and PostgreSQL.
-      Use {!Veins.Dialect.Mariadb} or {!Veins.Dialect.Postgresql}. *)
+  (** SQL dialect. Prefer [Veins_mariadb.Dialect] / [Veins_postgresql.Dialect]:
+      they also recognise the driver's "connection lost" errors. *)
   module Dialect : Dialect.Sig
 end
 
-(** The interface exposed by a {!Pools.Make} functor application.
+(** The interface of a {!Pools.Make} application.
 
-    All query helpers raise {!Error.Exn} on error rather than returning a
-    [result] value, so callers can use plain [let%lwt] bindings.  Wrap
-    operations that need an explicit error boundary in [transaction]. *)
+    Statements run on a context ({!Ctx.t}): a label (fresh connection per
+    statement), a held connection, or a transaction. Every helper raises
+    {!Error.Failed} when the database rejects a statement, and
+    {!Error.Exn} for errors veins detects itself and for
+    [Error.Permission_denied].
+
+    {b Roles.} Every context names its role ({!Veins.Role}), and connects
+    as the role's login. A statement only runs on a context whose role type
+    grants everything it needs ({!Request.t}, {!Veins.Need}): the compiler
+    checks this, nothing is checked at runtime. *)
 module type Sig = sig
-  (** The configuration this pool was instantiated with. *)
   module Config : ConfigSig
 
   (** {1 Pool lifecycle} *)
 
   module Pool : sig
-    (** Register the primary database from [Config] and any
-        [additional_pools] so they are available via [fetch].
-        Idempotent: labels already present in the cache are skipped. *)
+    (** Register the primary database from [Config] and [additional_pools].
+        Labels already registered are skipped. Connections are opened lazily,
+        on first use. *)
     val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit
 
-    (** Register a new pool entry.
-        Logs a warning and is a no-op if the label is already registered. *)
+    (** Register a database. Logs a warning and does nothing if its label is
+        registered already. With [~required:true], failing to connect raises
+        instead of marking the pool as failed. *)
     val add : ?required:bool -> Entity.Database.t -> unit
 
-    (** Drain the existing pool for [database.label] and open a fresh one.
-        Useful after a credential rotation. *)
-    val reset : ?required:bool -> Entity.Database.t -> unit Lwt.t
+    (** Replace the registration of [database]'s label (e.g. new credentials);
+        its old connections are closed in the background. *)
+    val reset : ?required:bool -> Entity.Database.t -> unit
 
-    (** Drain and remove a pool from the cache.  Safe to call even if the
-        label is not registered (logged as info and ignored). *)
-    val drop : Entity.Label.t -> unit Lwt.t
+    (** Remove a database and close its connections in the background. Safe to
+        call for unknown labels. *)
+    val drop : Entity.Label.t -> unit
 
-    (** Drain every pool and clear the cache.  Primarily useful in test
-        teardown. *)
+    (** Remove every database and close all connections in the background. *)
     val clear : unit -> unit
 
-    (** Borrow the raw Caqti pool for [label] (and optionally [role]),
-        reconnecting automatically when the connection is in a [Close] or
-        [Fail] state.
+    (** The database registered under the label. *)
+    val find : Entity.Label.t -> Entity.Database.t option
 
-        @raise Error.Exn
-          (Database_not_registered _)  if the [(label, role)]
-          pair was never added.
-        @raise Error.Exn (Connection_failed _)         after all [retries]
-                         are exhausted. *)
-    val fetch
-      :  ?retries:int
-      -> ?role:Entity.Role.t
-      -> Entity.Label.t
-      -> (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t Lwt.t
-
-    (** Attempt to ensure an open connection exists for [(label, role)].
-        Returns [Ok ()] or [Error _] without raising; safe to call from
-        synchronous startup code. *)
-    val connect : ?role:Entity.Role.t -> Entity.Label.t -> (unit, Error.t) result
-
-    (** Drain the pool for [(label, role)] and mark it [Close] so the next
-        [fetch] triggers a reconnect.  The entry remains in the cache. *)
-    val disconnect : ?role:Entity.Role.t -> Entity.Label.t -> unit Lwt.t
-
-    (** Drop [label], then register [database] under the same position in
-        the cache.  Use when the connection parameters for a pool have
-        changed. *)
-    val reset_label : ?required:bool -> Entity.Label.t -> Entity.Database.t -> unit Lwt.t
-
-    (** All databases currently registered in the cache, optionally
-        filtered to [allowed_status] and with [exclude]d labels removed. *)
+    (** All registered databases, optionally filtered to [allowed_status] and
+        without the [exclude]d labels. *)
     val find_all
       :  ?allowed_status:Entity.Status.t list
       -> ?exclude:Entity.Label.t list
       -> unit
       -> Entity.Database.t list
 
-    (** Raise a human-readable {!Error.Exn} for a Caqti error.
-        Also marks the affected pool as [Fail] so the next [fetch] will
-        attempt to reconnect. *)
-    val raise_caqti_error
-      :  ?role:Entity.Role.t
+    (** The Caqti pool [login] (default {!Veins.Login.owner}) connects with,
+        connecting or reconnecting when needed. After [retries] failed
+        reconnects the call raises, and the next call tries again.
+
+        @raise Error.Exn [Database_not_registered].
+        @raise Error.Failed when connecting fails. *)
+    val fetch
+      :  ?retries:int
+      -> ?login:Entity.Login.t
       -> Entity.Label.t
-      -> ('a, Caqti_error.t) Lwt_result.t
-      -> 'a Lwt.t
+      -> (Caqti_lwt.connection, Caqti_error.t) Caqti_lwt_unix.Pool.t Lwt.t
+
+    (** Try to open the pool [login] (default {!Veins.Login.owner}) connects
+        with, without raising. *)
+    val connect : ?login:Entity.Login.t -> Entity.Label.t -> (unit, Error.t) result
+
+    (** Close the connections of the label's pools (only the one [login]
+        connects with, with [~login]) in the background and mark them
+        closed, or failed with [~error]; the next statement reconnects. *)
+    val disconnect
+      :  ?error:Caqti_error.t
+      -> ?login:Entity.Login.t
+      -> Entity.Label.t
+      -> unit
   end
 
-  (** {1 Query helpers}
+  (** {1 Contexts} *)
 
-      Each helper accepts an {!Veins.Label.t} identifying which connection
-      pool to borrow from, and an optional [?role] to select the role-specific
-      pool for that label.  When [~role] is omitted the primary pool is used. *)
-
-  (** Run [f] with a borrowed connection from [(label, role)]'s pool.
-      Errors returned by [f] are converted to {!Error.Exn} via
-      {!Pool.raise_caqti_error}. *)
-  val query
-    :  ?role:Entity.Role.t
+  (** A context taking a fresh connection from the pool for every statement. *)
+  val label_ctx
+    :  ?tags:Logs.Tag.set
+    -> role:'g Entity.Role.t
     -> Entity.Label.t
+    -> (Ctx.no_transaction, 'g) Ctx.t
+
+  (** [connection_ctx ~role label f] runs [f] with one connection held for
+      all its statements (session state like [SET] stays). Statements on it
+      run one at a time. *)
+  val connection_ctx
+    :  ?tags:Logs.Tag.set
+    -> role:'g Entity.Role.t
+    -> Entity.Label.t
+    -> ((Ctx.no_transaction, 'g) Ctx.t -> 'a Lwt.t)
+    -> 'a Lwt.t
+
+  (** [transaction_ctx ~role label f] runs [f] in a transaction on a new
+      connection: it commits when [f] returns and rolls back when it raises.
+      Hooks registered with {!Ctx.after_commit} run after the commit. *)
+  val transaction_ctx
+    :  ?tags:Logs.Tag.set
+    -> role:'g Entity.Role.t
+    -> Entity.Label.t
+    -> ((Ctx.transaction, 'g) Ctx.t -> 'a Lwt.t)
+    -> 'a Lwt.t
+
+  (** [with_transaction ctx f] runs [f] in a transaction on [ctx]: it joins
+      [ctx] when it is a transaction already (so [f]'s statements commit or
+      roll back with it), starts one on a held connection, and behaves like
+      {!transaction_ctx} for a label context. Always runs as [ctx]'s role. *)
+  val with_transaction
+    :  ('maybe_txn, 'g) Ctx.t
+    -> ((Ctx.transaction, 'g) Ctx.t -> 'a Lwt.t)
+    -> 'a Lwt.t
+
+  (** {1 Statements}
+
+      Each statement's needs must be granted by the context's role:
+      [exec ctx request] type-checks only if ['g] of [ctx] has every tag of
+      [request]'s needs. *)
+
+  (** [query ~needs ctx f] runs [f] on a connection of [ctx]. [needs] are the
+      needs of the statements [f] runs, which the compiler can't see. *)
+  val query
+    :  needs:'g Entity.Need.t
+    -> (_, 'g) Ctx.t
     -> (Caqti_lwt.connection -> ('a, Caqti_error.t) Lwt_result.t)
     -> 'a Lwt.t
 
-  (** Execute a statement that produces no result rows. *)
-  val exec
-    :  ?role:Entity.Role.t
-    -> Entity.Label.t
-    -> ('a, unit, [ `Zero ]) Caqti_request.t
-    -> 'a
-    -> unit Lwt.t
+  val exec : (_, 'g) Ctx.t -> ('a, unit, [< `Zero ], 'g) Request.t -> 'a -> unit Lwt.t
 
-  (** Collect all result rows into a list. *)
   val collect
-    :  ?role:Entity.Role.t
-    -> Entity.Label.t
-    -> ('a, 'b, [< `Zero | `One | `Many ]) Caqti_request.t
+    :  (_, 'g) Ctx.t
+    -> ('a, 'b, [< `Zero | `One | `Many ], 'g) Request.t
     -> 'a
     -> 'b list Lwt.t
 
-  (** Return exactly one row.
-      @raise Error.Exn if the query returns zero or more than one row. *)
-  val find
-    :  ?role:Entity.Role.t
-    -> Entity.Label.t
-    -> ('a, 'b, [< `One ]) Caqti_request.t
-    -> 'a
-    -> 'b Lwt.t
+  (** @raise Error.Failed unless the statement returns exactly one row. *)
+  val find : (_, 'g) Ctx.t -> ('a, 'b, [< `One ], 'g) Request.t -> 'a -> 'b Lwt.t
 
-  (** Return at most one row, or [None] if the query returns no rows. *)
   val find_opt
-    :  ?role:Entity.Role.t
-    -> Entity.Label.t
-    -> ('a, 'b, [< `Zero | `One ]) Caqti_request.t
+    :  (_, 'g) Ctx.t
+    -> ('a, 'b, [< `Zero | `One ], 'g) Request.t
     -> 'a
     -> 'b option Lwt.t
 
-  (** Bulk-insert [rows] into [table].
-      [column_names] must match the arity of [param_type].
-      Empty [rows] is a no-op. *)
+  (** [populate ~needs ctx table columns row_type rows] bulk-inserts [rows]. *)
   val populate
-    :  ?role:Entity.Role.t
-    -> Entity.Label.t
+    :  needs:'g Entity.Need.t
+    -> (_, 'g) Ctx.t
     -> string
     -> string list
     -> 'a Caqti_type.t
     -> 'a list
     -> unit Lwt.t
 
-  (** {1 Transactions}
+  (** [transaction ~needs ctx f] runs [f] on one connection inside a
+      transaction, joining [ctx]'s transaction when there is one.
 
-      Each function borrows a single connection for the lifetime of the
-      transaction.  On any exception the transaction is rolled back and
-      {!Error.Exn} is re-raised. *)
-
-  (** Run [f] inside a [BEGIN] / [COMMIT] block.
-
-      @param role Optional role pool to borrow the connection from.
-      @param setup
-        List of statements run after [BEGIN] but before [f]
-        (e.g. [SET TRANSACTION ISOLATION LEVEL …]).
-      @param cleanup List of statements run after [f] but before [COMMIT]. *)
+      @param setup statements run after [BEGIN], before [f]
+      @param cleanup statements run after [f], before [COMMIT] *)
   val transaction
     :  ?setup:(Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
     -> ?cleanup:(Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
-    -> ?role:Entity.Role.t
-    -> Entity.Label.t
+    -> needs:'g Entity.Need.t
+    -> (_, 'g) Ctx.t
     -> (Caqti_lwt.connection -> ('a, Caqti_error.t) Lwt_result.t)
     -> 'a Lwt.t
 
-  (** Run a list of [queries] inside a single transaction.
-      Equivalent to calling {!transaction} with a combined function. *)
+  (** {!transaction} running [fs] in order. *)
   val transaction_iter
-    :  ?role:Entity.Role.t
-    -> Entity.Label.t
+    :  needs:'g Entity.Need.t
+    -> (_, 'g) Ctx.t
     -> (Caqti_lwt.connection -> (unit, Caqti_error.t) Lwt_result.t) list
     -> unit Lwt.t
 end

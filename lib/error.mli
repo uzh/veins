@@ -1,24 +1,64 @@
-(** Error types and exception raised by Veins query helpers.
+(** Errors raised by Veins.
+
+    Two exceptions:
+    - {!Failed} for everything the database (or the driver) reported: it
+      carries the label, the login, the role and the untouched caqti error,
+      so callers can match on {!cause} (e.g. [`Unique_violation]) instead of
+      on rendered strings.
+    - {!Exn} for errors Veins detects itself (unknown databases, failed
+      migrations) and for {!Permission_denied}.
+
+    Whether a statement fits its context's role is checked by the compiler
+    ({!Ctx.t}), so there is no runtime error for it.
 
     @canonical Veins.Error *)
 
-(** Errors that can occur during pool operations, queries, and migrations. *)
 type t =
   | Connection_failed of string
   (** A connection attempt failed, e.g. bad URL or server unreachable. *)
   | Database_not_registered of string
-  (** [Pool.fetch] was called for a label that was never registered
-      with [Pool.initialize] or [Pool.add]. *)
+  (** The label was never registered with [Pool.initialize] or [Pool.add]. *)
+  | Permission_denied of
+      { label : string
+      ; login : string
+      ; role : string option
+      ; needs : string list
+      ; message : string (** The database's error. *)
+      }
+  (** The database refused a statement for lack of privileges (MariaDB
+      errors 1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501). The
+      types allowed it, so the login is missing a grant its role claims, or
+      the statement declared fewer needs than it has: a setup bug. Only the
+      driver packages' dialects recognise these errors. *)
   | Migration_failed of string (** A migration step returned an error. *)
-  | Caqti_error of string (** A Caqti driver error (string representation). *)
+  | Unsupported of string (** The driver doesn't support an operation. *)
 
-(** Raised by query helpers ([exec], [find], [collect], …) when an
-    unrecoverable error occurs.  Transactions catch this exception,
-    roll back, and re-raise it. *)
+(** Raised for the errors of {!t}. *)
 exception Exn of t
 
-(** Human-readable one-line description of an error. *)
 val show : t -> string
-
-(** [pp fmt t] prints {!show} [t] to [fmt]. *)
 val pp : Format.formatter -> t -> unit
+
+type failure =
+  { label : Entity.Label.t
+  ; login : Entity.Login.t
+  ; role : string option (** The context's role, if a statement failed. *)
+  ; error : Caqti_error.t
+  }
+
+(** Raised by every statement the database or driver rejected. *)
+exception Failed of failure
+
+val failure
+  :  ?role:string
+  -> login:Entity.Login.t
+  -> Entity.Label.t
+  -> Caqti_error.t
+  -> failure
+
+(** caqti's classification of a statement the server rejected. [None] for
+    errors that carry no cause (connecting, encoding, decoding). *)
+val cause : Caqti_error.t -> Caqti_error.cause option
+
+(** {!cause} for an exception, covering both {!Failed} and [Caqti_error.Exn]. *)
+val cause_of_exn : exn -> Caqti_error.cause option

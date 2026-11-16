@@ -10,14 +10,59 @@ module Label = struct
   let show s = s
 end
 
-module Role = struct
+module Login = struct
   type t = string
 
-  let create s = s
-  let value s = s
+  let owner_name = "owner"
+  let owner = owner_name
+
+  let create name =
+    if CCString.equal name owner_name
+    then invalid_arg "Login.create: \"owner\" is the database's own URL, use Login.owner";
+    name
+  ;;
+
+  let name t = t
+  let is_owner = CCString.equal owner_name
   let equal = CCString.equal
+  let compare = CCString.compare
+  let hash = Hashtbl.hash
   let pp = Format.pp_print_string
-  let show s = s
+  let show t = t
+end
+
+module Need = struct
+  type +'g t = string list
+
+  let v name = [ name ]
+  let none = []
+  let ( & ) a b = CCList.sort_uniq ~cmp:CCString.compare (a @ b)
+  let names t = t
+
+  let pp fmt t =
+    match t with
+    | [] -> Format.pp_print_string fmt "nothing"
+    | names ->
+      Format.pp_print_list
+        ~pp_sep:(fun fmt () -> Format.pp_print_string fmt ", ")
+        Format.pp_print_string
+        fmt
+        names
+  ;;
+end
+
+module Role = struct
+  type 'g t =
+    { name : string
+    ; login : Login.t
+    }
+
+  let v ?(login = Login.owner) name = { name; login }
+  let owner = { name = "owner"; login = Login.owner }
+  let name { name; _ } = name
+  let login { login; _ } = login
+  let pp fmt { name; _ } = Format.pp_print_string fmt name
+  let show { name; _ } = name
 end
 
 module Url = struct
@@ -86,48 +131,37 @@ module Status = struct
 end
 
 module Database = struct
-  type pool =
-    | Main of Url.t
-    | Multiple of (Role.t * Url.t) list
-
   type t =
     { label : Label.t
     ; status : Status.t
-    ; pool : pool
+    ; owner : Url.t
+    ; logins : (Login.t * Url.t) list
     }
 
-  let create ?(status = Status.Active) label pool =
-    (match pool with
-     | Main _ -> ()
-     | Multiple roles ->
-       let seen = Hashtbl.create (CCList.length roles) in
-       CCList.iter
-         (fun (role, _) ->
-            if Hashtbl.mem seen role
-            then
-              invalid_arg
-                (Format.asprintf "Database.create: duplicate role %a" Role.pp role);
-            Hashtbl.add seen role ())
-         roles);
-    { label; status; pool }
+  let create ?(status = Status.Active) ?(logins = []) label owner =
+    let seen = Hashtbl.create (CCList.length logins) in
+    CCList.iter
+      (fun (login, _) ->
+         if Login.is_owner login
+         then invalid_arg "Database.create: the owner login is the database's own URL";
+         if Hashtbl.mem seen login
+         then
+           invalid_arg
+             (Format.asprintf "Database.create: duplicate login %a" Login.pp login);
+         Hashtbl.add seen login ())
+      logins;
+    { label; status; owner; logins }
   ;;
 
   let label { label; _ } = label
   let status { status; _ } = status
-  let pool { pool; _ } = pool
+  let owner { owner; _ } = owner
+  let with_status status database = { database with status }
+  let logins { logins; _ } = CCList.map fst logins
+  let has_login { logins; _ } login = CCList.mem_assoc ~eq:Login.equal login logins
 
-  let url ?role { pool; _ } =
-    match pool, role with
-    | Main db_url, None -> db_url
-    | Main db_url, Some _ ->
-      Logs.warn (fun m ->
-        m "Database.url: role provided for Main pool; ignoring and returning primary URL");
-      db_url
-    | Multiple _, None -> invalid_arg "Database.url: role is required for Multiple pool"
-    | Multiple databases, Some role ->
-      CCList.assoc_opt ~eq:Role.equal role databases
-      |> CCOption.get_exn_or
-           (Format.asprintf "Database.url: unknown role %a" Role.pp role)
+  let url { owner; logins; _ } login =
+    CCList.assoc_opt ~eq:Login.equal login logins |> CCOption.value ~default:owner
   ;;
 end
 

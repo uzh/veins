@@ -3,61 +3,63 @@
     {b Quick-start}
 
     {[
-    (* 1. Define a config module *)
-    module Cfg = struct
-      let database =
-        let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
-        Veins.Database.create (Veins.Label.create "root") (Veins.Database.Main url)
-      ;;
+    (* 1. Instantiate the pool *)
+    module Db = Veins_mariadb.Pools.Make (struct
+        let database =
+          let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
+          Veins.Database.create (Veins.Label.create "root") url
+        ;;
+      end)
 
-      let database_pool_size = 10
-      let expected_databases = 1
+    (* 2. Declare what statements need, and what roles grant *)
+    let read : [> `Read ] Veins.Need.t = Veins.Need.v "read"
+    let query : [ `Read ] Veins.Role.t = Veins.Role.v "query"
 
-      module Dialect = Veins.Dialect.Mariadb
-    end
-
-    (* 2. Instantiate the pool *)
-    module Db = Veins.Pools.Make (Cfg)
-
-    (* 3. Instantiate the migration runner *)
-    module M = Veins.Migration.Make (Db)
-
-    (* 4. Register migrations (at module init time) *)
-    let () =
-      let open Veins.Migration in
-      register
-        ~for_databases:Migration.All
-        (create
-           (Namespace.create "my_app")
-           ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
-         |> add_step
-              (Step.create
-                 ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
-                 ~label:"create users table"
-                 ~down:"DROP TABLE IF EXISTS users"
-                 {|CREATE TABLE IF NOT EXISTS users (
-                        id   INT          PRIMARY KEY AUTO_INCREMENT,
-                        name VARCHAR(255) NOT NULL
-                      )|})
-        )
+    let find_name =
+      {sql| SELECT name FROM users WHERE id = ? |sql}
+      |> Caqti_type.(int ->? string)
+      |> Veins.Request.create ~needs:read
     ;;
 
-    (* 5. Initialize pool and run migrations *)
+    (* 3. Run them on a context *)
     let () =
-      let root = Veins.Label.create "root" in
       Db.Pool.initialize ();
+      let root = Veins.Label.create "root" in
       Lwt_main.run
-        (match%lwt M.run_all root () with
-         | Ok () -> Lwt.return_unit
-         | Error e -> invalid_arg (Veins.Error.show e))
+        (let%lwt name = Db.find_opt (Db.label_ctx ~role:query root) find_name 1 in
+         Db.transaction_ctx ~role:query root (fun ctx ->
+           Veins.Ctx.after_commit ctx (fun () -> print_endline "committed");
+           Db.find_opt ctx find_name 2))
     ;;
-    ]} *)
+    ]}
+
+    {b Roles.} A role ({!Role}) is a part of the application with a type:
+    the tags it grants, e.g. [[ `Read ]]. A statement's {!Need} is a lower
+    bound of tags, e.g. [[> `Write ]]. Every context carries its role's type,
+    so running a statement on a context whose role doesn't grant its needs
+    is a compile error, and a function's signature shows the rights it
+    needs.
+
+    Each role connects as a {!Login}. A database has the owner's URL and,
+    optionally, one URL per login; logins without one connect as the owner.
+    The database then enforces each login's grants, and refuses a statement
+    the types allowed with [Error.Permission_denied]; with a single URL only
+    the types separate the roles.
+
+    The context design ({!Ctx}) comes from Reynir Björnsson's database
+    refactoring of the pool tool (uzh/z-pool-tool#647). *)
 
 (** Opaque database label used as the key for pool lookups. *)
 module Label = Entity.Label
 
-(** Role name for a database user (e.g. ["readonly"], ["write"]).
-    Distinct from {!Label} to prevent accidental mixing. *)
+(** A database user a role connects as. *)
+module Login = Entity.Login
+
+(** The rights a statement needs, as a type. *)
+module Need = Entity.Need
+
+(** A part of the application, with the rights it has as a type, and the
+    login it connects as. *)
 module Role = Entity.Role
 
 (** Database connection URL.  Opaque — the raw connection string is not
@@ -81,8 +83,18 @@ module Database = Entity.Database
 (** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
 module Dynparam = Entity.Dynparam
 
-(** Error types and exception raised by query helpers. *)
+(** Error types and exceptions raised by query helpers. *)
 module Error = Error
+
+(** Database contexts: a label, a held connection, or a transaction. Built
+    by a pool ({!Pools_sig.Sig}). *)
+module Ctx : module type of struct
+    include Ctx
+  end
+  with module Internal := Ctx.Internal
+
+(** Caqti requests with the rights they need. *)
+module Request = Request
 
 (** SQL dialect implementations (MariaDB / PostgreSQL DDL differences). *)
 module Dialect = Dialect
