@@ -194,6 +194,13 @@ val target_applies_to : database_target -> Entity.Label.t -> bool
                          Defaults to [All]. *)
 val register : ?for_databases:database_target -> t -> unit
 
+(** The name of the migration state table: [veins_migration_state], or
+    [VEINS_MIGRATION_TABLE]. For code that treats it specially, e.g. emptying
+    every table but this one.
+
+    @raise Invalid_argument if [VEINS_MIGRATION_TABLE] is not a plain table name. *)
+val state_table : unit -> string
+
 (** A discrepancy between the in-process registry and the migration-state
     table in a database.  Returned by {!RunnerSig.check}. *)
 type drift =

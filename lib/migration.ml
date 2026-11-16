@@ -99,6 +99,8 @@ let table_name =
      | _ -> "veins_migration_state")
 ;;
 
+let state_table () = Lazy.force table_name
+
 let lock_timeout =
   lazy
     (match
@@ -171,7 +173,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   (* Migrations run as the role the caller names (the owner by default); the
      database enforces its rights, so their statements declare no needs. *)
   let unchecked request = Request.create ~needs:Entity.Need.none request
-  let table () = Lazy.force table_name
+  let table = state_table
 
   (* Return migrations targeting [db_label], sorted by written_at ascending. *)
   let registered_for db_label =

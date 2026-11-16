@@ -197,6 +197,53 @@ module Make (D : Dialect) = struct
     check_count table 2
   ;;
 
+  (* {1 Tables} *)
+
+  let list_tables () =
+    Db.collect
+      (root_ctx ())
+      (Dialect.request
+         Caqti.Template.Request.Direct
+         T.(unit -->* string)
+         Dialect.list_tables
+       |> Request.create ~needs:Roles.read)
+      ()
+  ;;
+
+  let table_ddl sql =
+    Dialect.request Caqti.Template.Request.Direct T.(unit -->. unit) sql
+    |> Request.create ~needs:Roles.schema
+  ;;
+
+  let test_list_truncate_drop () =
+    with_table "tables"
+    @@ fun table ->
+    let%lwt () = Db.exec (root_ctx ()) (insert table) (1, 1) in
+    let%lwt tables = list_tables () in
+    Alcotest.(check bool)
+      (table ^ " is listed")
+      true
+      (CCList.mem ~eq:CCString.equal table tables);
+    Alcotest.(check bool)
+      "listed by name"
+      true
+      (CCList.equal CCString.equal tables (CCList.sort CCString.compare tables));
+    let%lwt () =
+      Db.exec (root_ctx ()) (table_ddl (fun kind -> Dialect.truncate kind ~table)) ()
+    in
+    let%lwt () = check_count table 0 in
+    let%lwt () =
+      Db.exec (root_ctx ()) (table_ddl (fun kind -> Dialect.drop kind ~table)) ()
+    in
+    let%lwt tables = list_tables () in
+    Alcotest.(check bool)
+      (table ^ " is gone")
+      false
+      (CCList.mem ~eq:CCString.equal table tables);
+    (* IF EXISTS *)
+    Db.exec (root_ctx ()) (table_ddl (fun kind -> Dialect.drop kind ~table)) ()
+  ;;
+
   (* {1 Contexts} *)
 
   let test_held_connection_is_kept () =
@@ -826,7 +873,9 @@ module Make (D : Dialect) = struct
       (root_ctx ())
       (direct
          T.(unit -->. unit)
-         "DELETE FROM veins_migration_state WHERE namespace LIKE 'veins_test_%'"
+         (Format.asprintf
+            "DELETE FROM %s WHERE namespace LIKE 'veins_test_%%'"
+            (Migration.state_table ()))
        |> Request.create ~needs:Roles.write)
       ()
   ;;
@@ -1073,6 +1122,7 @@ module Make (D : Dialect) = struct
         ; case "session is UTC" `Quick test_session_is_utc
         ] )
     ; "row types", [ case "custom row type" `Quick test_custom_row_type ]
+    ; "tables", [ case "list, truncate and drop tables" `Quick test_list_truncate_drop ]
     ; ( "transactions"
       , [ case "commit and rollback" `Quick test_commit_and_rollback
         ; case "nested transaction joins" `Quick test_nested_transaction_joins

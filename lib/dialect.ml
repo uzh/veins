@@ -71,6 +71,28 @@ let table_exists dialect =
      (current_schemas(false)) AND table_name = LOWER(?)"
 ;;
 
+let list_tables dialect =
+  match dialect with
+  | Mariadb ->
+    "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() \
+     AND table_type = 'BASE TABLE' ORDER BY table_name"
+  | Postgresql ->
+    "SELECT table_name FROM information_schema.tables WHERE table_schema = ANY \
+     (current_schemas(false)) AND table_type = 'BASE TABLE' ORDER BY table_name"
+;;
+
+let truncate dialect ~table =
+  match dialect with
+  | Mariadb -> Format.asprintf "TRUNCATE TABLE %s" table
+  | Postgresql -> Format.asprintf "TRUNCATE TABLE %s CASCADE" table
+;;
+
+let drop dialect ~table =
+  match dialect with
+  | Mariadb -> Format.asprintf "DROP TABLE IF EXISTS %s" table
+  | Postgresql -> Format.asprintf "DROP TABLE IF EXISTS %s CASCADE" table
+;;
+
 (* MariaDB's lock names are global to the server and at most 64 characters:
    hash the name together with the database. PostgreSQL's advisory locks
    belong to the database. *)

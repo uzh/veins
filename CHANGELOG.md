@@ -73,6 +73,9 @@ from #624, #637 and #657 there.
   `down` or `mark_applied` run, so instances starting together apply each step once
   (`VEINS_MIGRATION_LOCK_TIMEOUT`, default 600 seconds).
 - `Dialect.is_identifier`, `Dialect.table_exists`, `Dialect.try_lock` / `Dialect.unlock`.
+- `Dialect.list_tables`, `Dialect.truncate` and `Dialect.drop` (PostgreSQL with `CASCADE`), and
+  `Migration.state_table`, the name of the migration state table (`VEINS_MIGRATION_TABLE` honoured), for code that
+  empties every table but that one.
 
 #### Changed
 

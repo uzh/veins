@@ -72,6 +72,19 @@ val is_identifier : string -> bool
     schema search path on PostgreSQL). Parameter: the table name. *)
 val table_exists : kind -> string
 
+(** Lists the base tables (no views) of the connection's database (its schema
+    search path on PostgreSQL), ordered by name. No parameters; one string
+    per row. *)
+val list_tables : kind -> string
+
+(** Empties a table. PostgreSQL adds [CASCADE] (tables referencing it are
+    emptied too); on MariaDB a table referenced by foreign keys needs the
+    checks turned off, see {!Connection.without_fk_checks}. *)
+val truncate : kind -> table:string -> string
+
+(** Drops a table if it exists. PostgreSQL adds [CASCADE]. *)
+val drop : kind -> table:string -> string
+
 (** Tries to take a lock that the session holds until {!unlock} or until it
     ends, without waiting: selects [1] if it got it, [0] if another session
     holds it. The lock belongs to the connection's database. MariaDB
@@ -102,8 +115,8 @@ val uuid_value_fragment : kind -> string -> string
 
 (** {1 Migration state}
 
-    The table defaults to [veins_migration_state], see [VEINS_MIGRATION_TABLE]
-    in {!Migration}. *)
+    The table is {!Migration.state_table}: [veins_migration_state], or
+    [VEINS_MIGRATION_TABLE]. *)
 
 val create_migration_table : kind -> table:string -> string
 

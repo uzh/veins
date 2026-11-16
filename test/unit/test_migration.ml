@@ -77,6 +77,15 @@ let test_derived_ids_are_stable () =
     (CCString.equal id (Migration.Id.derive ~namespace:"other" ~index:0))
 ;;
 
+(* The name is read once per process: only the default can be checked. *)
+let test_state_table_default () =
+  match Sys.getenv_opt "VEINS_MIGRATION_TABLE" with
+  | Some name when not (CCString.is_empty name) ->
+    Alcotest.(check string) "from the environment" name (Migration.state_table ())
+  | Some _ | None ->
+    Alcotest.(check string) "default" "veins_migration_state" (Migration.state_table ())
+;;
+
 let () =
   Alcotest.run
     "Veins Migration"
@@ -109,5 +118,6 @@ let () =
             `Quick
             test_register_default_targets_root
         ] )
+    ; "state table", [ Alcotest.test_case "default name" `Quick test_state_table_default ]
     ]
 ;;
