@@ -84,6 +84,11 @@ off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one sta
 settled. Every path that takes a pool from `fetch_key` must go through `settle`, or the probe is never released.
 Caqti's `connect_pool` is lazy, only a statement (or `Pool.ping`) tells whether the database answers.
 
+`Connection.test url` connects once without a pool; `Pool.test database` runs it for every URL of a database with
+the pools' session settings, and is the only place veins changes a registered status itself (`Active` ↔
+`ConnectionIssue`, and only when the tested database has the registered URLs). URLs become a `Uri.t` for connecting
+through `Entity.Url.to_connect_uri` (PostgreSQL's `connect_timeout`), which `Veins.Url` doesn't expose.
+
 ### Contexts, requests, roles
 
 Statements run on a `('txn, 'g) Veins.Ctx.t` (`label_ctx`, `connection_ctx`, `transaction_ctx`, `with_transaction`)

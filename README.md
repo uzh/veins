@@ -354,7 +354,9 @@ limit. Idle connections are closed after `max_idle_age`.
 **Lost databases.** A connection error drops the pool, and the next statement reconnects. If that fails too, the
 pool backs off: statements fail right away with the last connection error, and after the wait a single statement
 tries again. The wait doubles up to the maximum and resets once a statement reached the database.
-`Pool.ping label` tells whether a database answers; `Pool.connect` only sets the pool up.
+`Pool.ping label` tells whether a database answers; `Pool.connect` only sets the pool up. `Veins.Connection.test url`
+checks a URL without a pool, and `Pool.test database` every URL of a database before (or after) it is registered: a
+failed test of the registered database sets its status to `ConnectionIssue`, the next successful one back to `Active`.
 
 **Timeouts.** PostgreSQL URLs get `connect_timeout=5` (see above). caqti-driver-mariadb takes no timeout from the
 URL: set `connect-timeout` (and `read-timeout` / `write-timeout`) in the `[caqti]` group of the client's `my.cnf`,

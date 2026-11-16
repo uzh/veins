@@ -78,8 +78,10 @@ from #624, #637 and #657 there.
   empties every table but that one.
 - `Connection.without_fk_checks`: runs a function with a connection's foreign key checks off and turns them back on
   however it ends (a no-op on PostgreSQL). Migration steps with `check_fk:false` use it.
-- `Pool.test`: connects once to a URL that is not registered, the way the pools do, to check it before `Pool.add`;
-  a failure is `Error.Connection_failed` with the URL shown without its password.
+- `Connection.test`: connects once to a URL, without a pool, to check it before its database is registered; a
+  failure is `Error.Connection_failed` with the URL shown without its password. `Pool.test` does so for every URL
+  of a `Database.t` (the owner's and each login's), the way the pools connect, and keeps the status of the
+  registered database: a failure turns `Active` into `ConnectionIssue`, a success turns it back.
 
 #### Changed
 

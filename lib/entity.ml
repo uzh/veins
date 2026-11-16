@@ -70,6 +70,16 @@ module Url = struct
 
   let create s = s
   let to_uri = Uri.of_string
+
+  let to_connect_uri url =
+    let uri = to_uri url in
+    match Uri.scheme uri with
+    | Some ("postgresql" | "postgres")
+      when Option.is_none (Uri.get_query_param uri "connect_timeout") ->
+      Uri.add_query_param' uri ("connect_timeout", "5")
+    | Some _ | None -> uri
+  ;;
+
   let secret_params = [ "password"; "sslpassword" ]
 
   let redact s =

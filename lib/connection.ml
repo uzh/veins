@@ -128,3 +128,49 @@ let without_fk_checks (module C : Caqti_lwt.CONNECTION) f =
           let%lwt () = enable () in
           Lwt.reraise exn))
 ;;
+
+(* Caqti's messages show the URI with only its userinfo password masked:
+   show it like [Url.pp] does, and mask any password still left. *)
+let redacted url error =
+  let shown = Format.asprintf "%a" Caqti.Error.pp_uri (Caqti.Error.uri error) in
+  let message = Caqti.Error.show error in
+  let message =
+    if CCString.is_empty shown
+    then message
+    else CCString.replace ~sub:shown ~by:(Entity.Url.show url) message
+  in
+  let uri = Entity.Url.to_uri url in
+  let in_query =
+    Uri.query uri
+    |> CCList.filter_map (fun (name, values) ->
+      match CCString.lowercase_ascii name with
+      | "password" | "sslpassword" ->
+        Some
+          (CCList.flat_map
+             (fun value -> [ value; Uri.pct_encode ~component:`Query_value value ])
+             values)
+      | (_ : string) -> None)
+    |> CCList.flatten
+  in
+  let in_userinfo =
+    match Uri.password uri with
+    | None -> []
+    | Some password -> [ password; Uri.pct_encode ~component:`Userinfo password ]
+  in
+  CCList.fold_left
+    (fun message password ->
+       if CCString.is_empty password
+       then message
+       else CCString.replace ~sub:password ~by:"***" message)
+    message
+    (in_userinfo @ in_query)
+;;
+
+let test ?(post_connect = fun (_ : Caqti_lwt.connection) -> Lwt_result.return ()) url =
+  match%lwt
+    Caqti_lwt_unix.with_connection (Entity.Url.to_connect_uri url) (fun connection ->
+      post_connect (fixed connection))
+  with
+  | Ok () -> Lwt_result.return ()
+  | Error error -> Lwt_result.fail (Error.Connection_failed (redacted url error))
+;;

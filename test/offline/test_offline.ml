@@ -248,13 +248,13 @@ let test_registry () =
 
 (* Checking a URL before registering it: a failure says why, without the
    password, and registers nothing. *)
-let test_pool_test_hides_the_password () =
+let test_connection_test_hides_the_password () =
   let registered () = CCList.length (Db.Pool.find_all ()) in
   let before = registered () in
   let%lwt socket, port = Net.listen () in
   let%lwt () = Net.close_quietly socket in
   let fails name url ~secret =
-    match%lwt Db.Pool.test (Url.create url) with
+    match%lwt Connection.test (Url.create url) with
     | Ok () -> Alcotest.failf "%s: expected an error" name
     | Error (Error.Connection_failed message) ->
       Alcotest.(check bool)
@@ -284,6 +284,48 @@ let test_pool_test_hides_the_password () =
     true
     (CCString.mem ~sub:"nodriver" message);
   Lwt.return (Alcotest.(check int) "nothing registered" before (registered ()))
+;;
+
+(* A failed test of the registered database is its connection issue; testing
+   other URLs for its label, or a database in another status, changes
+   nothing. *)
+let test_database_test_tracks_connection_issue () =
+  let%lwt socket, port = Net.listen () in
+  let%lwt () = Net.close_quietly socket in
+  let closed name =
+    Url.create (Format.asprintf "mariadb://%s:pw@127.0.0.1:%d/x" name port)
+  in
+  let label = Label.create "veins_tested" in
+  let status () = Db.Pool.find label |> Option.get |> Database.status |> Status.show in
+  let fails name database =
+    match%lwt Db.Pool.test database with
+    | Ok () -> Alcotest.failf "%s: expected an error" name
+    | Error (Error.Connection_failed message) -> Lwt.return message
+    | Error error -> Alcotest.failf "%s: unexpected %s" name (Error.show error)
+  in
+  let database =
+    Database.create ~logins:[ Roles.reader_login, closed "reader" ] label (closed "owner")
+  in
+  Db.Pool.add database;
+  Lwt.finalize
+    (fun () ->
+       let%lwt (_ : string) =
+         fails "other URLs" (Database.create label (closed "other"))
+       in
+       Alcotest.(check string) "other URLs tell nothing" "active" (status ());
+       let%lwt message = fails "registered" database in
+       Alcotest.(check bool)
+         ("stops at the first failure, the owner's: " ^ message)
+         true
+         (CCString.mem ~sub:"owner" message && not (CCString.mem ~sub:"reader" message));
+       Alcotest.(check string) "connection issue" "connection_issue" (status ());
+       let%lwt (_ : string) = fails "again" database in
+       Alcotest.(check string) "still a connection issue" "connection_issue" (status ());
+       let disabled = Database.with_status Status.Disabled database in
+       Db.Pool.reset disabled;
+       let%lwt (_ : string) = fails "disabled" disabled in
+       Lwt.return (Alcotest.(check string) "other statuses stay" "disabled" (status ())))
+    (fun () -> Lwt.return (Db.Pool.drop label))
 ;;
 
 let test_mariadb_permission_errors () =
@@ -352,9 +394,13 @@ let () =
            ] )
        ; ( "pools"
          , [ case
-               "Pool.test fails without leaking the password"
+               "Connection.test fails without leaking the password"
                `Quick
-               test_pool_test_hides_the_password
+               test_connection_test_hides_the_password
+           ; case
+               "Pool.test tracks the connection issue"
+               `Quick
+               test_database_test_tracks_connection_issue
            ] )
        ]
 ;;

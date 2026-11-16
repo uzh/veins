@@ -123,13 +123,22 @@ module type Sig = sig
         answered. Counts as a statement for the reconnect backoff. *)
     val ping : ?login:Entity.Login.t -> Entity.Label.t -> (unit, Error.t) Lwt_result.t
 
-    (** [test url] connects once to [url] the way the pools do (same driver,
-        PostgreSQL's default [connect_timeout], the session settings of
-        {!options}) and closes the connection: [Ok ()] if the database answered.
-        Nothing is registered and no pool is touched, so it serves to check a
-        URL before {!add}. A failure is [Error.Connection_failed] with a message
-        that shows the URL like {!Veins.Url.pp}, i.e. without its password. *)
-    val test : Entity.Url.t -> (unit, Error.t) Lwt_result.t
+    (** [test database] connects once to every URL of [database] (the
+        owner's, then each login's) with {!Veins.Connection.test}, the way the
+        pools do: same driver, PostgreSQL's default [connect_timeout], the
+        session settings of {!options}. [Ok ()] if all of them answered,
+        otherwise the first failure, an [Error.Connection_failed] whose
+        message shows the URL without its password. No pool is touched, and
+        [database] needs not be registered: it serves to check a database
+        before {!add}.
+
+        When [database] is the one registered under its label (same URLs),
+        the outcome shows in the registered status, as {!find} and
+        {!find_all} tell it: a failure turns [Active] into
+        [ConnectionIssue], a success turns [ConnectionIssue] back into
+        [Active]. Other statuses stay, and the pools keep reconnecting on
+        their own either way. *)
+    val test : Entity.Database.t -> (unit, Error.t) Lwt_result.t
 
     (** Close the connections of the label's pools (only the one [login]
         connects with, with [~login]) in the background and mark them

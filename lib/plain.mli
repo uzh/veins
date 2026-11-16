@@ -112,7 +112,7 @@ module type Sig = sig
 
     val connect : Entity.Label.t -> (unit, Error.t) result
     val ping : Entity.Label.t -> (unit, Error.t) Lwt_result.t
-    val test : Entity.Url.t -> (unit, Error.t) Lwt_result.t
+    val test : Entity.Database.t -> (unit, Error.t) Lwt_result.t
     val disconnect : ?error:Caqti.Error.t -> Entity.Label.t -> unit
   end
 

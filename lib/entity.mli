@@ -129,6 +129,13 @@ module Url : sig
 
   val create : string -> t
   val to_uri : t -> Uri.t
+
+  (** {!to_uri} for connecting. caqti-driver-postgresql connects with libpq's
+      blocking [PQconnectdb], which holds up the whole Lwt loop until the
+      handshake is done, and libpq waits indefinitely by default: PostgreSQL
+      URLs get [connect_timeout=5] unless they set their own. *)
+  val to_connect_uri : t -> Uri.t
+
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
   val show : t -> string

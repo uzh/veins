@@ -42,3 +42,20 @@ val without_fk_checks
   :  Caqti_lwt.connection
   -> (unit -> ('a, Caqti.Error.t) Lwt_result.t)
   -> ('a, Caqti.Error.t) Lwt_result.t
+
+(** [test url] connects once to [url] and closes the connection: [Ok ()] if
+    the database answered. It needs no pool and touches none, so it serves to
+    check a URL before registering its database. PostgreSQL URLs get the
+    [connect_timeout] the pools connect with.
+
+    [post_connect] runs on the connection (a {!fixed} one) before it is
+    closed, e.g. for session settings that must work, or a statement the
+    login must be allowed to run; its error fails the test.
+
+    A failure is [Error.Connection_failed] with a message that shows the URL
+    like [Veins.Url.pp], i.e. without its password. To test a database with
+    all its logins, see [Pool.test] of {!Pools_sig.Sig}. *)
+val test
+  :  ?post_connect:(Caqti_lwt.connection -> (unit, Caqti.Error.t) Lwt_result.t)
+  -> Entity.Url.t
+  -> (unit, Error.t) Lwt_result.t

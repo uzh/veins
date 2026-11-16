@@ -855,15 +855,49 @@ module Make (D : Dialect) = struct
   let test_unregistered_url () =
     let labels () = Db.Pool.find_all () |> CCList.map Database.label in
     let before = labels () in
-    let%lwt tested = Db.Pool.test (Url.create url) in
-    (match tested with
-     | Ok () -> ()
-     | Error error -> Alcotest.failf "the database answers: %s" (Error.show error));
+    let answers name tested =
+      match tested with
+      | Ok () -> ()
+      | Error error -> Alcotest.failf "%s answers: %s" name (Error.show error)
+    in
+    let%lwt tested = Connection.test (Url.create url) in
+    answers "the URL" tested;
+    let%lwt tested = Db.Pool.test (extra "veins_extra_unregistered") in
+    answers "the database" tested;
     Lwt.return
       (Alcotest.(check (list string))
          "nothing registered"
          (CCList.map Label.value before)
          (CCList.map Label.value (labels ())))
+  ;;
+
+  (* Every URL of the database is tested, and a success ends the connection
+     issue of the registered database. *)
+  let test_database_test () =
+    let status label =
+      Db.Pool.find label |> CCOption.map Database.status |> CCOption.map Status.show
+    in
+    let%lwt tested = Db.Pool.test roles_database in
+    Alcotest.(check bool) "owner and logins answer" true (Result.is_ok tested);
+    Alcotest.(check (option string))
+      "an active database stays active"
+      (Some "active")
+      (status roles_label);
+    let database =
+      extra "veins_extra_test" |> Database.with_status Status.ConnectionIssue
+    in
+    let label = Database.label database in
+    Db.Pool.add database;
+    Lwt.finalize
+      (fun () ->
+         let%lwt tested = Db.Pool.test database in
+         Alcotest.(check bool) "the database answers" true (Result.is_ok tested);
+         Lwt.return
+           (Alcotest.(check (option string))
+              "the connection issue is over"
+              (Some "active")
+              (status label)))
+      (fun () -> Lwt.return (Db.Pool.drop label))
   ;;
 
   (* Pools with a statement timeout and a single connection that statements
@@ -1255,6 +1289,7 @@ module Make (D : Dialect) = struct
         ; case "unresponsive server fails" `Slow test_unresponsive_server_fails
         ; case "ping" `Quick test_ping
         ; case "test an unregistered URL" `Quick test_unregistered_url
+        ; case "test a database" `Quick test_database_test
         ; case "options" `Quick test_options
         ] )
     ; ( "roles"

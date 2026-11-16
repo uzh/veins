@@ -176,54 +176,6 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     | Some (_ : float) as timeout -> Connection.set_statement_timeout timeout
   ;;
 
-  (* caqti-driver-postgresql connects with libpq's blocking PQconnectdb, which holds up
-     the whole Lwt loop until the handshake is done, and libpq waits indefinitely by
-     default. Bound it unless the URL sets its own connect_timeout. *)
-  let with_connect_timeout uri =
-    match Uri.scheme uri with
-    | Some ("postgresql" | "postgres")
-      when Option.is_none (Uri.get_query_param uri "connect_timeout") ->
-      Uri.add_query_param' uri ("connect_timeout", "5")
-    | Some _ | None -> uri
-  ;;
-
-  (* Caqti's messages show the URI with only its userinfo password masked:
-     show it like [Url.pp] does, and mask any password still left. *)
-  let redacted url error =
-    let shown = Format.asprintf "%a" Caqti.Error.pp_uri (Caqti.Error.uri error) in
-    let message = Caqti.Error.show error in
-    let message =
-      if CCString.is_empty shown
-      then message
-      else CCString.replace ~sub:shown ~by:(Entity.Url.show url) message
-    in
-    let uri = Entity.Url.to_uri url in
-    let in_query =
-      Uri.query uri
-      |> CCList.filter_map (fun (name, values) ->
-        match CCString.lowercase_ascii name with
-        | "password" | "sslpassword" ->
-          Some
-            (CCList.flat_map
-               (fun value -> [ value; Uri.pct_encode ~component:`Query_value value ])
-               values)
-        | (_ : string) -> None)
-      |> CCList.flatten
-    in
-    let in_userinfo =
-      match Uri.password uri with
-      | None -> []
-      | Some password -> [ password; Uri.pct_encode ~component:`Userinfo password ]
-    in
-    CCList.fold_left
-      (fun message password ->
-         if CCString.is_empty password
-         then message
-         else CCString.replace ~sub:password ~by:"***" message)
-      message
-      (in_userinfo @ in_query)
-  ;;
-
   let pool_config =
     let max_size = Config.database_pool_size in
     let max_idle_size = CCOption.map (min max_size) options.Pool_options.max_idle_size in
@@ -241,10 +193,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
   ;;
 
   let connect_pool url =
-    Caqti_lwt_unix.connect_pool
-      ~pool_config
-      ~post_connect
-      (Entity.Url.to_uri url |> with_connect_timeout)
+    Caqti_lwt_unix.connect_pool ~pool_config ~post_connect (Entity.Url.to_connect_uri url)
   ;;
 
   let failed { key; _ } error =
@@ -583,19 +532,73 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
           | exn -> Lwt.reraise exn)
     ;;
 
-    let test url =
-      Lwt.catch
-        (fun () ->
-           match%lwt
-             Caqti_lwt_unix.with_connection
-               (Entity.Url.to_uri url |> with_connect_timeout)
-               (fun connection -> post_connect (Connection.fixed connection))
-           with
-           | Ok () -> Lwt_result.return ()
-           | Error error -> Lwt_result.fail (Error.Connection_failed (redacted url error)))
-        (function
-          | Error.Exn error -> Lwt_result.fail error
-          | exn -> Lwt.reraise exn)
+    let same_urls a b =
+      let open Entity in
+      let logins database =
+        Database.logins database
+        |> CCList.sort Login.compare
+        |> CCList.map (fun login -> login, Database.url database login)
+      in
+      Url.equal (Database.owner a) (Database.owner b)
+      && CCList.equal (CCPair.equal Login.equal Url.equal) (logins a) (logins b)
+    ;;
+
+    (* A test tells about the registered database only if that is the one
+       tested, not when other URLs were tried for its label. *)
+    let track_connection_issue database result =
+      let label = Entity.Database.label database in
+      let set status registered =
+        Labels_tbl.replace databases label (Entity.Database.with_status status registered)
+      in
+      match Labels_tbl.find_opt databases label with
+      | Some registered when same_urls registered database ->
+        (match Entity.Database.status registered, result with
+         | Entity.Status.Active, Error error ->
+           Log.warn (fun m ->
+             m
+               ~tags:(tags_of_key (label, None))
+               "Connection test failed, status is now %a: %a"
+               Entity.Status.pp
+               Entity.Status.ConnectionIssue
+               Error.pp
+               error);
+           set Entity.Status.ConnectionIssue registered
+         | Entity.Status.ConnectionIssue, Ok () ->
+           Log.info (fun m ->
+             m
+               ~tags:(tags_of_key (label, None))
+               "Connection test succeeded, status is %a again"
+               Entity.Status.pp
+               Entity.Status.Active);
+           set Entity.Status.Active registered
+         | ( Entity.Status.(
+               ( Active
+               | ConnectionIssue
+               | Disabled
+               | Maintenance
+               | MigrationsConnectionIssue
+               | MigrationsFailed
+               | MigrationsPending ))
+           , (Ok () | Error (_ : Error.t)) ) -> ())
+      | Some (_ : Entity.Database.t) | None -> ()
+    ;;
+
+    let test database =
+      let urls =
+        Entity.Database.owner database
+        :: CCList.map (Entity.Database.url database) (Entity.Database.logins database)
+      in
+      let%lwt result =
+        Lwt_list.fold_left_s
+          (fun result url ->
+             match result with
+             | Ok () -> Connection.test ~post_connect url
+             | Error (_ : Error.t) -> Lwt.return result)
+          (Ok ())
+          urls
+      in
+      track_connection_issue database result;
+      Lwt.return result
     ;;
 
     let disconnect ?error ?login label =
