@@ -25,7 +25,7 @@
  (name veins)
  (synopsis "Database connection pooling and migration library for OCaml")
  (description
-  "Veins provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The veins-gen tool generates migration file boilerplate.")
+  "Veins provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The driver libraries veins.mariadb and veins.postgresql are installed when their Caqti driver (caqti-driver-mariadb, caqti-driver-postgresql) is. The veins-gen tool generates migration file boilerplate.")
  (depends
   (alcotest
    (and
@@ -71,84 +71,12 @@
   (uuidm
    (>= 0.9.7))
   (uri
-   (>= 4.4.0))))
-
-(package
- (name veins-mariadb)
- (synopsis "MariaDB driver convenience package for Veins")
- (description
-  "Depends on veins and caqti-driver-mariadb. Provides Veins_mariadb.Dialect for use in pool configs. Adding (veins-mariadb ...) to your opam deps is all you need for a MariaDB-backed Veins application.")
- (depends
-  (ocaml
-   (>= 5.0.0))
-  (veins
-   (= :version))
-  (caqti
-   (>= 3.0.0))
+   (>= 4.4.0)))
+ (depopts caqti-driver-mariadb caqti-driver-postgresql postgresql)
+ (conflicts
   (caqti-driver-mariadb
-   (>= 3.0.0))
-  (containers
-   (>= 3.13.0))
-  (alcotest
-   (and
-    :with-test
-    (>= 1.7.0)))
-  (alcotest-lwt
-   (and
-    :with-test
-    (>= 1.7.0)))
-  (caqti-lwt
-   (and
-    :with-test
-    (>= 3.0.0)))
-  (lwt
-   (and
-    :with-test
-    (>= 5.7.0)))
-  (lwt_ppx
-   (and
-    :with-test
-    (>= 2.1.0)))
-  (uri
-   (and
-    :with-test
-    (>= 4.4.0)))))
-
-(package
- (name veins-postgresql)
- (synopsis "PostgreSQL driver convenience package for Veins")
- (description
-  "Depends on veins and caqti-driver-postgresql. Provides Veins_postgresql.Dialect for use in pool configs. Adding (veins-postgresql ...) to your opam deps is all you need for a PostgreSQL-backed Veins application.")
- (depends
-  (ocaml
-   (>= 5.0.0))
-  (veins
-   (= :version))
-  (caqti
-   (>= 3.0.0))
+   (< 3.0.0))
   (caqti-driver-postgresql
-   (>= 3.0.0))
-  (containers
-   (>= 3.13.0))
+   (< 3.0.0))
   (postgresql
-   (>= 5.0.0))
-  (alcotest
-   (and
-    :with-test
-    (>= 1.7.0)))
-  (alcotest-lwt
-   (and
-    :with-test
-    (>= 1.7.0)))
-  (caqti-lwt
-   (and
-    :with-test
-    (>= 3.0.0)))
-  (lwt
-   (and
-    :with-test
-    (>= 5.7.0)))
-  (lwt_ppx
-   (and
-    :with-test
-    (>= 2.1.0)))))
+   (< 5.0.0))))

@@ -1,7 +1,8 @@
 # Veins — Agent Guidelines
 
 Database connection-pooling and migration library for OCaml (OCaml 5, Lwt, Caqti).
-Three opam packages: `veins` (core), `veins-mariadb`, `veins-postgresql`.
+One opam package, `veins`, with three libraries: `veins` (core) and the optional `veins.mariadb` /
+`veins.postgresql`, built when their Caqti driver is installed (`depopts`).
 
 ## Build & Test
 
@@ -38,14 +39,14 @@ make test
 |------|---------|
 | `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
 | `lib/veins.mli` | The public interface: every module of `lib/` an application may use, in sections |
-| `lib/mariadb/` | `veins-mariadb` package — dialect + pre-configured `Pools.Make` |
-| `lib/postgresql/` | `veins-postgresql` package — dialect + pre-configured `Pools.Make` |
+| `lib/mariadb/` | `veins.mariadb` library (optional) — dialect + pre-configured `Pools.Make` |
+| `lib/postgresql/` | `veins.postgresql` library (optional) — dialect + pre-configured `Pools.Make` |
 | `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
 | `test/unit/` | Tests without a database (run anywhere) |
 | `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |
 | `test/mariadb/`, `test/postgresql/` | Integration suites per dialect (`test/common/suite.ml`), each links only its driver |
 | `test/offline/` | Resilience and role checks against a fake server (MariaDB driver, no database) |
-| `dune-project` | Source of truth for all three packages and their dependencies |
+| `dune-project` | Source of truth for the package and its dependencies (drivers are `depopts`) |
 
 ## Key Architecture
 
@@ -58,11 +59,11 @@ module type ConfigSig = sig
   val database : Entity.Database.t (* primary DB — label becomes key *)
   val database_pool_size : int
   val expected_databases : int
-  module Dialect : Dialect.Sig     (* not required with veins-mariadb/postgresql *)
+  module Dialect : Dialect.Sig     (* not required with Veins_mariadb / Veins_postgresql *)
 end
 ```
 
-Prefer the dialect packages for end users — they remove the `Dialect` field:
+Prefer the driver libraries for end users — they remove the `Dialect` field:
 
 ```ocaml
 module Db = Veins_mariadb.Pools.Make (struct

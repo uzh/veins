@@ -4,7 +4,7 @@ Database connection pooling and schema migration library for OCaml.
 
 - **Connection pools** — label-based multi-database pool management backed by [Caqti](https://github.com/paurkedal/ocaml-caqti) and Lwt
 - **Migrations** — ordered, versioned, up/down migration steps with a global registry and drift detection
-- **Dialect-specific packages** — install only the driver you need (`veins-mariadb` or `veins-postgresql`)
+- **MariaDB and PostgreSQL** — use the driver library you need (`veins.mariadb` or `veins.postgresql`)
 - **`veins-gen`** — CLI tool to generate migration file boilerplate
 
 ---
@@ -12,11 +12,22 @@ Database connection pooling and schema migration library for OCaml.
 ## Installation
 
 ```zsh
-opam install veins-mariadb   # for MariaDB / MySQL
-opam install veins-postgresql  # for PostgreSQL
+opam install veins caqti-driver-mariadb      # for MariaDB / MySQL
+opam install veins caqti-driver-postgresql   # for PostgreSQL
 ```
 
-Both pull in `veins` and the appropriate Caqti driver automatically. There is no need to depend on all three packages.
+There is one opam package, `veins`. Its driver libraries are installed when their Caqti driver is, so name both in
+your opam file and the library in dune:
+
+```
+depends: [ "veins" "caqti-driver-mariadb" ]
+```
+
+```dune
+(libraries veins veins.mariadb)
+```
+
+See [Package and libraries](#package-and-libraries).
 
 ---
 
@@ -140,7 +151,7 @@ let separated =
 Several roles may share a login; the database then enforces only what the login is granted, and the types the rest.
 A role claiming more than its login is granted passes the compiler, but the database refuses the statement:
 `Error.Permission_denied` (MariaDB errors 1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, recognised by
-the driver packages' dialects) names the label, login, role and declared needs.
+the driver libraries' dialects) names the label, login, role and declared needs.
 
 ## Migrations
 
@@ -215,13 +226,20 @@ List.iter (function
 
 ---
 
-## Packages
+## Package and libraries
 
-| Package            | Purpose                                                                                                   |
-|--------------------|-----------------------------------------------------------------------------------------------------------|
-| `veins`            | Core library — pools, migrations, dialect abstraction                                                     |
-| `veins-mariadb`    | Pulls in `caqti-driver-mariadb`; provides `Veins_mariadb.Pools.Make` and `Veins_mariadb.Dialect`          |
-| `veins-postgresql` | Pulls in `caqti-driver-postgresql`; provides `Veins_postgresql.Pools.Make` and `Veins_postgresql.Dialect` |
+One opam package, `veins`, with three libraries:
+
+| Library (dune)     | Module             | Needs                     | Purpose                                                              |
+|--------------------|--------------------|---------------------------|----------------------------------------------------------------------|
+| `veins`            | `Veins`            |                           | Pools, migrations, dialect abstraction                               |
+| `veins.mariadb`    | `Veins_mariadb`    | `caqti-driver-mariadb`    | `Dialect`, and `Pools.Make` with it pre-configured                   |
+| `veins.postgresql` | `Veins_postgresql` | `caqti-driver-postgresql` | `Dialect`, and `Pools.Make` with it pre-configured                   |
+
+The Caqti drivers are optional dependencies (`depopts`) of `veins`: a driver library is built and installed only
+when its driver is in the switch, so nobody needs `libpq` for a MariaDB application. opam has no way to ask for a
+part of a package, so an application names the driver itself, next to `veins`. Installing a driver later makes
+opam rebuild `veins` with its library.
 
 The `veins-gen` executable is installed as part of the `veins` package.
 

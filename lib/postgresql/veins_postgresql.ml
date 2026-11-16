@@ -1,7 +1,7 @@
-(** PostgreSQL driver package for Veins.
+(** PostgreSQL driver library of Veins: [veins.postgresql] in dune.
 
-    Depending on [veins-postgresql] in your opam file brings in
-    [caqti-driver-postgresql] transitively — no other dependency entry needed.
+    Part of the opam package [veins], installed when [caqti-driver-postgresql]
+    is: depend on both in your opam file.
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct

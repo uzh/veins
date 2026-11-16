@@ -1,6 +1,9 @@
 (include_subdirs no)
 
+; Part of the veins package, installed when caqti-driver-postgresql is.
+
 (library
  (name veins_postgresql)
- (public_name veins-postgresql)
+ (public_name veins.postgresql)
+ (optional)
  (libraries veins caqti caqti-driver-postgresql postgresql containers))

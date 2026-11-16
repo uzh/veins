@@ -1,7 +1,7 @@
-(** MariaDB driver package for Veins.
+(** MariaDB driver library of Veins: [veins.mariadb] in dune.
 
-    Depending on [veins-mariadb] in your opam file brings in
-    [caqti-driver-mariadb] transitively — no other dependency entry needed.
+    Part of the opam package [veins], installed when [caqti-driver-mariadb]
+    is: depend on both in your opam file.
 
     {[
     module Db = Veins_mariadb.Pools.Make (struct

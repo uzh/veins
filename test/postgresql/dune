@@ -2,10 +2,11 @@
 
 (tests
  (names test_postgresql)
- (package veins-postgresql)
+ (package veins)
+ (build_if %{lib-available:veins.postgresql})
  (libraries
   veins
-  veins-postgresql
+  veins.postgresql
   veins_test_common
   caqti
   caqti-lwt

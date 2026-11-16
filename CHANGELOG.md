@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 To be released as 0.2.0.
 
+### 💥 Breaking: one opam package
+
+- The packages `veins-mariadb` and `veins-postgresql` are gone: their libraries are part of `veins`, as
+  `veins.mariadb` and `veins.postgresql` (modules `Veins_mariadb` / `Veins_postgresql`, unchanged). They are built
+  and installed when their Caqti driver is in the switch: `caqti-driver-mariadb` and `caqti-driver-postgresql` are
+  optional dependencies of `veins`. In an application, depend on `veins` and the driver in the opam file, and name
+  `veins.mariadb` / `veins.postgresql` in dune.
+
 ### 💥 Breaking: database contexts, typed roles and logins
 
 The connection handling of the pool tool's database module moved here. The context design (`Veins.Ctx`: label,
@@ -32,16 +40,16 @@ from #624, #637 and #657 there.
   connects with the owner's, on the owner's pool, so a database with a single user needs only its URL.
 - `Error.Permission_denied` (label, login, role, declared needs): the database refused a statement the types
   allowed, i.e. a login lacks a grant its roles claim. `Dialect.is_permission_error` recognises it (MariaDB errnos
-  1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, in the driver packages).
+  1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501, in the driver libraries).
 - `Error.Failed` carrying label, login, role and the untouched Caqti error, with `Error.cause` /
   `Error.cause_of_exn`.
-- `Dialect.session_setup` (every session is pinned to UTC) and `Dialect.is_connection_error`; the driver packages
+- `Dialect.session_setup` (every session is pinned to UTC) and `Dialect.is_connection_error`; the driver libraries
   recognise their driver's "connection lost" errors (MariaDB errnos, PostgreSQL SQLSTATE class 08).
 - `Migration.Id.derive` for stable step ids of migrations written without ids.
 
 #### Changed
 
-- Built on the Caqti 3 API (`Caqti.Template`, `Caqti.Error`, `Caqti.Pool.Config`); veins and its driver packages no
+- Built on the Caqti 3 API (`Caqti.Template`, `Caqti.Error`, `Caqti.Pool.Config`); veins and its driver libraries no
   longer link `caqti.classic`. Requests built with the Caqti 2 API still work: `Caqti_request.t` is
   `Caqti.Template.Request.t`.
 - Query helpers take a context and a `Request.t`; `query`, `populate`, `transaction` and `transaction_iter` take

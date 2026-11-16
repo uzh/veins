@@ -46,6 +46,12 @@
     the types allowed with [Error.Permission_denied]; with a single URL only
     the types separate the roles.
 
+    {b Libraries.} The opam package [veins] installs the library [veins]
+    and, when their Caqti driver is installed, [veins.mariadb]
+    ([Veins_mariadb], needs [caqti-driver-mariadb]) and [veins.postgresql]
+    ([Veins_postgresql], needs [caqti-driver-postgresql]). Name the library
+    in dune, and the driver next to [veins] in your opam file.
+
     The context design ({!Ctx}) comes from Reynir Björnsson's database
     refactoring of the pool tool (uzh/z-pool-tool#647). *)
 
@@ -103,7 +109,7 @@ module Error = Error
 (** {1 Pools} *)
 
 (** The main pool functor. Apply [Pools.Make(Config)] to obtain a
-    database module for one pool family; the driver packages
+    database module for one pool family; the driver libraries
     ([Veins_mariadb.Pools.Make], [Veins_postgresql.Pools.Make]) need only
     the database. *)
 module Pools = Pools
