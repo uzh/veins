@@ -852,6 +852,20 @@ module Make (D : Dialect) = struct
        | Ok () -> Alcotest.fail "unknown label: expected an error")
   ;;
 
+  let test_unregistered_url () =
+    let labels () = Db.Pool.find_all () |> CCList.map Database.label in
+    let before = labels () in
+    let%lwt tested = Db.Pool.test (Url.create url) in
+    (match tested with
+     | Ok () -> ()
+     | Error error -> Alcotest.failf "the database answers: %s" (Error.show error));
+    Lwt.return
+      (Alcotest.(check (list string))
+         "nothing registered"
+         (CCList.map Label.value before)
+         (CCList.map Label.value (labels ())))
+  ;;
+
   (* Pools with a statement timeout and a single connection that statements
      wait for half a second at most. *)
   module Tuned =
@@ -1240,6 +1254,7 @@ module Make (D : Dialect) = struct
         ; case "outage and recovery" `Slow test_outage_and_recovery
         ; case "unresponsive server fails" `Slow test_unresponsive_server_fails
         ; case "ping" `Quick test_ping
+        ; case "test an unregistered URL" `Quick test_unregistered_url
         ; case "options" `Quick test_options
         ] )
     ; ( "roles"

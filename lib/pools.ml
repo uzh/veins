@@ -187,6 +187,43 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     | Some _ | None -> uri
   ;;
 
+  (* Caqti's messages show the URI with only its userinfo password masked:
+     show it like [Url.pp] does, and mask any password still left. *)
+  let redacted url error =
+    let shown = Format.asprintf "%a" Caqti.Error.pp_uri (Caqti.Error.uri error) in
+    let message = Caqti.Error.show error in
+    let message =
+      if CCString.is_empty shown
+      then message
+      else CCString.replace ~sub:shown ~by:(Entity.Url.show url) message
+    in
+    let uri = Entity.Url.to_uri url in
+    let in_query =
+      Uri.query uri
+      |> CCList.filter_map (fun (name, values) ->
+        match CCString.lowercase_ascii name with
+        | "password" | "sslpassword" ->
+          Some
+            (CCList.flat_map
+               (fun value -> [ value; Uri.pct_encode ~component:`Query_value value ])
+               values)
+        | (_ : string) -> None)
+      |> CCList.flatten
+    in
+    let in_userinfo =
+      match Uri.password uri with
+      | None -> []
+      | Some password -> [ password; Uri.pct_encode ~component:`Userinfo password ]
+    in
+    CCList.fold_left
+      (fun message password ->
+         if CCString.is_empty password
+         then message
+         else CCString.replace ~sub:password ~by:"***" message)
+      message
+      (in_userinfo @ in_query)
+  ;;
+
   let pool_config =
     let max_size = Config.database_pool_size in
     let max_idle_size = CCOption.map (min max_size) options.Pool_options.max_idle_size in
@@ -543,6 +580,21 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
           | Error.Exn error -> Lwt_result.fail error
           | Error.Failed { Error.error; _ } ->
             Lwt_result.fail (Error.Connection_failed (Caqti.Error.show error))
+          | exn -> Lwt.reraise exn)
+    ;;
+
+    let test url =
+      Lwt.catch
+        (fun () ->
+           match%lwt
+             Caqti_lwt_unix.with_connection
+               (Entity.Url.to_uri url |> with_connect_timeout)
+               (fun connection -> post_connect (Connection.fixed connection))
+           with
+           | Ok () -> Lwt_result.return ()
+           | Error error -> Lwt_result.fail (Error.Connection_failed (redacted url error)))
+        (function
+          | Error.Exn error -> Lwt_result.fail error
           | exn -> Lwt.reraise exn)
     ;;
 

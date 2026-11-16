@@ -122,6 +122,14 @@ module type Sig = sig
         answered. Counts as a statement for the reconnect backoff. *)
     val ping : ?login:Entity.Login.t -> Entity.Label.t -> (unit, Error.t) Lwt_result.t
 
+    (** [test url] connects once to [url] the way the pools do (same driver,
+        PostgreSQL's default [connect_timeout], the session settings of
+        {!options}) and closes the connection: [Ok ()] if the database answered.
+        Nothing is registered and no pool is touched, so it serves to check a
+        URL before {!add}. A failure is [Error.Connection_failed] with a message
+        that shows the URL like {!Veins.Url.pp}, i.e. without its password. *)
+    val test : Entity.Url.t -> (unit, Error.t) Lwt_result.t
+
     (** Close the connections of the label's pools (only the one [login]
         connects with, with [~login]) in the background and mark them
         closed, or failed with [~error]; the next statement reconnects. *)

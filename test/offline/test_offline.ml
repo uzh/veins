@@ -246,6 +246,46 @@ let test_registry () =
       | exn -> Alcotest.failf "dropped label: unexpected %s" (Printexc.to_string exn))
 ;;
 
+(* Checking a URL before registering it: a failure says why, without the
+   password, and registers nothing. *)
+let test_pool_test_hides_the_password () =
+  let registered () = CCList.length (Db.Pool.find_all ()) in
+  let before = registered () in
+  let%lwt socket, port = Net.listen () in
+  let%lwt () = Net.close_quietly socket in
+  let fails name url ~secret =
+    match%lwt Db.Pool.test (Url.create url) with
+    | Ok () -> Alcotest.failf "%s: expected an error" name
+    | Error (Error.Connection_failed message) ->
+      Alcotest.(check bool)
+        (Format.asprintf "%s: %s without the password" name message)
+        false
+        (CCString.mem ~sub:secret message);
+      Lwt.return message
+    | Error error -> Alcotest.failf "%s: unexpected %s" name (Error.show error)
+  in
+  let%lwt (_ : string) =
+    fails
+      "userinfo"
+      (Format.asprintf "mariadb://user:s3cr3t-pw@127.0.0.1:%d/x" port)
+      ~secret:"s3cr3t-pw"
+  in
+  let%lwt (_ : string) =
+    fails
+      "query"
+      (Format.asprintf "mariadb://user@127.0.0.1:%d/x?password=s3cr3t-q" port)
+      ~secret:"s3cr3t-q"
+  in
+  let%lwt message =
+    fails "no driver" "nodriver://user:s3cr3t-nd@x/y" ~secret:"s3cr3t-nd"
+  in
+  Alcotest.(check bool)
+    ("no driver: names the scheme: " ^ message)
+    true
+    (CCString.mem ~sub:"nodriver" message);
+  Lwt.return (Alcotest.(check int) "nothing registered" before (registered ()))
+;;
+
 let test_mariadb_permission_errors () =
   let error errno =
     Caqti.Error.request_failed
@@ -309,6 +349,12 @@ let () =
            ; case "registry" `Quick test_registry
            ; case "strict logins" `Quick test_strict_logins
            ; case "MariaDB error classes" `Quick test_mariadb_permission_errors
+           ] )
+       ; ( "pools"
+         , [ case
+               "Pool.test fails without leaking the password"
+               `Quick
+               test_pool_test_hides_the_password
            ] )
        ]
 ;;
