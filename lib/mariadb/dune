@@ -1,6 +1,9 @@
 (include_subdirs no)
 
+; Part of the veins package, installed when caqti-driver-mariadb is.
+
 (library
  (name veins_mariadb)
- (public_name veins-mariadb)
+ (public_name veins.mariadb)
+ (optional)
  (libraries veins caqti caqti-driver-mariadb containers))

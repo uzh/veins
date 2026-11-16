@@ -138,4 +138,8 @@ module Internal : sig
 
   val mutex : (_, _) t -> Lwt_mutex.t option
   val connection : (_, _) t -> Caqti_lwt.connection option
+
+  (** The same context (connection, mutex, after-commit hooks) seen as
+      [role], which must connect as the login the context's role does. *)
+  val with_role : role:'h Entity.Role.t -> ('maybe_txn, _) t -> ('maybe_txn, 'h) t
 end

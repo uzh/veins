@@ -119,6 +119,16 @@ module Internal = struct
     | Connection { connection; _ } | Transaction { connection; _ } -> Some connection
   ;;
 
+  let with_role (type maybe_txn g h) ~(role : h Entity.Role.t)
+    : (maybe_txn, g) t -> (maybe_txn, h) t
+    = function
+    | Label { label; tags; role = _ } -> Label { label; role; tags }
+    | Connection { connection; label; tags; mutex; role = _ } ->
+      Connection { connection; label; role; tags; mutex }
+    | Transaction { connection; label; tags; mutex; on_commit; role = _ } ->
+      Transaction { connection; label; role; tags; mutex; on_commit }
+  ;;
+
   let run_after_commit
         (type g)
         ~on_error

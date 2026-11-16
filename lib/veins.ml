@@ -4,6 +4,7 @@ module Ctx = Ctx
 module Error = Error
 module Pools = Pools
 module Pools_sig = Pools_sig
+module Plain = Plain
 module Dialect = Dialect
 module Caqti_encoders = Caqti_encoders
 module Dynparam = Dynparam

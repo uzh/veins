@@ -3,7 +3,7 @@ opam-version: "2.0"
 version: "0.2.0"
 synopsis: "Database connection pooling and migration library for OCaml"
 description:
-  "Veins provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The veins-gen tool generates migration file boilerplate."
+  "Veins provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The driver libraries veins.mariadb and veins.postgresql are installed when their Caqti driver (caqti-driver-mariadb, caqti-driver-postgresql) is. The veins-gen tool generates migration file boilerplate."
 maintainer: ["Econ IT <it@econ.uzh.ch>"]
 authors: ["Department of Economics, University of Zurich"]
 license: "MIT"
@@ -29,6 +29,12 @@ depends: [
   "uuidm" {>= "0.9.7"}
   "uri" {>= "4.4.0"}
   "odoc" {with-doc}
+]
+depopts: ["caqti-driver-mariadb" "caqti-driver-postgresql" "postgresql"]
+conflicts: [
+  "caqti-driver-mariadb" {< "3.0.0"}
+  "caqti-driver-postgresql" {< "3.0.0"}
+  "postgresql" {< "5.0.0"}
 ]
 build: [
   ["dune" "subst"] {dev}

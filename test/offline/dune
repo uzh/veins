@@ -3,10 +3,11 @@
 
 (tests
  (names test_offline)
- (package veins-mariadb)
+ (package veins)
+ (build_if %{lib-available:veins.mariadb})
  (libraries
   veins
-  veins-mariadb
+  veins.mariadb
   veins_test_common
   caqti
   caqti-lwt

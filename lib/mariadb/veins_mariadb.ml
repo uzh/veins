@@ -1,7 +1,7 @@
-(** MariaDB driver package for Veins.
+(** MariaDB driver library of Veins: [veins.mariadb] in dune.
 
-    Depending on [veins-mariadb] in your opam file brings in
-    [caqti-driver-mariadb] transitively — no other dependency entry needed.
+    Part of the opam package [veins], installed when [caqti-driver-mariadb]
+    is: depend on both in your opam file.
 
     {[
     module Db = Veins_mariadb.Pools.Make (struct
@@ -11,7 +11,10 @@
 
     [database_pool_size] defaults to [10] and [expected_databases] to [5].
     For custom values use {!Veins.Pools.Make} directly with
-    [module Dialect = Veins_mariadb.Dialect]. *)
+    [module Dialect = Veins_mariadb.Dialect].
+
+    With one database user for everything, {!Plain} gives the same pools
+    without roles and needs. *)
 
 (** MariaDB dialect: {!Veins.Dialect.Mariadb}, plus the driver's errors that
     mean the connection is gone. *)
@@ -74,4 +77,21 @@ module Pools = struct
 
       module Dialect = Dialect
     end)
+end
+
+(** Pools for one database user, with the MariaDB dialect pre-configured: no
+    roles, logins or needs, see {!Veins.Plain}.
+
+    {[
+    module Db = Veins_mariadb.Plain.Make (struct
+        let database = Veins.Database.create (Veins.Label.create "root") url
+      end)
+
+    let name = Db.find_opt (Db.label_ctx root) find_name 1
+    ]} *)
+module Plain = struct
+  module Make (C : sig
+      val database : Veins.Database.t
+    end) =
+    Veins.Plain.Make (Pools.Make (C))
 end

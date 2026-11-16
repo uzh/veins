@@ -147,7 +147,7 @@ jobs:
 
       - name: Generated opam files are up to date
         run: |
-          opam exec -- dune build veins.opam veins-mariadb.opam veins-postgresql.opam
+          opam exec -- dune build veins.opam
           git diff --exit-code -- '*.opam'
 
       - name: opam lint
