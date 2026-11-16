@@ -367,7 +367,7 @@ struct
   let run ~needs ctx f =
     let role = role_name ctx in
     let needs = Entity.Need.names needs in
-    match Ctx.connection ctx, Ctx.mutex ctx with
+    match Ctx.Internal.connection ctx, Ctx.Internal.mutex ctx with
     | Some connection, Some mutex ->
       Lwt_mutex.with_lock mutex (fun () ->
         f connection |> raise_on_error ~role ~needs (held_key ctx))
@@ -446,7 +446,7 @@ struct
   ;;
 
   let transaction_iter ~needs ctx fns = transaction ~needs ctx (exec_each fns)
-  let label_ctx ?tags ~role label = Ctx.label_ctx ?tags ~role label
+  let label_ctx ?tags ~role label = Ctx.Internal.label_ctx ?tags ~role label
 
   (* Borrow one connection for [f]. Connection errors, also those raised from
      within [f], drop the pool so the next statement reconnects. *)
@@ -468,17 +468,21 @@ struct
 
   let connection_ctx ?tags ~role label f =
     with_pool_connection ~role label (fun connection ->
-      f (Ctx.connection_ctx ?tags ~role label connection))
+      f (Ctx.Internal.connection_ctx ?tags ~role label connection))
   ;;
 
   let in_transaction (type g) (ctx : (Ctx.transaction, g) Ctx.t) f =
     let role = role_name ctx in
     let key = held_key ctx in
     let connection =
-      CCOption.get_exn_or "transaction context without connection" (Ctx.connection ctx)
+      CCOption.get_exn_or
+        "transaction context without connection"
+        (Ctx.Internal.connection ctx)
     in
     let (module Connection : Caqti_lwt.CONNECTION) = connection in
-    let mutex = CCOption.get_exn_or "transaction context without mutex" (Ctx.mutex ctx) in
+    let mutex =
+      CCOption.get_exn_or "transaction context without mutex" (Ctx.Internal.mutex ctx)
+    in
     let locked f = Lwt_mutex.with_lock mutex f in
     let rollback exn =
       let%lwt () =
@@ -496,7 +500,7 @@ struct
     let%lwt () =
       Lwt.catch (fun () -> locked Connection.commit |> raise_on_error ~role key) rollback
     in
-    Ctx.After_commit.run (Ctx.on_commit ctx) ~on_error:(fun exn ->
+    Ctx.Internal.run_after_commit ctx ~on_error:(fun exn ->
       Log.err (fun m ->
         m ~tags:(Ctx.tags ctx) "After-commit hook failed: %s" (Printexc.to_string exn)));
     Lwt.return result
@@ -504,7 +508,7 @@ struct
 
   let transaction_ctx ?tags ~role label f =
     with_pool_connection ~role label (fun connection ->
-      in_transaction (Ctx.transaction_ctx ?tags ~role label connection) f)
+      in_transaction (Ctx.Internal.transaction_ctx ?tags ~role label connection) f)
   ;;
 
   let with_transaction
@@ -519,10 +523,15 @@ struct
     match Ctx.txn ctx with
     | Ctx.Yes -> f ctx
     | Ctx.No ->
-      (match Ctx.connection ctx with
+      (match Ctx.Internal.connection ctx with
        | Some connection ->
          in_transaction
-           (Ctx.transaction_ctx ~tags ~role ?mutex:(Ctx.mutex ctx) label connection)
+           (Ctx.Internal.transaction_ctx
+              ~tags
+              ~role
+              ?mutex:(Ctx.Internal.mutex ctx)
+              label
+              connection)
            f
        | None -> transaction_ctx ~tags ~role label f)
   ;;

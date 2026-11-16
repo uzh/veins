@@ -83,6 +83,11 @@ add a case there when adding an entry point that takes `~needs` or a request. Ea
 statement the types allowed raises `Error.Permission_denied` (`Dialect.is_permission_error`). The context design is
 Reynir Björnsson's (uzh/z-pool-tool#647); keep the credit in `lib/ctx.mli`, `lib/pools.ml`, README and CHANGELOG.
 
+Only a pool builds contexts. The constructors and what reaches into a context (its connection, its mutex, running
+the after-commit hooks) are in `Ctx.Internal`, which `lib/veins.mli` removes from `Veins.Ctx`: an application can't
+make a transaction context of a connection without a transaction, or pair a role with another login's connection.
+Use `Ctx.Internal` from veins' own modules only.
+
 Never use the driver's `rollback` or caqti's `with_transaction` directly: caqti-driver-mariadb 3.1 leaves
 `autocommit` off after a rollback, `Pools.rollback` restores it (`Dialect.Sig.after_rollback`).
 

@@ -17,7 +17,8 @@ from #624, #637 and #657 there.
 
 - `Veins.Ctx` and `label_ctx` / `connection_ctx` / `transaction_ctx` / `with_transaction`: statements run on a
   context instead of a label; held connections serialise their statements, nested transactions join the outer one,
-  `Ctx.after_commit` hooks run once the transaction committed and are dropped on rollback.
+  `Ctx.after_commit` hooks run once the transaction committed and are dropped on rollback. Only a pool builds
+  contexts.
 - Typed roles: `Veins.Need` (the rights a statement needs, as a lower bound of polymorphic variant tags chosen by
   the application), `Veins.Role` (the tags a part of the application grants, and the login it connects as) and
   `Veins.Request` (a Caqti request plus its needs). Contexts carry their role's type (`('txn, 'g) Ctx.t`), so a

@@ -31,11 +31,6 @@
 (** Functions registered with {!after_commit} for one transaction. *)
 module After_commit : sig
   type t
-
-  (**/**)
-
-  val create : unit -> t
-  val run : on_error:(exn -> unit) -> t -> unit
 end
 
 (** Phantom type: the context is not in a transaction. *)
@@ -110,29 +105,37 @@ val label_tag : Entity.Label.t Logs.Tag.def
 
 (**/**)
 
-val label_ctx
-  :  ?tags:Logs.Tag.set
-  -> role:'g Entity.Role.t
-  -> Entity.Label.t
-  -> (no_transaction, 'g) t
+(** Building contexts and reaching into them, for veins' own modules:
+    [Veins.Ctx] is this interface without [Internal]. A context built here
+    must keep what {!Pools_sig.Sig} promises: its connection is one the pool
+    handed out for the login of [role], and a transaction context is in an
+    open transaction. *)
+module Internal : sig
+  val label_ctx
+    :  ?tags:Logs.Tag.set
+    -> role:'g Entity.Role.t
+    -> Entity.Label.t
+    -> (no_transaction, 'g) t
 
-val connection_ctx
-  :  ?tags:Logs.Tag.set
-  -> role:'g Entity.Role.t
-  -> Entity.Label.t
-  -> Caqti_lwt.connection
-  -> (no_transaction, 'g) t
+  val connection_ctx
+    :  ?tags:Logs.Tag.set
+    -> role:'g Entity.Role.t
+    -> Entity.Label.t
+    -> Caqti_lwt.connection
+    -> (no_transaction, 'g) t
 
-val transaction_ctx
-  :  ?tags:Logs.Tag.set
-  -> role:'g Entity.Role.t
-  -> ?mutex:Lwt_mutex.t
-  -> Entity.Label.t
-  -> Caqti_lwt.connection
-  -> (transaction, 'g) t
+  val transaction_ctx
+    :  ?tags:Logs.Tag.set
+    -> role:'g Entity.Role.t
+    -> ?mutex:Lwt_mutex.t
+    -> Entity.Label.t
+    -> Caqti_lwt.connection
+    -> (transaction, 'g) t
 
-(** [on_commit ctx] are the hooks of transaction [ctx]. *)
-val on_commit : (transaction, _) t -> After_commit.t
+  (** Runs the hooks registered with {!after_commit}, in registration
+      order; [on_error] gets what a hook raised. *)
+  val run_after_commit : on_error:(exn -> unit) -> (transaction, _) t -> unit
 
-val mutex : (_, _) t -> Lwt_mutex.t option
-val connection : (_, _) t -> Caqti_lwt.connection option
+  val mutex : (_, _) t -> Lwt_mutex.t option
+  val connection : (_, _) t -> Caqti_lwt.connection option
+end

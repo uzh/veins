@@ -86,8 +86,12 @@ module Dynparam = Entity.Dynparam
 (** Error types and exceptions raised by query helpers. *)
 module Error = Error
 
-(** Database contexts: a label, a held connection, or a transaction. *)
-module Ctx = Ctx
+(** Database contexts: a label, a held connection, or a transaction. Built
+    by a pool ({!Pools_sig.Sig}). *)
+module Ctx : module type of struct
+    include Ctx
+  end
+  with module Internal := Ctx.Internal
 
 (** Caqti requests with the rights they need. *)
 module Request = Request
