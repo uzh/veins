@@ -25,13 +25,13 @@ module type Sig = sig
       The implementations here only know connect and load errors; the driver
       packages ([Veins_mariadb.Dialect], [Veins_postgresql.Dialect]) also
       recognise the driver's own "connection lost" errors. *)
-  val is_connection_error : Caqti_error.t -> bool
+  val is_connection_error : Caqti.Error.t -> bool
 
   (** [true] when the database refused a statement for lack of privileges;
       veins then raises [Error.Permission_denied]. Like
       {!is_connection_error}, only the driver packages' dialects recognise
       these errors; the implementations here always answer [false]. *)
-  val is_permission_error : Caqti_error.t -> bool
+  val is_permission_error : Caqti.Error.t -> bool
 
   (** Statements run on a connection after rolling back a transaction, before
       it is used again. MariaDB restores [autocommit]: caqti-driver-mariadb

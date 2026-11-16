@@ -25,6 +25,9 @@ from #624, #637 and #657 there.
   statement the role doesn't grant is a compile error, also in nested transactions and for `query`, `populate`
   and `transaction` (`~needs`). Every context names its role; `Role.owner` runs everything. `test/typing` checks
   that misuse doesn't compile.
+- `Veins.Caqti_encoders`: row types with custom encoders and decoders written as lists
+  (`custom ~encode ~decode Schema.[ int; string ]`, encoders returning `Data.[ id; name ]`), moved from the pool
+  tool's database module.
 - `Veins.Login` and per-login URLs: `Database.create ?logins label owner_url`. A login without a URL of its own
   connects with the owner's, on the owner's pool, so a database with a single user needs only its URL.
 - `Error.Permission_denied` (label, login, role, declared needs): the database refused a statement the types
@@ -38,12 +41,16 @@ from #624, #637 and #657 there.
 
 #### Changed
 
+- Built on the Caqti 3 API (`Caqti.Template`, `Caqti.Error`, `Caqti.Pool.Config`); veins and its driver packages no
+  longer link `caqti.classic`. Requests built with the Caqti 2 API still work: `Caqti_request.t` is
+  `Caqti.Template.Request.t`.
 - Query helpers take a context and a `Request.t`; `query`, `populate`, `transaction` and `transaction_iter` take
   `~needs`. The migration runner takes `?role` (default `Role.owner`) and runs on one held connection.
 - `Database.create` takes the owner's URL and optional `~logins` instead of `Main` / `Multiple`; `Pool.fetch`,
   `Pool.connect` and `Pool.disconnect` take `?login` instead of `?role`. `Database.t` is a private record: its
   fields can be read, building one goes through `Database.create`, which checks the logins, and
   `Database.with_status` changes its status.
+- **Breaking:** `Veins.Databases`, a global registry of databases nothing used, is gone: the pools keep their own (`Pool.add`, `Pool.find`, `Pool.find_all`).
 - `Pool.drop`, `Pool.reset` and `Pool.disconnect` return `unit` and close connections in the background.
 - Pools connect lazily, on first use.
 

@@ -1,6 +1,6 @@
 type ('a, 'b, +'m, +'g) t =
   { needs : 'g Entity.Need.t
-  ; request : ('a, 'b, 'm) Caqti_request.t
+  ; request : ('a, 'b, 'm) Caqti.Template.Request.t
   }
   constraint 'm = [< `Zero | `One | `Many ]
 

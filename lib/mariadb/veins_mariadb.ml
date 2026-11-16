@@ -25,8 +25,8 @@ module Dialect : Veins.Dialect.Sig = struct
     (errno >= 2000 && errno < 3000) || CCList.mem errno [ 1053; 1927; 4031 ]
   ;;
 
-  let is_connection_error : Caqti_error.t -> bool = function
-    | `Request_failed { Caqti_error.msg; _ } | `Response_failed { Caqti_error.msg; _ } ->
+  let is_connection_error : Caqti.Error.t -> bool = function
+    | `Request_failed { Caqti.Error.msg; _ } | `Response_failed { Caqti.Error.msg; _ } ->
       (match[@warning "-4"] msg with
        | Caqti_driver_mariadb.Error_msg { errno; _ } -> is_connection_errno errno
        | _ -> false)
@@ -37,12 +37,12 @@ module Dialect : Veins.Dialect.Sig = struct
      privilege (e.g. SUPER), 1370 routine. *)
   let is_permission_errno errno = CCList.mem errno [ 1044; 1142; 1143; 1227; 1370 ]
 
-  let is_permission_error : Caqti_error.t -> bool = function
-    | `Request_failed { Caqti_error.msg; _ } | `Response_failed { Caqti_error.msg; _ } ->
+  let is_permission_error : Caqti.Error.t -> bool = function
+    | `Request_failed { Caqti.Error.msg; _ } | `Response_failed { Caqti.Error.msg; _ } ->
       (match[@warning "-4"] msg with
        | Caqti_driver_mariadb.Error_msg { errno; _ } -> is_permission_errno errno
        | _ -> false)
-    | (_ : Caqti_error.t) -> false
+    | (_ : Caqti.Error.t) -> false
   ;;
 end
 

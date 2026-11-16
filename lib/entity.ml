@@ -164,11 +164,3 @@ module Database = struct
     CCList.assoc_opt ~eq:Login.equal login logins |> CCOption.value ~default:owner
   ;;
 end
-
-module Dynparam = struct
-  type t = Pack : 'a Caqti_type.t * 'a -> t
-
-  let empty = Pack (Caqti_type.unit, ())
-  let add t x (Pack (t', x')) = Pack (Caqti_type.t2 t' t, (x', x))
-  let prefix t x (Pack (t', x')) = Pack (Caqti_type.t2 t t', (x, x'))
-end

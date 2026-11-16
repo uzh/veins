@@ -37,6 +37,7 @@ make test
 | Path | Purpose |
 |------|---------|
 | `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
+| `lib/veins.mli` | The public interface: every module of `lib/` an application may use, in sections |
 | `lib/mariadb/` | `veins-mariadb` package — dialect + pre-configured `Pools.Make` |
 | `lib/postgresql/` | `veins-postgresql` package — dialect + pre-configured `Pools.Make` |
 | `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
@@ -117,6 +118,9 @@ pool.
 
 ## Conventions
 
+- **`lib/veins.mli` decides what is public.** A new module gets its alias there, in the section it belongs to; what
+  only veins' own modules need stays out (a submodule removed there like `Ctx.Internal`, or a narrowed signature like
+  `Url`, which hides `to_uri`).
 - **`.ml` files have no doc-comments** on types or functions that duplicate what is already in the corresponding `.mli`. Keep implementation files lean.
 - **Dialect SQL lives in `dialect.ml`** — never hardcode SQL strings in `migration.ml` or other modules.
 - **`;;` terminators** are used after top-level `let` bindings in `lib/` (conventional profile, margin 90). See [.ocamlformat](.ocamlformat).

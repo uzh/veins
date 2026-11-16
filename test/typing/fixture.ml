@@ -1,7 +1,7 @@
 (* Roles, needs and statements the cases in cases/ misuse. Compiled by
    check.sh, not by dune. *)
 
-open Caqti_request.Infix
+module T = Caqti.Templater.T
 
 module Db = Veins.Pools.Make (struct
     let database =
@@ -21,12 +21,12 @@ let command : [ `Read | `Write ] Veins.Role.t = Veins.Role.v "command"
 let label = Veins.Label.create "x"
 
 let find =
-  (Caqti_type.int ->? Caqti_type.string) "SELECT name FROM t WHERE id = ?"
+  Caqti.Templater.static T.(int -->? string) "SELECT name FROM t WHERE id = ?"
   |> Veins.Request.create ~needs:read
 ;;
 
 let insert =
-  (Caqti_type.int ->. Caqti_type.unit) "INSERT INTO t (id) VALUES (?)"
+  Caqti.Templater.static T.(int -->. unit) "INSERT INTO t (id) VALUES (?)"
   |> Veins.Request.create ~needs:Veins.Need.(read & write)
 ;;
 

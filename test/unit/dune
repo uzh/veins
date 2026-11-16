@@ -3,6 +3,11 @@
 (tests
  (names test_entity test_migration)
  (package veins)
- (libraries veins caqti caqti.classic lwt alcotest containers uuidm)
+ (libraries veins caqti lwt alcotest containers uuidm)
  (preprocess
   (pps lwt_ppx)))
+
+(test
+ (name test_caqti_encoders)
+ (package veins)
+ (libraries veins caqti alcotest))

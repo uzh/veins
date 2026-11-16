@@ -43,7 +43,7 @@ type failure =
   { label : Entity.Label.t
   ; login : Entity.Login.t
   ; role : string option (** The context's role, if a statement failed. *)
-  ; error : Caqti_error.t
+  ; error : Caqti.Error.t
   }
 
 (** Raised by every statement the database or driver rejected. *)
@@ -53,12 +53,12 @@ val failure
   :  ?role:string
   -> login:Entity.Login.t
   -> Entity.Label.t
-  -> Caqti_error.t
+  -> Caqti.Error.t
   -> failure
 
 (** caqti's classification of a statement the server rejected. [None] for
     errors that carry no cause (connecting, encoding, decoding). *)
-val cause : Caqti_error.t -> Caqti_error.cause option
+val cause : Caqti.Error.t -> Caqti.Error.cause option
 
-(** {!cause} for an exception, covering both {!Failed} and [Caqti_error.Exn]. *)
-val cause_of_exn : exn -> Caqti_error.cause option
+(** {!cause} for an exception, covering both {!Failed} and [Caqti.Error.Exn]. *)
+val cause_of_exn : exn -> Caqti.Error.cause option

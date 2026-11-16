@@ -1,7 +1,7 @@
 module type Sig = sig
   val session_setup : string list
-  val is_connection_error : Caqti_error.t -> bool
-  val is_permission_error : Caqti_error.t -> bool
+  val is_connection_error : Caqti.Error.t -> bool
+  val is_permission_error : Caqti.Error.t -> bool
   val after_rollback : string list
   val create_migration_table : table:string -> string
   val fk_checks_supported : bool
@@ -14,8 +14,8 @@ module type Sig = sig
   val uuid_value_fragment : string -> string
 end
 
-let is_connection_error : Caqti_error.t -> bool = function
-  | #Caqti_error.load_or_connect -> true
+let is_connection_error : Caqti.Error.t -> bool = function
+  | #Caqti.Error.load_or_connect -> true
   | `Request_failed _
   | `Response_failed _
   | `Encode_rejected _
@@ -33,7 +33,7 @@ let insert_row ~table ~columns =
 module Mariadb : Sig = struct
   let session_setup = [ "SET time_zone = '+00:00'" ]
   let is_connection_error = is_connection_error
-  let is_permission_error (_ : Caqti_error.t) = false
+  let is_permission_error (_ : Caqti.Error.t) = false
   let after_rollback = [ "SET autocommit = 1" ]
 
   let uuid_select_fragment ~field =
@@ -92,7 +92,7 @@ end
 module Postgresql : Sig = struct
   let session_setup = [ "SET TIME ZONE 'UTC'" ]
   let is_connection_error = is_connection_error
-  let is_permission_error (_ : Caqti_error.t) = false
+  let is_permission_error (_ : Caqti.Error.t) = false
   let after_rollback = []
   let uuid_select_fragment ~field = Format.asprintf "%s::text" field
   let uuid_value_fragment name = Format.asprintf "%s::uuid" name

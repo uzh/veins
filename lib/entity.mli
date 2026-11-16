@@ -182,12 +182,3 @@ module Database : sig
   (** The URL [login] connects with: its own, or the owner's. *)
   val url : t -> Login.t -> Url.t
 end
-
-(** @canonical Veins.Dynparam *)
-module Dynparam : sig
-  type t = Pack : 'a Caqti_type.t * 'a -> t
-
-  val empty : t
-  val add : 'a Caqti_type.t -> 'a -> t -> t
-  val prefix : 'a Caqti_type.t -> 'a -> t -> t
-end

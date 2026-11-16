@@ -16,7 +16,7 @@
       steps at the end).
     - Migrations can target different databases.  Use [~for_databases] to
       associate a migration with specific {!Veins.Label.t} values.  Omitting the
-      argument defaults to [Database (Label.create "root")].
+      argument defaults to [All].
     - Down migrations are optional.  A step whose [~down] is absent is
       irreversible; {!RunnerSig.down} will log a warning and skip it.
 

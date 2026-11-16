@@ -64,12 +64,12 @@ let command : [ `Read | `Write ] Role.t = Role.v "command"
 
 let find_user =
   {sql| SELECT name FROM users WHERE id = ? |sql}
-  |> Caqti_type.(int ->? string)
+  |> Caqti.Templater.(static T.(int -->? string))
   |> Request.create ~needs:read
 
 let create_user =
   {sql| INSERT INTO users (name) VALUES (?) |sql}
-  |> Caqti_type.(string ->. unit)
+  |> Caqti.Templater.(static T.(string -->. unit))
   |> Request.create ~needs:Need.(read & write)
 ```
 
