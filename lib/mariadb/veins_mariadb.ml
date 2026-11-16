@@ -1,24 +1,3 @@
-(** MariaDB driver library of Veins: [veins.mariadb] in dune.
-
-    Part of the opam package [veins], installed when [caqti-driver-mariadb]
-    is: depend on both in your opam file.
-
-    {[
-    module Db = Veins_mariadb.Pools.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
-      end)
-    ]}
-
-    [database_pool_size] defaults to [10] and [expected_databases] to [5].
-    For custom values use {!Veins.Pools.Make} directly with
-    [module Driver = Veins_mariadb.Driver].
-
-    With one database user for everything, {!Plain} gives the same pools
-    without roles and needs. *)
-
-(** How veins reads the MariaDB driver's errors: lost connections and
-    missing privileges. The SQL veins sends follows the connection's dialect,
-    see {!Veins.Dialect}. *)
 module Driver : Veins.Driver.Sig = struct
   include Veins.Driver.Generic
 
@@ -55,20 +34,6 @@ module Driver : Veins.Driver.Sig = struct
   ;;
 end
 
-(** Connection-pool functor with the MariaDB driver pre-configured.
-
-    Only [database] is required; [database_pool_size] defaults to [10] and
-    [expected_databases] defaults to [5].  Use instead of [Veins.Pools.Make]
-    to avoid specifying the driver manually:
-
-    {[
-    module Db = Veins_mariadb.Pools.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
-      end)
-    ]}
-
-    For custom pool sizes, use {!Veins.Pools.Make} directly with
-    [module Driver = Veins_mariadb.Driver] in your config. *)
 module Pools = struct
   module Make (C : sig
       val database : Veins.Database.t
@@ -82,16 +47,6 @@ module Pools = struct
     end)
 end
 
-(** Pools for one database user, with {!Driver} pre-configured: no roles,
-    logins or needs, see {!Veins.Plain}.
-
-    {[
-    module Db = Veins_mariadb.Plain.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
-      end)
-
-    let name = Db.find_opt (Db.label_ctx root) find_name 1
-    ]} *)
 module Plain = struct
   module Make (C : sig
       val database : Veins.Database.t

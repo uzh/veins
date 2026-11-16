@@ -198,7 +198,7 @@ val register : ?for_databases:database_target -> t -> unit
     [VEINS_MIGRATION_TABLE]. For code that treats it specially, e.g. emptying
     every table but this one.
 
-    @raise Invalid_argument if [VEINS_MIGRATION_TABLE] is not a plain table name. *)
+    Raises [Invalid_argument] if [VEINS_MIGRATION_TABLE] is not a plain table name. *)
 val state_table : unit -> string
 
 (** A discrepancy between the in-process registry and the migration-state

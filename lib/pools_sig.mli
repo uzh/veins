@@ -1,6 +1,6 @@
 (** Module-type signatures for the Veins pool functor.
 
-    Application code instantiates a pool by applying {!Pools.Make} to a
+    Application code instantiates a pool by applying {!Veins.Pools.Make} to a
     module satisfying {!ConfigSig}. The resulting module satisfies {!Sig}.
 
     @canonical Veins.Pools_sig *)
@@ -23,26 +23,26 @@ module type ConfigSig = sig
   (** How to read the driver's errors. Prefer [Veins_mariadb.Driver] /
       [Veins_postgresql.Driver], which recognise lost connections and missing
       privileges; {!Veins.Driver.Generic} only knows connect errors. The SQL veins
-      sends follows each connection's dialect, see {!Dialect}. *)
+      sends follows each connection's dialect, see {!Veins.Dialect}. *)
   module Driver : Driver.Sig
 end
 
-(** The tuning of {!Pools.Make_with_options}. *)
+(** The tuning of {!Veins.Pools.Make_with_options}. *)
 module type OptionsSig = sig
   val options : Pool_options.t
 end
 
-(** The interface of a {!Pools.Make} application.
+(** The interface of a {!Veins.Pools.Make} application.
 
-    Statements run on a context ({!Ctx.t}): a label (fresh connection per
+    Statements run on a context ({!Veins.Ctx.t}): a label (fresh connection per
     statement), a held connection, or a transaction. Every helper raises
-    {!Error.Failed} when the database rejects a statement, and
-    {!Error.Exn} for errors veins detects itself and for
+    {!Veins.Error.Failed} when the database rejects a statement, and
+    {!Veins.Error.Exn} for errors veins detects itself and for
     [Error.Permission_denied].
 
     {b Roles.} Every context names its role ({!Veins.Role}), and connects
     as the role's login. A statement only runs on a context whose role type
-    grants everything it needs ({!Request.t}, {!Veins.Need}): the compiler
+    grants everything it needs ({!Veins.Request.t}, {!Veins.Need}): the compiler
     checks this, nothing is checked at runtime.
 
     {b Lost databases.} A connection error drops the pool. The next
@@ -101,10 +101,11 @@ module type Sig = sig
         [Pool_options.reconnect_backoff].
 
         Connections taken from the pool directly are the driver's own:
-        pass them through {!Connection.fixed}.
+        pass them through {!Veins.Connection.fixed}.
 
-        @raise Error.Exn [Database_not_registered], [Login_not_configured].
-        @raise Error.Failed while a pool that lost its database waits to reconnect. *)
+        @raise Veins.Error.Exn [Database_not_registered], [Login_not_configured].
+        @raise Veins.Error.Failed while a pool that lost its database waits to reconnect.
+    *)
     val fetch
       :  ?retries:int
       -> ?login:Entity.Login.t
@@ -168,7 +169,7 @@ module type Sig = sig
 
   (** [transaction_ctx ~role label f] runs [f] in a transaction on a new
       connection: it commits when [f] returns and rolls back when it raises.
-      Hooks registered with {!Ctx.after_commit} run after the commit. *)
+      Hooks registered with {!Veins.Ctx.after_commit} run after the commit. *)
   val transaction_ctx
     :  ?tags:Logs.Tag.set
     -> role:'g Entity.Role.t
@@ -195,7 +196,7 @@ module type Sig = sig
       needs of the statements [f] runs, which the compiler can't see.
 
       The connection, like every one veins passes to a function, is a
-      {!Connection.fixed} one: its [rollback], [with_transaction] and
+      {!Veins.Connection.fixed} one: its [rollback], [with_transaction] and
       [populate] are safe to use. *)
   val query
     :  needs:'g Entity.Need.t
@@ -211,7 +212,7 @@ module type Sig = sig
     -> 'a
     -> 'b list Lwt.t
 
-  (** @raise Error.Failed unless the statement returns exactly one row. *)
+  (** @raise Veins.Error.Failed unless the statement returns exactly one row. *)
   val find : (_, 'g) Ctx.t -> ('a, 'b, [< `One ], 'g) Request.t -> 'a -> 'b Lwt.t
 
   val find_opt
@@ -252,7 +253,7 @@ module type Sig = sig
   (** [connection_transaction connection f] runs [f] in a transaction on a raw
       [connection] (e.g. inside {!query}): commits on [Ok], rolls back on
       [Error] and on exceptions (re-raised). It is [with_transaction] of the
-      {!Connection.fixed} connection, for connections that may not come from
+      {!Veins.Connection.fixed} connection, for connections that may not come from
       veins. *)
   val connection_transaction
     :  Caqti_lwt.connection

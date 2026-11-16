@@ -29,7 +29,7 @@ type t =
       errors 1044, 1142, 1143, 1227, 1370; PostgreSQL SQLSTATE 42501). The
       types allowed it, so the login is missing a grant its role claims, or
       the statement declared fewer needs than it has: a setup bug. Only the
-      driver packages' dialects recognise these errors. *)
+      driver libraries recognise these errors ({!Driver.Sig}). *)
   | Login_not_configured of
       { label : string
       ; login : string

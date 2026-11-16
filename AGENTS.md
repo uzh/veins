@@ -40,8 +40,8 @@ make test
 | `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
 | `lib/veins.mli` | The public interface: every module of `lib/` an application may use, in sections |
 | `lib/plain.ml` | `Veins.Plain` — the pools without roles, logins and needs (one database user) |
-| `lib/mariadb/` | `veins.mariadb` library (optional) — dialect + pre-configured `Pools.Make` / `Plain.Make` |
-| `lib/postgresql/` | `veins.postgresql` library (optional) — dialect + pre-configured `Pools.Make` / `Plain.Make` |
+| `lib/mariadb/` | `veins.mariadb` library (optional) — `Driver` (reads the driver's errors) + pre-configured `Pools.Make` / `Plain.Make` |
+| `lib/postgresql/` | `veins.postgresql` library (optional) — `Driver` (reads the driver's errors) + pre-configured `Pools.Make` / `Plain.Make` |
 | `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
 | `test/unit/` | Tests without a database (run anywhere) |
 | `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |
@@ -143,7 +143,8 @@ pool.
 
 - **`lib/veins.mli` decides what is public.** A new module gets its alias there, in the section it belongs to; what
   only veins' own modules need stays out (a submodule removed there like `Ctx.Internal`, or a narrowed signature like
-  `Url`, which hides `to_uri`).
+  `Url`, which hides `to_uri`). Doc references in signatures that are shown outside `Veins` (`pools_sig.mli`) name
+  modules as `Veins.X`, so they resolve in the driver libraries' docs too.
 - **`.ml` files have no doc-comments** on types or functions that duplicate what is already in the corresponding `.mli`. Keep implementation files lean.
 - **Dialect SQL lives in `dialect.ml`** — never hardcode dialect-specific SQL in `migration.ml` or other modules;
   build requests with `Dialect.request`.
@@ -165,5 +166,6 @@ Edit the generated file: fill in SQL strings, adjust step labels. The file self-
 - [README.md](README.md) — installation, quick-start, usage examples
 - [lib/pools_sig.mli](lib/pools_sig.mli) — full pool functor interface (`ConfigSig`, `Sig`, all query helpers)
 - [lib/migration.mli](lib/migration.mli) — migration types, `RunnerSig`, step construction
-- [lib/dialect.mli](lib/dialect.mli) — `Sig`, `Mariadb`, `Postgresql`, `of_url`
+- [lib/veins.mli](lib/veins.mli) — the public modules, by section
+- [lib/dialect.mli](lib/dialect.mli) — `kind`, `request` and the SQL that differs per dialect
 - [.devcontainer/docker-compose.yml](.devcontainer/docker-compose.yml) — database service definitions
