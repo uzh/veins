@@ -120,8 +120,8 @@ module Dialect = Dialect
 (** Caqti row types with custom encoders and decoders, written as lists. *)
 module Caqti_encoders = Caqti_encoders
 
-(** Dynamic query parameter accumulator for type-safe ad-hoc queries. *)
-module Dynparam = Entity.Dynparam
+(** Parameters of a statement whose number is only known at runtime. *)
+module Dynparam = Dynparam
 
 (** {1 Migrations} *)
 
