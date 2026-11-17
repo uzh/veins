@@ -425,6 +425,12 @@ or another group named with `?config-group=` in the URL.
 (`?sslmode=verify-full` on PostgreSQL) or, for MariaDB, in the `my.cnf` group (`ssl-ca`, `ssl-verify-server-cert`).
 `Url.pp` / `Url.show` mask the password, also one given as a `password` or `sslpassword` query parameter.
 
+**Sharing the pools.** Code that expects Caqti's results instead of veins' exceptions, e.g. a framework that runs
+its own statements, borrows a connection with `Db.Pool.use label f` (`?login` with roles). `f` gets a fixed
+connection (`Veins.Connection.fixed`) and its result comes back as it is, `(_, Caqti.Error.t) result`. A lost
+connection drops the pool and a pool that waits to reconnect gives an `Error` right away, as for every statement.
+Only an unknown label or login raises. These errors aren't reported to `on_failure`.
+
 ---
 
 ## Multiple databases

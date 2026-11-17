@@ -320,26 +320,31 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
 
   (* Only a broken connection invalidates the pool; a constraint violation or
      a syntax error leaves it alone. *)
-  let settle ?quiet ?request ?role ?needs key pool input =
-    let connection_lost error =
+  let record key pool = function
+    | Ok (_ : _) -> mark_healthy key pool
+    | Error error when Config.Driver.is_connection_error error ->
       disconnect_entry ~error ~pool key;
       log_pools ()
-    in
+    | Error (_ : Caqti.Error.t) -> mark_healthy key pool
+  ;;
+
+  (* What [f] raised, on its way out: a lost connection drops the pool too. *)
+  let record_exn key pool = function
+    | Error.Failed { Error.error; _ } when Config.Driver.is_connection_error error ->
+      record key pool (Error error)
+    | (_ : exn) -> release_probe key pool
+  ;;
+
+  let settle ?quiet ?request ?role ?needs key pool input =
     match%lwt input with
     | Ok value ->
       mark_healthy key pool;
       Lwt.return value
     | Error error ->
-      if Config.Driver.is_connection_error error
-      then connection_lost error
-      else mark_healthy key pool;
+      record key pool (Error error);
       statement_error ?quiet ?request ?role ?needs key error
-    | exception (Error.Failed { Error.error; _ } as exn)
-      when Config.Driver.is_connection_error error ->
-      connection_lost error;
-      Lwt.reraise exn
     | exception exn ->
-      release_probe key pool;
+      record_exn key pool exn;
       Lwt.reraise exn
   ;;
 
@@ -640,6 +645,48 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       in
       track_connection_issue database result;
       Lwt.return result
+    ;;
+
+    (* Veins' own connection errors (an exhausted pool) as Caqti's. *)
+    let connect_failed key message =
+      let uri =
+        CCOption.map_or
+          ~default:Uri.empty
+          (fun entry -> Entity.Url.to_connect_uri entry.url)
+          (Pools_tbl.find_opt pools key)
+      in
+      Caqti.Error.connect_failed ~uri (Caqti.Error.Msg message)
+    ;;
+
+    (* What [fetch_key] and [use_pool] raise for a pool that can't give a
+       connection, as a Caqti error. *)
+    let no_connection key ~fetching exn =
+      match[@warning "-4"] exn with
+      | Error.Failed { Error.error; _ } when fetching -> Some error
+      | Error.Exn (Error.Connection_failed message) -> Some (connect_failed key message)
+      | _ -> None
+    ;;
+
+    let use ?(login = Entity.Login.owner) label f =
+      let key = resolve label login in
+      let failed ~fetching exn =
+        match no_connection key ~fetching exn with
+        | Some error -> Lwt_result.fail error
+        | None -> Lwt.reraise exn
+      in
+      match%lwt fetch_key key with
+      | exception exn -> failed ~fetching:true exn
+      | pool ->
+        (match%lwt
+           use_pool ~quiet:true key pool (fun connection ->
+             f (Connection.fixed connection))
+         with
+         | result ->
+           record key pool result;
+           Lwt.return result
+         | exception exn ->
+           record_exn key pool exn;
+           failed ~fetching:false exn)
     ;;
 
     let disconnect ?error ?login label =

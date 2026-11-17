@@ -149,6 +149,49 @@ let test_backoff () =
        server.Net.Unresponsive.accepted)
 ;;
 
+(* [Pool.use] returns what goes wrong as Caqti's errors, reconnects and backs
+   off like every statement, and raises only for setup errors. *)
+let test_use_returns_errors () =
+  with_server
+  @@ fun server ->
+  let label = Label.create "veins_use" in
+  Backoff.Pool.add (Database.create label (url server));
+  let select (module C : Caqti_lwt.CONNECTION) =
+    C.find (Caqti.Templater.static T.(unit -->! int) "SELECT 1") ()
+  in
+  let use () =
+    match%lwt Backoff.Pool.use label select with
+    | Ok (_ : int) -> Alcotest.fail "use: expected an error"
+    | Error (_ : Caqti.Error.t) -> Lwt.return_unit
+  in
+  let%lwt () = use () in
+  let%lwt () = use () in
+  Alcotest.(check int)
+    "reconnects after a connection error"
+    2
+    server.Net.Unresponsive.accepted;
+  let started = Unix.gettimeofday () in
+  let%lwt () = use () in
+  Alcotest.(check bool)
+    "fails right away during the backoff"
+    true
+    (Unix.gettimeofday () -. started < 0.2);
+  Alcotest.(check int) "no connection attempt" 2 server.Net.Unresponsive.accepted;
+  Backoff.Pool.drop label;
+  let%lwt () =
+    expect
+      "unregistered label"
+      (fun () -> Backoff.Pool.use (Label.create "veins_unknown") select)
+      (function
+        | Error.Exn (Error.Database_not_registered _) -> ()
+        | exn ->
+          Alcotest.failf
+            "expected Database_not_registered, got %s"
+            (Printexc.to_string exn))
+  in
+  Lwt.return_unit
+;;
+
 (* A database that separates its users refuses a login it has no URL for,
    instead of running its roles as the owner. *)
 let test_strict_logins () =
@@ -526,6 +569,7 @@ let () =
            ; case "failed pool retries" `Quick test_failed_pool_retries
            ; case "backoff" `Slow test_backoff
            ; case "on_failure" `Quick test_on_failure
+           ; case "Pool.use returns errors" `Quick test_use_returns_errors
            ] )
        ; ( "logins"
          , [ case "logins share the owner's pool" `Quick test_logins_share_the_owner_pool

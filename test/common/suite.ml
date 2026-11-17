@@ -999,6 +999,35 @@ module Make (D : Dialect) = struct
     Lwt.return_unit
   ;;
 
+  (* [Pool.use] returns Caqti's results; a
+     statement error leaves the pool alone, exceptions pass through. *)
+  let test_use () =
+    let select_one (module C : Caqti_lwt.CONNECTION) = C.find (Request.caqti ping) () in
+    let%lwt one = Db.Pool.use root select_one in
+    Alcotest.(check (result int string))
+      "result of f"
+      (Ok 1)
+      (Result.map_error Caqti.Error.show one);
+    let%lwt pool = Db.Pool.fetch root in
+    let%lwt missing =
+      Db.Pool.use root (fun (module C : Caqti_lwt.CONNECTION) ->
+        C.find (Request.caqti (int_query "SELECT n FROM veins_test_no_such_table")) ())
+    in
+    Alcotest.(check bool) "statement error returned" true (Result.is_error missing);
+    let%lwt same = Db.Pool.fetch root in
+    Alcotest.(check bool) "pool kept" true (pool == same);
+    let%lwt () =
+      expect_exn
+        "exception of f"
+        (fun () -> Db.Pool.use root (fun _ -> failwith "f"))
+        (function
+          | Failure _ -> ()
+          | exn -> Alcotest.failf "expected Failure, got %s" (Printexc.to_string exn))
+    in
+    let%lwt one = Db.Pool.use root select_one in
+    Lwt.return (Alcotest.(check bool) "usable afterwards" true (Result.is_ok one))
+  ;;
+
   (* {1 Roles} *)
 
   let as_role role = Db.label_ctx ~role roles_label
@@ -1567,6 +1596,7 @@ module Make (D : Dialect) = struct
         ; case "test a database" `Quick test_database_test
         ; case "options" `Quick test_options
         ; case "on_failure" `Quick test_on_failure
+        ; case "Pool.use" `Quick test_use
         ] )
     ; ( "roles"
       , [ case "roles run their statements" `Quick test_roles_run_their_statements

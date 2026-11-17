@@ -127,6 +127,28 @@ module type Sig = sig
         answered. Counts as a statement for the reconnect backoff. *)
     val ping : ?login:Entity.Login.t -> Entity.Label.t -> (unit, Error.t) Lwt_result.t
 
+    (** [use label f] runs [f] on a connection of the pool [login] (default
+        {!Veins.Login.owner}) connects with, for code that expects Caqti's
+        results instead of veins' exceptions, e.g. a framework sharing the
+        pools. It is a statement, not a context: no role, nothing checked.
+
+        [f] gets a {!Veins.Connection.fixed} connection. Its [Error] is
+        returned as it is; a lost connection drops the pool, and the next
+        statement reconnects, as for every statement. A pool waiting to
+        reconnect, or one that gives no connection within
+        [Pool_options.acquire_timeout], gives [Error] too, a
+        [`Connect_failed] for the latter. Errors are not reported to
+        [Pool_options.on_failure], and exceptions of [f] pass through.
+
+        @raise Veins.Error.Exn
+          [Database_not_registered],
+          [Login_not_configured]: setup errors, not the database's. *)
+    val use
+      :  ?login:Entity.Login.t
+      -> Entity.Label.t
+      -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
+      -> ('a, Caqti.Error.t) Lwt_result.t
+
     (** [test database] connects once to every URL of [database] (the
         owner's, then each login's) with {!Veins.Connection.test}, the way the
         pools do: same driver, PostgreSQL's default [connect_timeout], the

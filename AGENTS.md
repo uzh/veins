@@ -89,7 +89,8 @@ libraries' `Pools.Make_with_options` / `Plain.Make_with_options` take `database`
 
 A connection error drops only the pool it happened on (`settle` / `disconnect_entry ~pool`), then the pool backs
 off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one statement (`probe`) until that
-settled. Every path that takes a pool from `fetch_key` must go through `settle`, or the probe is never released.
+settled. Every path that takes a pool from `fetch_key` must go through `settle` (or, returning results like
+`Pool.use`, `record` / `record_exn`), or the probe is never released.
 Caqti's `connect_pool` is lazy, only a statement (or `Pool.ping`) tells whether the database answers.
 
 `Connection.test url` connects once without a pool; `Pool.test database` runs it for every URL of a database with

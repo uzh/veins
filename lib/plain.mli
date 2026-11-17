@@ -112,6 +112,19 @@ module type Sig = sig
 
     val connect : Entity.Label.t -> (unit, Error.t) result
     val ping : Entity.Label.t -> (unit, Error.t) Lwt_result.t
+
+    (** [use label f] runs [f] on a {!Veins.Connection.fixed} connection of
+        the label and returns its result as it is, for code that expects
+        Caqti's results instead of veins' exceptions (e.g. a framework
+        sharing the pools). Lost connections drop the pool as for every
+        statement; see [Pools_sig.Sig.Pool.use].
+
+        @raise Veins.Error.Exn [Database_not_registered]. *)
+    val use
+      :  Entity.Label.t
+      -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
+      -> ('a, Caqti.Error.t) Lwt_result.t
+
     val test : Entity.Database.t -> (unit, Error.t) Lwt_result.t
     val disconnect : ?error:Caqti.Error.t -> Entity.Label.t -> unit
   end

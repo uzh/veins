@@ -49,7 +49,7 @@ To be released as 0.2.0.
   it is made, so a configuration loaded later at startup (an `.env` file, a test setup) is seen without a
   `Pool.reset`. Write `let database () = …`; a database built once already becomes `let database () = db`.
 
-### Added: reporting failures, driver-library options
+### Added: reporting failures, driver-library options, sharing the pools
 
 - `Pool_options.on_failure`: called with every error a statement raises (label, role, request, the exception),
   once, where veins raises it, so an application can report failures (e.g. to an error tracker) without wrapping
@@ -58,6 +58,9 @@ To be released as 0.2.0.
 - `Veins_mariadb` / `Veins_postgresql`: `Pools.Make_with_options` and `Plain.Make_with_options`, for a pool size
   and `Pool_options` of your own without spelling out the driver (`database` and `database_pool_size`, then the
   options).
+- `Pool.use label f` (also in `Plain`): runs `f` on a fixed connection of the pool and returns Caqti's result
+  instead of raising, for a framework that shares the pools (e.g. Sihl's services). Lost connections drop the pool
+  and the backoff applies as for every statement; only setup errors (unknown label or login) raise.
 
 ### Added: pools without roles
 
