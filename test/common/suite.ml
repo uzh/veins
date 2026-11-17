@@ -593,13 +593,24 @@ module Make (D : Dialect) = struct
 
   module Runner = Migration.Make (Db)
 
+  (* The suite may share its database with an application: only ever touch
+     the migration state of the suite's own namespaces. *)
+  let forget_test_migrations () =
+    let%lwt (_ : _ list) = Runner.status root () in
+    Db.exec
+      (root_ctx ())
+      (direct
+         T.(unit -->. unit)
+         "DELETE FROM veins_migration_state WHERE namespace LIKE 'veins_test_%'"
+       |> Request.create ~needs:Roles.write)
+      ()
+  ;;
+
   let test_migration () =
     let ns =
       Migration.Namespace.create (Format.asprintf "veins_test_mig_%d" (Random.int 100000))
     in
-    let%lwt () =
-      Db.exec (root_ctx ()) (ddl "DROP TABLE IF EXISTS veins_migration_state") ()
-    in
+    let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_mig") () in
     let mig =
       Migration.(
@@ -640,7 +651,57 @@ module Make (D : Dialect) = struct
     let%lwt () = Runner.down root mig |> Lwt.map (ok "down") in
     let%lwt n = applied () in
     Alcotest.(check int) "reverted" 0 n;
+    let%lwt () = forget_test_migrations () in
     Db.exec (root_ctx ()) (drop_table "veins_t_mig") ()
+  ;;
+
+  (* Importing another engine's state: the first step ran already (the table
+     exists), [mark_applied] records it, [up] runs only the rest. *)
+  let test_migration_import () =
+    let namespace = Format.asprintf "veins_test_import_%d" (Random.int 100000) in
+    let id index = Migration.Id.(create (derive ~namespace ~index)) in
+    let mig =
+      Migration.(
+        create
+          (Namespace.create namespace)
+          ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
+        |> add_step
+             (Step.create
+                ~id:(id 0)
+                ~label:"create table"
+                "CREATE TABLE veins_t_import (id INTEGER PRIMARY KEY)")
+        |> add_step
+             (Step.create
+                ~id:(id 1)
+                ~label:"insert row"
+                "INSERT INTO veins_t_import (id) VALUES (1)"))
+    in
+    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_import") () in
+    let%lwt () =
+      Db.exec
+        (root_ctx ())
+        (ddl "CREATE TABLE veins_t_import (id INTEGER PRIMARY KEY)")
+        ()
+    in
+    let%lwt () = Runner.mark_applied root mig ~steps:1 in
+    let%lwt () = Runner.mark_applied root mig ~steps:1 in
+    let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
+    Alcotest.(check (list (pair string int)))
+      "one step pending"
+      [ namespace, 1 ]
+      (CCList.map (fun (ns, n) -> Migration.Namespace.value ns, n) pending);
+    let%lwt () =
+      Runner.up root mig
+      |> Lwt.map (function
+        | Ok () -> ()
+        | Error e -> Alcotest.failf "up: %s" (Error.show e))
+    in
+    let%lwt rows = Db.find (root_ctx ()) (count "veins_t_import") () in
+    Alcotest.(check int) "only the second step ran" 1 rows;
+    let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
+    Alcotest.(check int) "nothing pending" 0 (CCList.length pending);
+    let%lwt () = forget_test_migrations () in
+    Db.exec (root_ctx ()) (drop_table "veins_t_import") ()
   ;;
 
   (* {1 Without roles} *)
@@ -767,7 +828,10 @@ module Make (D : Dialect) = struct
         ; case "transactions and hooks" `Quick test_plain_transactions
         ; case "statements with needs join" `Quick test_plain_with_roles
         ] )
-    ; "migrations", [ case "run_all, check, down" `Quick test_migration ]
+    ; ( "migrations"
+      , [ case "run_all, check, down" `Quick test_migration
+        ; case "import another engine's state" `Quick test_migration_import
+        ] )
     ]
   ;;
 
