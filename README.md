@@ -396,6 +396,13 @@ module Db =
 | `statement_timeout` | `None`        | Seconds after which the database aborts a statement; migrations run without it      |
 | `acquire_timeout`   | `None`        | Seconds a statement waits for a connection of an exhausted pool before it fails     |
 | `reconnect_backoff` | `(0.5, 30.)`  | Initial and longest wait before a pool that lost its database tries to reconnect    |
+| `on_failure`        | `None`        | Called with every error a statement raises, before it is raised                     |
+
+**Reporting failures.** `on_failure` gets the label, the context's role, the request (as Caqti prints it, for
+`exec`, `collect`, `find` and `find_opt`) and the exception the statement raises right after (`Error.Failed` or
+`Error.Exn`), e.g. to send it to an error tracker instead of wrapping every helper. Each error is reported once,
+where veins raises it, not again when it leaves `connection_ctx` or `transaction_ctx`; `Pool.ping` and the other
+`Pool` functions don't report. The statement waits for it, and an exception of it is logged and dropped.
 
 **Connections.** There is one pool per label for the owner and one per login with a URL of its own, each opening
 up to `database_pool_size` connections: with many databases, keep that product under the server's connection

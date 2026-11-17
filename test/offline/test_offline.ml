@@ -372,6 +372,116 @@ let test_mariadb_permission_errors () =
   Lwt.return_unit
 ;;
 
+(* [Pool_options.on_failure] hears of every error a statement raises, once,
+   and nothing of [Pool.ping]. *)
+let reported : Pool_options.failure list ref = ref []
+
+module Reporting =
+  Veins_mariadb.Plain.Make_with_options
+    (struct
+      let database = Config.database
+      let database_pool_size = 2
+    end)
+    (struct
+      let options =
+        Pool_options.
+          { default with
+            reconnect_backoff = 0., 0.
+          ; on_failure =
+              Some
+                (fun failure ->
+                  reported := failure :: !reported;
+                  Lwt.return_unit)
+          }
+      ;;
+    end)
+
+module Raising =
+  Veins_mariadb.Plain.Make_with_options
+    (struct
+      let database = Config.database
+      let database_pool_size = 2
+    end)
+    (struct
+      let options =
+        Pool_options.{ default with on_failure = Some (fun _ -> failwith "hook") }
+      ;;
+    end)
+
+let select_one = Caqti.Templater.static T.(unit -->! int) "SELECT 1"
+
+let test_on_failure () =
+  with_server
+  @@ fun server ->
+  let label = Label.create "veins_on_failure" in
+  Reporting.Pool.add (Database.create label (url server));
+  Raising.Pool.add (Database.create label (url server));
+  let reports name expected =
+    let got = !reported in
+    reported := [];
+    Alcotest.(check int) (name ^ ": reported once") expected (CCList.length got);
+    got
+  in
+  let same_exn name raised { Pool_options.exn; _ } =
+    Alcotest.(check bool) (name ^ ": the raised exception") true (exn == raised)
+  in
+  let%lwt raised =
+    expect
+      "find"
+      (fun () -> Reporting.find (Reporting.label_ctx label) select_one ())
+      Fun.id
+  in
+  CCList.iter
+    (fun ({ Pool_options.label = reported_label; request; _ } as failure) ->
+       same_exn "find" raised failure;
+       Alcotest.(check string)
+         "find: label"
+         (Label.value label)
+         (Label.value reported_label);
+       Alcotest.(check bool)
+         "find: request"
+         true
+         (CCOption.exists (fun sql -> CCString.mem ~sub:"SELECT 1" sql) request))
+    (reports "find" 1);
+  let%lwt raised =
+    expect
+      "connection_ctx"
+      (fun () ->
+         Reporting.connection_ctx label (fun ctx -> Reporting.find ctx select_one ()))
+      Fun.id
+  in
+  CCList.iter (same_exn "connection_ctx" raised) (reports "connection_ctx" 1);
+  let%lwt raised =
+    expect
+      "unregistered label"
+      (fun () ->
+         Reporting.exec
+           (Reporting.label_ctx (Label.create "veins_unknown"))
+           (Caqti.Templater.static T.(unit -->. unit) "SELECT 1")
+           ())
+      Fun.id
+  in
+  CCList.iter (same_exn "unregistered label" raised) (reports "unregistered label" 1);
+  let%lwt () =
+    match%lwt Reporting.Pool.ping label with
+    | Ok () -> Alcotest.fail "ping: expected an error"
+    | Error (_ : Error.t) -> Lwt.return_unit
+  in
+  let (_ : Pool_options.failure list) = reports "ping" 0 in
+  let%lwt () =
+    expect
+      "failing hook"
+      (fun () -> Raising.find (Raising.label_ctx label) select_one ())
+      (function
+        | Error.Failed _ -> ()
+        | exn ->
+          Alcotest.failf "expected the statement's error, got %s" (Printexc.to_string exn))
+  in
+  Reporting.Pool.drop label;
+  Raising.Pool.drop label;
+  Lwt.return_unit
+;;
+
 let () =
   let open Alcotest_lwt in
   let case name speed f = test_case name speed (fun (_ : Lwt_switch.t) () -> f ()) in
@@ -385,6 +495,7 @@ let () =
                test_unreachable_database_settles_every_query
            ; case "failed pool retries" `Quick test_failed_pool_retries
            ; case "backoff" `Slow test_backoff
+           ; case "on_failure" `Quick test_on_failure
            ] )
        ; ( "logins"
          , [ case "logins share the owner's pool" `Quick test_logins_share_the_owner_pool

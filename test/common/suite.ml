@@ -951,6 +951,54 @@ module Make (D : Dialect) = struct
     Lwt.return (Alcotest.(check int) "reconnects" 1 one)
   ;;
 
+  (* [on_failure] hears of a statement failing inside a transaction once, not
+     again when the error leaves the transaction and its connection. *)
+  let failures : Pool_options.failure list ref = ref []
+
+  module Reporting =
+    Pools.Make_with_options
+      (Db.Config)
+      (struct
+        let options =
+          Pool_options.
+            { default with
+              on_failure =
+                Some
+                  (fun failure ->
+                    failures := failure :: !failures;
+                    Lwt.return_unit)
+            }
+        ;;
+      end)
+
+  let test_on_failure () =
+    Reporting.Pool.initialize ();
+    let missing = int_query "SELECT n FROM veins_test_no_such_table" in
+    let%lwt () =
+      expect_exn
+        "missing table"
+        (fun () ->
+           Reporting.transaction_ctx ~role:owner root (fun ctx ->
+             Reporting.find ctx missing ()))
+        (function
+          | Error.Failed _ -> ()
+          | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))
+    in
+    let reported = !failures in
+    failures := [];
+    Reporting.Pool.clear ();
+    Alcotest.(check int) "reported once" 1 (CCList.length reported);
+    CCList.iter
+      (fun { Pool_options.request; role; _ } ->
+         Alcotest.(check (option string)) "role" (Some (Role.name owner)) role;
+         Alcotest.(check bool)
+           "request"
+           true
+           (CCOption.exists (CCString.mem ~sub:"veins_test_no_such_table") request))
+      reported;
+    Lwt.return_unit
+  ;;
+
   (* {1 Roles} *)
 
   let as_role role = Db.label_ctx ~role roles_label
@@ -1518,6 +1566,7 @@ module Make (D : Dialect) = struct
         ; case "test an unregistered URL" `Quick test_unregistered_url
         ; case "test a database" `Quick test_database_test
         ; case "options" `Quick test_options
+        ; case "on_failure" `Quick test_on_failure
         ] )
     ; ( "roles"
       , [ case "roles run their statements" `Quick test_roles_run_their_statements

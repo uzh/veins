@@ -150,22 +150,51 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
         label, None)
   ;;
 
+  let notify ?request ?role label exn =
+    match options.Pool_options.on_failure with
+    | None -> Lwt.return_unit
+    | Some on_failure ->
+      let request = CCOption.map (fun request -> request ()) request in
+      Lwt.catch
+        (fun () -> on_failure { Pool_options.label; role; request; exn })
+        (fun hook_exn ->
+           Lwt.return
+             (Log.err (fun m ->
+                m
+                  ~tags:(tags_of_key (label, None))
+                  "on_failure failed: %s"
+                  (Printexc.to_string hook_exn))))
+  ;;
+
+  (* Raise an error of a statement, reported to [on_failure] unless [quiet]
+     ([Pool.ping]). Only where veins raises it: errors passing through on
+     their way out are reported already. *)
+  let fail ?(quiet = false) ?request ?role label exn =
+    let%lwt () = if quiet then Lwt.return_unit else notify ?request ?role label exn in
+    Lwt.fail exn
+  ;;
+
   (* A statement the database refused. [needs] and [role] only describe it,
      for [Permission_denied]. *)
-  let statement_error ?role ?(needs = []) key error =
+  let statement_error ?quiet ?request ?role ?(needs = []) key error =
     let label, _ = key in
     let login = Key.login key in
-    if Config.Driver.is_permission_error error
-    then
-      raise_error
-        (Error.Permission_denied
-           { label = Entity.Label.value label
-           ; login = Entity.Login.name login
-           ; role
-           ; needs
-           ; message = Caqti.Error.show error
-           })
-    else raise (Error.Failed (Error.failure ?role ~login label error))
+    fail
+      ?quiet
+      ?request
+      ?role
+      label
+      (if Config.Driver.is_permission_error error
+       then
+         Error.Exn
+           (Error.Permission_denied
+              { label = Entity.Label.value label
+              ; login = Entity.Login.name login
+              ; role
+              ; needs
+              ; message = Caqti.Error.show error
+              })
+       else Error.Failed (Error.failure ?role ~login label error))
   ;;
 
   (* Both Caqti drivers pin the session to UTC themselves when connecting
@@ -291,7 +320,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
 
   (* Only a broken connection invalidates the pool; a constraint violation or
      a syntax error leaves it alone. *)
-  let settle ?role ?needs key pool input =
+  let settle ?quiet ?request ?role ?needs key pool input =
     let connection_lost error =
       disconnect_entry ~error ~pool key;
       log_pools ()
@@ -304,7 +333,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       if Config.Driver.is_connection_error error
       then connection_lost error
       else mark_healthy key pool;
-      statement_error ?role ?needs key error
+      statement_error ?quiet ?request ?role ?needs key error
     | exception (Error.Failed { Error.error; _ } as exn)
       when Config.Driver.is_connection_error error ->
       connection_lost error;
@@ -314,10 +343,10 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       Lwt.reraise exn
   ;;
 
-  let raise_on_error ?role ?needs key input =
+  let raise_on_error ?request ?role ?needs key input =
     match%lwt input with
     | Ok value -> Lwt.return value
-    | Error error -> statement_error ?role ?needs key error
+    | Error error -> statement_error ?request ?role ?needs key error
   ;;
 
   (* The pool to run a statement on. A pool whose reconnect failed fails
@@ -366,7 +395,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
      request for one is never cancelled (Caqti's pool would lose the wake-up
      of the next waiter): once it is served, it returns the connection
      unused. *)
-  let use_pool key pool f =
+  let use_pool ?quiet ?request ?role key pool f =
     match options.Pool_options.acquire_timeout with
     | None -> Caqti_lwt_unix.Pool.use f pool
     | Some timeout ->
@@ -392,17 +421,28 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
          Lwt.cancel timer;
          (match%lwt used with
           | Ok (Some result) -> Lwt.return result
-          | Ok None -> raise_error (Error.Connection_failed "Connection abandoned")
+          | Ok None ->
+            fail
+              ?quiet
+              ?request
+              ?role
+              (fst key)
+              (Error.Exn (Error.Connection_failed "Connection abandoned"))
           | Error _ as error -> Lwt.return error)
        | false ->
          abandoned := true;
          Lwt.on_failure used (fun (_ : exn) -> ());
-         raise_error
-           (Error.Connection_failed
-              (Format.asprintf
-                 "No connection of pool '%s' became free within %gs"
-                 (Key.show key)
-                 timeout)))
+         fail
+           ?quiet
+           ?request
+           ?role
+           (fst key)
+           (Error.Exn
+              (Error.Connection_failed
+                 (Format.asprintf
+                    "No connection of pool '%s' became free within %gs"
+                    (Key.show key)
+                    timeout))))
   ;;
 
   module Pool = struct
@@ -521,8 +561,9 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
            let key = resolve label login in
            let%lwt pool = fetch_key key in
            let%lwt () =
-             use_pool key pool (fun (_ : Caqti_lwt.connection) -> Lwt_result.return ())
-             |> settle key pool
+             use_pool ~quiet:true key pool (fun (_ : Caqti_lwt.connection) ->
+               Lwt_result.return ())
+             |> settle ~quiet:true key pool
            in
            Lwt_result.return ())
         (function
@@ -623,27 +664,45 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       label, if Entity.Login.is_owner login then None else Some login
   ;;
 
+  (* The pool a statement runs on; what [resolve] and [fetch_key] raise is
+     reported. *)
+  let statement_pool ?request ~role label login =
+    Lwt.catch
+      (fun () ->
+         let key = resolve label login in
+         let%lwt pool = fetch_key key in
+         Lwt.return (key, pool))
+      (function
+        | (Error.Failed _ | Error.Exn _) as exn -> fail ?request ~role label exn
+        | exn -> Lwt.reraise exn)
+  ;;
+
   (* Run [f] on a connection of [ctx]: the held one, serialised by its mutex,
      or a fresh one from the pool. *)
-  let run ~needs ctx f =
+  let run ?request ~needs ctx f =
     let role = role_name ctx in
     let needs = Entity.Need.names needs in
     match Ctx.Internal.connection ctx, Ctx.Internal.mutex ctx with
     | Some connection, Some mutex ->
       Lwt_mutex.with_lock mutex (fun () ->
-        f connection |> raise_on_error ~role ~needs (held_key ctx))
+        f connection |> raise_on_error ?request ~role ~needs (held_key ctx))
     | _ ->
-      let key = resolve (Ctx.label ctx) (Entity.Role.login (Ctx.role ctx)) in
-      let%lwt pool = fetch_key key in
-      use_pool key pool (fun connection -> f (Connection.fixed connection))
-      |> settle ~role ~needs key pool
+      let%lwt key, pool =
+        statement_pool ?request ~role (Ctx.label ctx) (Entity.Role.login (Ctx.role ctx))
+      in
+      use_pool ?request ~role key pool (fun connection -> f (Connection.fixed connection))
+      |> settle ?request ~role ~needs key pool
   ;;
 
   let query ~needs ctx f = run ~needs ctx f
 
   let request ctx request f =
-    run ~needs:(Request.needs request) ctx (fun connection ->
-      f connection (Request.caqti request))
+    let caqti = Request.caqti request in
+    run
+      ~request:(fun () -> Format.asprintf "%a" Caqti.Template.Request.pp caqti)
+      ~needs:(Request.needs request)
+      ctx
+      (fun connection -> f connection caqti)
   ;;
 
   let exec ctx req input =
@@ -707,10 +766,11 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
   (* Borrow one connection for [f]. Connection errors, also those raised from
      within [f], drop the pool so the next statement reconnects. *)
   let with_pool_connection ~role label f =
-    let key = resolve label (Entity.Role.login role) in
+    let login = Entity.Role.login role in
     let role = Entity.Role.name role in
-    let%lwt pool = fetch_key key in
-    use_pool key pool (fun connection -> f (Connection.fixed connection) |> Lwt_result.ok)
+    let%lwt key, pool = statement_pool ~role label login in
+    use_pool ~role key pool (fun connection ->
+      f (Connection.fixed connection) |> Lwt_result.ok)
     |> settle ~role key pool
   ;;
 

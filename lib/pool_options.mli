@@ -7,6 +7,19 @@
 
     @canonical Veins.Pool_options *)
 
+(** A statement that failed, for {!t.on_failure}. *)
+type failure =
+  { label : Entity.Label.t (** The database the statement ran on. *)
+  ; role : string option (** The context's role. *)
+  ; request : string option
+    (** The request as [Caqti.Template.Request.pp] prints it, for [exec],
+        [collect], [find] and [find_opt]; [None] for statements run by a
+        function ([query], [transaction], [populate], …). *)
+  ; exn : exn
+    (** What the statement raises right after: {!Error.Failed} or
+        {!Error.Exn}. *)
+  }
+
 type t =
   { max_use_count : int option
     (** Close a connection after this many uses. [None] (default) keeps it;
@@ -35,6 +48,16 @@ type t =
         last connection error. The reconnect after the first connection error
         is not delayed. Default [(0.5, 30.)]; [(0., 0.)] retries on every
         statement. *)
+  ; on_failure : (failure -> unit Lwt.t) option
+    (** Called with every error a statement raises ({!Error.Failed},
+        {!Error.Exn}), e.g. to report it to an error tracker, before it is
+        raised: the statement waits for it, so keep it short or let it run
+        in the background. Each error is reported once, where veins raises
+        it: a statement failing inside [connection_ctx] or
+        [transaction_ctx] isn't reported again when it leaves them, nor are
+        exceptions of the application's own code. [Pool.ping] and the other
+        [Pool] functions don't report. An exception of [on_failure] is
+        logged and dropped. Default [None]. *)
   }
 
 val default : t

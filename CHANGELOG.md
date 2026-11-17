@@ -42,6 +42,16 @@ To be released as 0.2.0.
   `core_migration_state` counts as applied (by derived ids) and refuses dirty namespaces, `record` keeps the counter
   up to date. Both dialects. Deprecated from the start, for the time an application moves over.
 
+### Added: reporting failures, driver-library options
+
+- `Pool_options.on_failure`: called with every error a statement raises (label, role, request, the exception),
+  once, where veins raises it, so an application can report failures (e.g. to an error tracker) without wrapping
+  every helper. `Pool.ping` and the other `Pool` functions don't report. A record of `Pool_options.t` written out
+  in full needs the new field.
+- `Veins_mariadb` / `Veins_postgresql`: `Pools.Make_with_options` and `Plain.Make_with_options`, for a pool size
+  and `Pool_options` of your own without spelling out the driver (`database` and `database_pool_size`, then the
+  options).
+
 ### Added: pools without roles
 
 - `Veins.Plain` (`Veins_mariadb.Plain.Make`, `Veins_postgresql.Plain.Make`, or `Veins.Plain.Make` over any

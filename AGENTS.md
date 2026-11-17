@@ -78,8 +78,13 @@ end)
 Call `Db.Pool.initialize ()` once at startup before any query.
 
 `Pools.Make_with_options (Config) (struct let options = ... end)` takes a `Pool_options.t` (connection recycling,
-`statement_timeout`, `acquire_timeout`, `reconnect_backoff`); `Pools.Make` is that with `Pool_options.default`. New
-tuning goes into `Pool_options`, not into `ConfigSig` (its consumers build that module by hand).
+`statement_timeout`, `acquire_timeout`, `reconnect_backoff`, `on_failure`); `Pools.Make` is that with `Pool_options.default`. New
+tuning goes into `Pool_options`, not into `ConfigSig` (its consumers build that module by hand). The driver
+libraries' `Pools.Make_with_options` / `Plain.Make_with_options` take `database` and `database_pool_size`.
+
+`on_failure` is called where veins raises a statement's error (`fail`: `statement_error`, `statement_pool`,
+`use_pool`), never where an error only passes through (`settle`'s `exception` arms), so each is reported once;
+`Pool.ping` passes `~quiet:true`. Raise new statement errors through `fail`.
 
 A connection error drops only the pool it happened on (`settle` / `disconnect_entry ~pool`), then the pool backs
 off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one statement (`probe`) until that
