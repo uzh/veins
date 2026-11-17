@@ -1,5 +1,11 @@
+(library
+ (name veins_gen_template)
+ (modules veins_gen_template)
+ (libraries veins uuidm ptime containers))
+
 (executable
  (name veins_gen)
  (public_name veins-gen)
  (package veins)
- (libraries veins uuidm ptime ptime.clock.os containers))
+ (modules veins_gen)
+ (libraries veins_gen_template ptime ptime.clock.os containers))

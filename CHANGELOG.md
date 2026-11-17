@@ -27,8 +27,11 @@ To be released as 0.2.0.
 - `Step.create ?id`: without an id, a step gets `Id.derive` of its migration's namespace and its position, so
   `Step.t.id` is an option and `Step.id` returns one. `Migration.step_ids` gives the effective ids.
 - `run_all ~migrations` runs them in the order given (only registered migrations are sorted by `written_at`).
-- `veins-gen` writes `Sql.v` with a TODO for each dialect. Each step is a named binding with its `up` and `down`
-  SQL as `{sql|…|sql}` strings; `migration` then adds the steps in order and the file registers it.
+- `veins-gen` writes one step by default; `--steps N` writes more, `--dialect mariadb|postgresql` writes `Sql.only`
+  placeholders for one dialect instead of `Sql.v` with a TODO for each. Each step is a named binding with its `up`
+  and `down` SQL as `{sql|…|sql}` strings; `migration` then adds the steps in order and the file registers it. The
+  file no longer opens `Migration`: it names `Migration.create`, `Migration.register` etc. The tests compile its
+  output (`test/gen`).
 
 ### Added: importing a counter-based migration table
 
