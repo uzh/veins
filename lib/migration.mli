@@ -72,8 +72,10 @@ module Id : sig
       0-based position [index] of [namespace]. Use it for migrations written
       without step ids, e.g. when importing the state of a counter-based
       migration table: the same namespace and position always give the same
-      id. *)
-  val derive : namespace:string -> index:int -> string
+      id.
+
+      Raises [Invalid_argument] for a negative [index]. *)
+  val derive : namespace:string -> index:int -> t
 
   val value : t -> string
   val equal : t -> t -> bool
@@ -194,6 +196,13 @@ val target_applies_to : database_target -> Entity.Label.t -> bool
                          Defaults to [All]. *)
 val register : ?for_databases:database_target -> t -> unit
 
+(** The name of the migration state table: [veins_migration_state], or
+    [VEINS_MIGRATION_TABLE]. For code that treats it specially, e.g. emptying
+    every table but this one.
+
+    Raises [Invalid_argument] if [VEINS_MIGRATION_TABLE] is not a plain table name. *)
+val state_table : unit -> string
+
 (** A discrepancy between the in-process registry and the migration-state
     table in a database.  Returned by {!RunnerSig.check}. *)
 type drift =
@@ -217,7 +226,24 @@ type drift =
     failure; MariaDB commits DDL implicitly).
 
     [run_all], [check], [status] and [pending] work on the migrations
-    registered for the label, or on [?migrations] when given. *)
+    registered for the label, or on [?migrations] when given.
+
+    {b One runner at a time.} [run_all], [up], [down] and [mark_applied]
+    hold a lock on the database while they run (MariaDB [GET_LOCK],
+    PostgreSQL advisory lock), so instances of an application starting
+    together apply each step once: the others wait, for at most
+    [VEINS_MIGRATION_LOCK_TIMEOUT] seconds (default 600), then fail with
+    [Error.Migration_failed]. They also create the state table if it is
+    missing, and run without the pools' statement timeout
+    ([Pool_options.statement_timeout]).
+
+    [check], [status] and [pending] only read: they take no lock and run no
+    DDL, so a role that may only read can call them, and a database without
+    a state table has nothing applied.
+
+    The state table is [veins_migration_state], or the plain table name in
+    [VEINS_MIGRATION_TABLE] (letters, digits and [_]; anything else raises
+    [Invalid_argument]). *)
 module type RunnerSig = sig
   (** Apply all unapplied steps for every migration registered for
       [db_label], oldest [written_at] first. Returns [Error _] on the first

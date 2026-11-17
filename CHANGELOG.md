@@ -57,6 +57,31 @@ from #624, #637 and #657 there.
   `Runner.mark_applied` to import another engine's state; `run_all`, `status`, `pending` and `check`
   take an explicit `?migrations` list.
 - `connection_transaction` for transactions on a raw connection (inside `query`).
+- `Pool_options` and `Pools.Make_with_options`: recycling of connections (`max_use_count`, `max_idle_size`,
+  `max_idle_age`), `statement_timeout`, `acquire_timeout` (how long a statement waits for a connection of an
+  exhausted pool) and `reconnect_backoff`. `Pools.Make` uses `Pool_options.default`; `Db.options` tells them.
+- Reconnect backoff: a pool that lost its database fails right away with the last connection error for a growing
+  while, then lets a single statement try again, instead of a connection attempt per statement (which, on
+  PostgreSQL, each blocked the process for the connect timeout).
+- `Database.create ~strict_logins:true`: a role whose login has no URL fails with `Error.Login_not_configured`
+  instead of connecting as the owner. Without it the fallback is logged once per login.
+- `Veins.Connection.fixed`: a Caqti connection with caqti-driver-mariadb 3.1's `rollback`, `with_transaction` and
+  `populate` worked around. Every connection veins passes to a function or holds in a context is one, so code
+  using the raw `Caqti_lwt.CONNECTION` interface is safe without changes.
+- `Pool.ping`: whether a database answers.
+- Migrations take a lock on the database (MariaDB `GET_LOCK`, PostgreSQL advisory lock) while `run_all`, `up`,
+  `down` or `mark_applied` run, so instances starting together apply each step once
+  (`VEINS_MIGRATION_LOCK_TIMEOUT`, default 600 seconds).
+- `Dialect.is_identifier`, `Dialect.table_exists`, `Dialect.try_lock` / `Dialect.unlock`.
+- `Dialect.list_tables`, `Dialect.truncate` and `Dialect.drop` (PostgreSQL with `CASCADE`), and
+  `Migration.state_table`, the name of the migration state table (`VEINS_MIGRATION_TABLE` honoured), for code that
+  empties every table but that one.
+- `Connection.without_fk_checks`: runs a function with a connection's foreign key checks off and turns them back on
+  however it ends (a no-op on PostgreSQL). Migration steps with `check_fk:false` use it.
+- `Connection.test`: connects once to a URL, without a pool, to check it before its database is registered; a
+  failure is `Error.Connection_failed` with the URL shown without its password. `Pool.test` does so for every URL
+  of a `Database.t` (the owner's and each login's), the way the pools connect, and keeps the status of the
+  registered database: a failure turns `Active` into `ConnectionIssue`, a success turns it back.
 
 #### Changed
 
@@ -77,7 +102,15 @@ from #624, #637 and #657 there.
   `Database.with_status` changes its status.
 - **Breaking:** `Veins.Databases`, a global registry of databases nothing used, is gone: the pools keep their own (`Pool.add`, `Pool.find`, `Pool.find_all`).
 - `Pool.drop`, `Pool.reset` and `Pool.disconnect` return `unit` and close connections in the background.
-- Pools connect lazily, on first use.
+- Pools connect lazily, on first use. `Pool.fetch` ignores `?retries` (kept for compatibility).
+- Connections are no longer closed after 100 uses (Caqti's default), and idle ones are closed after 5 minutes
+  (`Pool_options`).
+- `Runner.status`, `pending` and `check` only read: they no longer create the state table (a missing one means
+  nothing is applied), so a read-only role can call them. Migrations run without the pools' statement timeout.
+- `VEINS_MIGRATION_TABLE` must be a plain table name (letters, digits, `_`); anything else raises.
+- Veins no longer sends `SET time_zone` on new connections: both Caqti drivers pin the session to UTC themselves
+  (the suites check it). `Dialect.set_utc` stays.
+- `ocamlformat` is a dev-setup dependency only; `mtime` is a dependency.
 
 #### Fixed
 
@@ -88,6 +121,13 @@ from #624, #637 and #657 there.
 - Databases with per-login URLs are listed by `Pool.find_all`, and adding one twice no longer replaces (and leaks)
   its pools.
 - Turning off foreign key checks for a migration step runs on the same connection as the step.
+- `populate` on MariaDB inserts all rows or none and joins the transaction it runs in. caqti-driver-mariadb 3.1's
+  own `populate` returned after a failing row without rolling back (the pooled connection kept an open transaction
+  with autocommit off) and committed the transaction it was called in.
+- A connection error only drops the pool it happened on: statements still under way on a pool that was replaced
+  already used to tear down its healthy replacement when they failed.
+- MariaDB's server-side network errors (1152, 1154-1161) count as lost connections.
+- `Url.pp` / `Url.show` also mask a password given as a `password` or `sslpassword` query parameter.
 - PostgreSQL URLs get `connect_timeout=5` unless they set their own: caqti-driver-postgresql connects blocking
   (libpq's `PQconnectdb`), and an unresponsive server used to freeze the whole process.
 

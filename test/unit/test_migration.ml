@@ -61,20 +61,30 @@ let test_register_default_targets_root () =
 ;;
 
 let test_derived_ids_are_stable () =
-  let id = Migration.Id.derive ~namespace:"202301010000_guardian" ~index:0 in
+  let derive ~namespace ~index = Migration.Id.(derive ~namespace ~index |> value) in
+  let id = derive ~namespace:"202301010000_guardian" ~index:0 in
   Alcotest.(check string)
     "same input, same id"
     id
-    (Migration.Id.derive ~namespace:"202301010000_guardian" ~index:0);
+    (derive ~namespace:"202301010000_guardian" ~index:0);
   Alcotest.(check bool) "valid UUID" true (Option.is_some (Uuidm.of_string id));
   Alcotest.(check bool)
     "index matters"
     false
-    (CCString.equal id (Migration.Id.derive ~namespace:"202301010000_guardian" ~index:1));
+    (CCString.equal id (derive ~namespace:"202301010000_guardian" ~index:1));
   Alcotest.(check bool)
     "namespace matters"
     false
-    (CCString.equal id (Migration.Id.derive ~namespace:"other" ~index:0))
+    (CCString.equal id (derive ~namespace:"other" ~index:0))
+;;
+
+(* The name is read once per process: only the default can be checked. *)
+let test_state_table_default () =
+  match Sys.getenv_opt "VEINS_MIGRATION_TABLE" with
+  | Some name when not (CCString.is_empty name) ->
+    Alcotest.(check string) "from the environment" name (Migration.state_table ())
+  | Some _ | None ->
+    Alcotest.(check string) "default" "veins_migration_state" (Migration.state_table ())
 ;;
 
 let () =
@@ -109,5 +119,6 @@ let () =
             `Quick
             test_register_default_targets_root
         ] )
+    ; "state table", [ Alcotest.test_case "default name" `Quick test_state_table_default ]
     ]
 ;;

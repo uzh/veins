@@ -8,6 +8,10 @@ type t =
       ; needs : string list
       ; message : string
       }
+  | Login_not_configured of
+      { label : string
+      ; login : string
+      }
   | Migration_failed of string
   | Unsupported of string
 
@@ -27,6 +31,12 @@ let show : t -> string = function
        | [] -> "nothing"
        | needs -> CCString.concat ", " needs)
       message
+  | Login_not_configured { label; login } ->
+    Format.asprintf
+      "Database '%s' has no URL for login '%s', and its logins may not connect as the \
+       owner"
+      label
+      login
   | Migration_failed msg -> "Migration failed: " ^ msg
   | Unsupported msg -> "Unsupported: " ^ msg
 ;;

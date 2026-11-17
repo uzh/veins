@@ -79,6 +79,59 @@ let test_session_sql () =
     (Dialect.set_fk_checks Dialect.Postgresql false)
 ;;
 
+let test_identifiers () =
+  CCList.iter
+    (fun name -> Alcotest.(check bool) name true (Dialect.is_identifier name))
+    [ "veins_migration_state"; "_t"; "T1" ];
+  CCList.iter
+    (fun name -> Alcotest.(check bool) name false (Dialect.is_identifier name))
+    [ ""; "1t"; "a b"; "t; DROP TABLE x"; "a.b"; "t`"; CCString.make 65 'a' ]
+;;
+
+let test_tables () =
+  Alcotest.(check string)
+    "truncate on MariaDB"
+    "TRUNCATE TABLE t"
+    (Dialect.truncate Dialect.Mariadb ~table:"t");
+  Alcotest.(check string)
+    "truncate on PostgreSQL"
+    "TRUNCATE TABLE t CASCADE"
+    (Dialect.truncate Dialect.Postgresql ~table:"t");
+  Alcotest.(check string)
+    "drop on MariaDB"
+    "DROP TABLE IF EXISTS t"
+    (Dialect.drop Dialect.Mariadb ~table:"t");
+  Alcotest.(check string)
+    "drop on PostgreSQL"
+    "DROP TABLE IF EXISTS t CASCADE"
+    (Dialect.drop Dialect.Postgresql ~table:"t");
+  let on_mariadb = Dialect.list_tables Dialect.Mariadb in
+  let on_postgresql = Dialect.list_tables Dialect.Postgresql in
+  Alcotest.(check bool)
+    ("list on MariaDB: " ^ on_mariadb)
+    true
+    (contains ~sub:"table_schema = DATABASE()" on_mariadb
+     && contains ~sub:"table_type = 'BASE TABLE'" on_mariadb);
+  Alcotest.(check bool)
+    ("list on PostgreSQL: " ^ on_postgresql)
+    true
+    (contains ~sub:"table_schema = ANY (current_schemas(false))" on_postgresql
+     && contains ~sub:"table_type = 'BASE TABLE'" on_postgresql
+     && not (contains ~sub:"DATABASE()" on_postgresql));
+  let request =
+    Dialect.request
+      Caqti.Template.Request.Direct
+      Caqti.Templater.T.(unit -->. unit)
+      (Dialect.truncate ~table:"t")
+  in
+  Alcotest.(check bool)
+    "CASCADE only on PostgreSQL"
+    true
+    (contains ~sub:"CASCADE" (render request postgresql)
+     && (not (contains ~sub:"CASCADE" (render request mariadb)))
+     && not (contains ~sub:"CASCADE" (render request printing)))
+;;
+
 let () =
   Alcotest.run
     "Veins Dialect"
@@ -89,6 +142,8 @@ let () =
             `Quick
             test_one_request_per_dialect
         ; Alcotest.test_case "session SQL" `Quick test_session_sql
+        ; Alcotest.test_case "identifiers" `Quick test_identifiers
+        ; Alcotest.test_case "tables" `Quick test_tables
         ] )
     ]
 ;;

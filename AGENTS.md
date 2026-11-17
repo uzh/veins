@@ -40,8 +40,8 @@ make test
 | `lib/` | Core library (`veins` package); `include_subdirs unqualified` |
 | `lib/veins.mli` | The public interface: every module of `lib/` an application may use, in sections |
 | `lib/plain.ml` | `Veins.Plain` — the pools without roles, logins and needs (one database user) |
-| `lib/mariadb/` | `veins.mariadb` library (optional) — dialect + pre-configured `Pools.Make` / `Plain.Make` |
-| `lib/postgresql/` | `veins.postgresql` library (optional) — dialect + pre-configured `Pools.Make` / `Plain.Make` |
+| `lib/mariadb/` | `veins.mariadb` library (optional) — `Driver` (reads the driver's errors) + pre-configured `Pools.Make` / `Plain.Make` |
+| `lib/postgresql/` | `veins.postgresql` library (optional) — `Driver` (reads the driver's errors) + pre-configured `Pools.Make` / `Plain.Make` |
 | `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
 | `test/unit/` | Tests without a database (run anywhere) |
 | `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |
@@ -75,6 +75,20 @@ end)
 
 Call `Db.Pool.initialize ()` once at startup before any query.
 
+`Pools.Make_with_options (Config) (struct let options = ... end)` takes a `Pool_options.t` (connection recycling,
+`statement_timeout`, `acquire_timeout`, `reconnect_backoff`); `Pools.Make` is that with `Pool_options.default`. New
+tuning goes into `Pool_options`, not into `ConfigSig` (its consumers build that module by hand).
+
+A connection error drops only the pool it happened on (`settle` / `disconnect_entry ~pool`), then the pool backs
+off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one statement (`probe`) until that
+settled. Every path that takes a pool from `fetch_key` must go through `settle`, or the probe is never released.
+Caqti's `connect_pool` is lazy, only a statement (or `Pool.ping`) tells whether the database answers.
+
+`Connection.test url` connects once without a pool; `Pool.test database` runs it for every URL of a database with
+the pools' session settings, and is the only place veins changes a registered status itself (`Active` ↔
+`ConnectionIssue`, and only when the tested database has the registered URLs). URLs become a `Uri.t` for connecting
+through `Entity.Url.to_connect_uri` (PostgreSQL's `connect_timeout`), which `Veins.Url` doesn't expose.
+
 ### Contexts, requests, roles
 
 Statements run on a `('txn, 'g) Veins.Ctx.t` (`label_ctx`, `connection_ctx`, `transaction_ctx`, `with_transaction`)
@@ -82,7 +96,8 @@ and are `Veins.Request.t` values (Caqti request + its `Need.t`). Every context n
 closed set of polymorphic variant tags and a request's needs are a lower bound (``[> `Write ]``), so a statement the
 role doesn't grant is a compile error. Nothing is checked at runtime; `test/typing` proves misuse doesn't compile,
 add a case there when adding an entry point that takes `~needs` or a request. Each role connects as a `Login`;
-`Database.create ?logins label owner_url`, logins without a URL share the owner's pool. A database refusing a
+`Database.create ?logins ?strict_logins label owner_url`, logins without a URL share the owner's pool (logged
+once) or, with `~strict_logins:true`, raise `Error.Login_not_configured`. A database refusing a
 statement the types allowed raises `Error.Permission_denied` (`Driver.is_permission_error`). The context design is
 Reynir Björnsson's (uzh/z-pool-tool#647); keep the credit in `lib/ctx.mli`, `lib/pools.ml`, README and CHANGELOG.
 
@@ -91,8 +106,12 @@ the after-commit hooks) are in `Ctx.Internal`, which `lib/veins.mli` removes fro
 make a transaction context of a connection without a transaction, or pair a role with another login's connection.
 Use `Ctx.Internal` from veins' own modules only.
 
-Never use the driver's `rollback` or caqti's `with_transaction` directly: caqti-driver-mariadb 3.1 leaves
-`autocommit` off after a rollback, `Pools.rollback` restores it (`Dialect.restore_autocommit`).
+caqti-driver-mariadb 3.1 leaves `autocommit` off after a rollback (also in caqti's `with_transaction`), and its
+`populate` starts and commits a transaction of its own and doesn't roll back when a row fails. `Connection.fixed`
+(`lib/connection.ml`) wraps a connection with these fixed, tracking whether a transaction is open from the
+`start` / `commit` / `rollback` calls on the wrapper. `Pools` wraps every connection once per borrow from the
+Caqti pool (`run`, `with_pool_connection`), so contexts and callbacks only ever see fixed connections: never pass
+on a connection taken from the Caqti pool without it, and add new driver workarounds there.
 
 ### Migrations
 
@@ -102,6 +121,10 @@ Steps are tracked individually by UUID (not per-namespace counters). `run_all` a
 module Runner = Migration.Make (Db)
 (* then: Runner.run_all, Runner.up, Runner.down, Runner.check, Runner.status, Runner.pending *)
 ```
+
+`run_all`, `up`, `down` and `mark_applied` go through `with_ctx`: one held connection, the migration lock
+(`Dialect.try_lock`, session-scoped, so it must stay on that connection), the state table created, no statement
+timeout. `status`, `pending` and `check` go through `with_read_ctx` and must stay free of DDL and locks.
 
 Generate boilerplate with `veins-gen "label text"` → `migration_<timestamp>_<slug>.ml`.
 New migration files call `Migration.register` — no explicit list to maintain.
@@ -125,7 +148,8 @@ pool.
 
 - **`lib/veins.mli` decides what is public.** A new module gets its alias there, in the section it belongs to; what
   only veins' own modules need stays out (a submodule removed there like `Ctx.Internal`, or a narrowed signature like
-  `Url`, which hides `to_uri`).
+  `Url`, which hides `to_uri`). Doc references in signatures that are shown outside `Veins` (`pools_sig.mli`) name
+  modules as `Veins.X`, so they resolve in the driver libraries' docs too.
 - **`.ml` files have no doc-comments** on types or functions that duplicate what is already in the corresponding `.mli`. Keep implementation files lean.
 - **Dialect SQL lives in `dialect.ml`** — never hardcode dialect-specific SQL in `migration.ml` or other modules;
   build requests with `Dialect.request`.
@@ -147,5 +171,6 @@ Edit the generated file: fill in SQL strings, adjust step labels. The file self-
 - [README.md](README.md) — installation, quick-start, usage examples
 - [lib/pools_sig.mli](lib/pools_sig.mli) — full pool functor interface (`ConfigSig`, `Sig`, all query helpers)
 - [lib/migration.mli](lib/migration.mli) — migration types, `RunnerSig`, step construction
-- [lib/dialect.mli](lib/dialect.mli) — `Sig`, `Mariadb`, `Postgresql`, `of_url`
+- [lib/veins.mli](lib/veins.mli) — the public modules, by section
+- [lib/dialect.mli](lib/dialect.mli) — `kind`, `request` and the SQL that differs per dialect
 - [.devcontainer/docker-compose.yml](.devcontainer/docker-compose.yml) — database service definitions

@@ -1,8 +1,10 @@
 include Entity
+module Connection = Connection
 module Request = Request
 module Ctx = Ctx
 module Error = Error
 module Driver = Driver
+module Pool_options = Pool_options
 module Pools = Pools
 module Pools_sig = Pools_sig
 module Plain = Plain

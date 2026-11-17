@@ -79,6 +79,9 @@ module type Sig = sig
       its [?role] out: the default is the owner). *)
   module With_roles : Pools_sig.Sig
 
+  (** The options the pools were made with. *)
+  val options : Pool_options.t
+
   (** {1 Pool lifecycle}
 
       As [Pools_sig.Sig.Pool], always for the database's own URL. *)
@@ -97,15 +100,19 @@ module type Sig = sig
       -> unit
       -> Entity.Database.t list
 
-    (** The Caqti pool of the label.
+    (** The Caqti pool of the label. Connections taken from it directly are
+        the driver's own: pass them through {!Veins.Connection.fixed}.
 
         @raise Veins.Error.Exn [Database_not_registered].
-        @raise Veins.Error.Failed when connecting fails. *)
+        @raise Veins.Error.Failed while a pool that lost its database waits to reconnect.
+    *)
     val fetch
       :  Entity.Label.t
       -> (Caqti_lwt.connection, Caqti.Error.t) Caqti_lwt_unix.Pool.t Lwt.t
 
     val connect : Entity.Label.t -> (unit, Error.t) result
+    val ping : Entity.Label.t -> (unit, Error.t) Lwt_result.t
+    val test : Entity.Database.t -> (unit, Error.t) Lwt_result.t
     val disconnect : ?error:Caqti.Error.t -> Entity.Label.t -> unit
   end
 
@@ -136,7 +143,8 @@ module type Sig = sig
 
   (** {1 Statements} *)
 
-  (** [query ctx f] runs [f] on a connection of [ctx]. *)
+  (** [query ctx f] runs [f] on a connection of [ctx], a
+      {!Veins.Connection.fixed} one. *)
   val query
     :  _ Ctx.t
     -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
@@ -198,9 +206,9 @@ end
 
 (** The pools of [Db] without roles. The driver libraries apply it for you:
     [Veins_mariadb.Plain.Make], [Veins_postgresql.Plain.Make]. For other
-    pool sizes:
+    pool sizes or {!Veins.Pool_options}:
 
     {[
-    module Db = Veins.Plain.Make (Veins.Pools.Make (Config))
+    module Db = Veins.Plain.Make (Veins.Pools.Make_with_options (Config) (Options))
     ]} *)
 module Make : functor (Db : Pools_sig.Sig) -> Sig with module With_roles = Db

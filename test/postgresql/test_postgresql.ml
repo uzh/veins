@@ -23,6 +23,10 @@ module Suite = Suite.Make (struct
     let utc_offset_sql = "SELECT EXTRACT(TIMEZONE FROM now())::int"
     let connection_id_sql = "SELECT pg_backend_pid()"
     let current_user_sql = "SELECT CURRENT_USER::text"
+
+    let statement_timeout_sql =
+      "SELECT setting::int / 1000 FROM pg_settings WHERE name = 'statement_timeout'"
+    ;;
   end)
 
 let () = Suite.run "Veins PostgreSQL"

@@ -120,12 +120,22 @@ module Role : sig
   val show : _ t -> string
 end
 
-(** @canonical Veins.Url *)
+(** [pp] and [show] mask the password, also one given as a [password] or
+    [sslpassword] query parameter.
+
+    @canonical Veins.Url *)
 module Url : sig
   type t
 
   val create : string -> t
   val to_uri : t -> Uri.t
+
+  (** {!to_uri} for connecting. caqti-driver-postgresql connects with libpq's
+      blocking [PQconnectdb], which holds up the whole Lwt loop until the
+      handshake is done, and libpq waits indefinitely by default: PostgreSQL
+      URLs get [connect_timeout=5] unless they set their own. *)
+  val to_connect_uri : t -> Uri.t
+
   val equal : t -> t -> bool
   val pp : Format.formatter -> t -> unit
   val show : t -> string
@@ -157,18 +167,32 @@ module Database : sig
     ; status : Status.t
     ; owner : Url.t (** The database's own URL, see {!Login.owner}. *)
     ; logins : (Login.t * Url.t) list (** URLs of the other logins. *)
+    ; strict_logins : bool
+      (** Refuse logins without a URL instead of connecting them as the
+          owner. *)
     }
 
   (** [create ?logins label owner_url] builds a database entry. Logins
-      missing from [logins] connect with [owner_url].
+      missing from [logins] connect with [owner_url], i.e. with the owner's
+      rights (logged once per login), unless [~strict_logins:true]: their
+      statements then raise [Error.Login_not_configured]. Set it for
+      databases meant to separate their users, so a missing or misspelt URL
+      doesn't silently run a restricted role as the owner.
 
       Raises [Invalid_argument] for a duplicate login or {!Login.owner} in
       [logins]. *)
-  val create : ?status:Status.t -> ?logins:(Login.t * Url.t) list -> Label.t -> Url.t -> t
+  val create
+    :  ?status:Status.t
+    -> ?logins:(Login.t * Url.t) list
+    -> ?strict_logins:bool
+    -> Label.t
+    -> Url.t
+    -> t
 
   val label : t -> Label.t
   val status : t -> Status.t
   val owner : t -> Url.t
+  val strict_logins : t -> bool
 
   (** [with_status status database] is [database] with its status changed. *)
   val with_status : Status.t -> t -> t

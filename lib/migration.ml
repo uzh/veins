@@ -88,11 +88,28 @@ let register ?(for_databases = All) migration =
   registry := (for_databases, migration) :: !registry
 ;;
 
+(* The name goes into SQL as it is. *)
 let table_name =
   lazy
     (match Sys.getenv_opt "VEINS_MIGRATION_TABLE" with
-     | Some t when not (CCString.is_empty t) -> t
+     | Some t when Dialect.is_identifier t -> t
+     | Some t when not (CCString.is_empty t) ->
+       invalid_arg
+         (Format.asprintf "VEINS_MIGRATION_TABLE: %S is not a plain table name" t)
      | _ -> "veins_migration_state")
+;;
+
+let state_table () = Lazy.force table_name
+
+let lock_timeout =
+  lazy
+    (match
+       CCOption.flat_map
+         float_of_string_opt
+         (Sys.getenv_opt "VEINS_MIGRATION_LOCK_TIMEOUT")
+     with
+     | Some seconds when seconds >= 0. -> seconds
+     | _ -> 600.)
 ;;
 
 (* Current wall-clock time as a Ptime.t, safe for Caqti.Template.Row_type.ptime. *)
@@ -156,7 +173,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   (* Migrations run as the role the caller names (the owner by default); the
      database enforces its rights, so their statements declare no needs. *)
   let unchecked request = Request.create ~needs:Entity.Need.none request
-  let table () = Lazy.force table_name
+  let table = state_table
 
   (* Return migrations targeting [db_label], sorted by written_at ascending. *)
   let registered_for db_label =
@@ -191,6 +208,33 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     Db.exec ctx (state_request T.(unit -->. unit) Dialect.create_migration_table) ()
   ;;
 
+  (* Reading the state must work for a role that may not create tables: a
+     missing state table means nothing was applied. *)
+  let state_exists ctx =
+    let request =
+      Dialect.request
+        Caqti.Template.Request.Direct
+        T.(string -->! int)
+        Dialect.table_exists
+      |> unchecked
+    in
+    let%lwt tables = Db.find ctx request (table ()) in
+    Lwt.return (tables > 0)
+  ;;
+
+  let get_applied_rows ctx =
+    if%lwt state_exists ctx
+    then (
+      let%lwt rows =
+        Db.collect
+          ctx
+          (state_request T.(unit -->* t2 string string) Dialect.select_applied_rows)
+          ()
+      in
+      Lwt.return (CCList.map (fun (id, ns) -> Id.create id, Namespace.create ns) rows))
+    else Lwt.return []
+  ;;
+
   let get_applied_ids ctx =
     let%lwt ids =
       Db.collect ctx (state_request T.(unit -->* string) Dialect.select_applied_ids) ()
@@ -215,30 +259,20 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       (Id.value step_id)
   ;;
 
-  let dialect_kind ctx =
-    Db.query
-      ~needs:Entity.Need.none
-      ctx
-      (fun (module Connection : Caqti_lwt.CONNECTION) ->
-         Lwt_result.return (Dialect.kind Connection.dialect))
-  ;;
-
-  (* [SET FOREIGN_KEY_CHECKS] is session state: [ctx] holds one connection, so
-     both toggles and the step run on it. *)
+  (* [SET FOREIGN_KEY_CHECKS] is session state: runner contexts hold one
+     connection, so both toggles and the step run on it. The step's own
+     statements go through [ctx], whose mutex [Db.query] would hold. *)
   let with_fk_disabled ctx f =
-    let%lwt kind = dialect_kind ctx in
-    match Dialect.set_fk_checks kind false with
-    | None -> f ()
-    | Some (_ : string) ->
-      let set enabled =
-        Dialect.request
-          Caqti.Template.Request.Direct
-          T.(unit -->. unit)
-          (fun kind -> Dialect.set_fk_checks kind enabled |> CCOption.get_or ~default:"")
-        |> unchecked
-      in
-      let%lwt () = Db.exec ctx (set false) () in
-      Lwt.finalize f (fun () -> Db.exec ctx (set true) ())
+    let connection =
+      Ctx.Internal.connection ctx
+      |> CCOption.get_exn_or "migration context without connection"
+    in
+    let%lwt result =
+      Connection.without_fk_checks connection (fun () -> Lwt_result.ok (f ()))
+    in
+    (* raises veins' usual exception, with label and role, on [Error] *)
+    Db.query ~needs:Entity.Need.none ctx (fun (_ : Caqti_lwt.connection) ->
+      Lwt.return result)
   ;;
 
   (* The step and its state row commit together where the dialect has
@@ -297,13 +331,92 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
         (failed "Migration '%s' failed: %s" mig)
   ;;
 
-  let with_ctx ?(role = Entity.Role.owner) db_label f =
-    Db.connection_ctx ~role db_label (fun ctx ->
-      let%lwt () = setup ctx in
-      f ctx)
+  (* The pools' statement timeout is for the application's statements, not
+     for migrations: lift it on the held connection, and put it back before
+     the connection returns to the pool. *)
+  let without_statement_timeout ctx f =
+    let set timeout =
+      Db.query
+        ~needs:Entity.Need.none
+        ctx
+        (fun (module Connection : Caqti_lwt.CONNECTION) ->
+           Connection.set_statement_timeout timeout)
+    in
+    match Db.options.Pool_options.statement_timeout with
+    | None -> f ()
+    | Some (_ : float) as timeout ->
+      let%lwt () = set None in
+      Lwt.finalize f (fun () -> set timeout)
   ;;
 
-  let up ?role db_label mig = with_ctx ?role db_label (fun ctx -> apply_up ctx mig)
+  let lock_name () = "veins_migration:" ^ table ()
+
+  let lock_request sql =
+    Dialect.request Caqti.Template.Request.Direct T.(string -->! int) sql |> unchecked
+  ;;
+
+  (* One runner at a time per database, also across processes: instances
+     starting together would otherwise apply the same steps side by side. The
+     lock belongs to the session, i.e. to the connection [ctx] holds. *)
+  let with_lock ctx f =
+    let name = lock_name () in
+    let timeout = Lazy.force lock_timeout in
+    let try_lock () =
+      let%lwt locked = Db.find ctx (lock_request Dialect.try_lock) name in
+      Lwt.return (locked = 1)
+    in
+    let rec acquire waited =
+      if%lwt try_lock ()
+      then Lwt.return_unit
+      else if waited >= timeout
+      then
+        raise
+          (Error.Exn
+             (Error.Migration_failed
+                (Format.asprintf
+                   "Another process has been migrating this database for more than %gs"
+                   timeout)))
+      else (
+        if waited = 0.
+        then Log.info (fun m -> m "Waiting for another process migrating this database");
+        let pause = Float.min 0.5 (timeout -. waited) in
+        let%lwt () = Lwt_unix.sleep pause in
+        acquire (waited +. pause))
+    in
+    let%lwt () = acquire 0. in
+    Lwt.finalize f (fun () ->
+      Lwt.catch
+        (fun () ->
+           let%lwt (_ : int) = Db.find ctx (lock_request Dialect.unlock) name in
+           Lwt.return_unit)
+        (fun exn ->
+           (* a lost connection released it already *)
+           Log.debug (fun m ->
+             m "Releasing the migration lock failed: %s" (Printexc.to_string exn));
+           Lwt.return_unit))
+  ;;
+
+  let with_read_ctx ?(role = Entity.Role.owner) db_label f =
+    Db.connection_ctx ~role db_label f
+  ;;
+
+  let with_ctx ?(role = Entity.Role.owner) db_label f =
+    Db.connection_ctx ~role db_label (fun ctx ->
+      without_statement_timeout ctx (fun () ->
+        with_lock ctx (fun () ->
+          let%lwt () = setup ctx in
+          f ctx)))
+  ;;
+
+  let lock_error f =
+    Lwt.catch f (function[@warning "-4"]
+      | Error.Exn (Error.Migration_failed _ as error) -> Lwt_result.fail error
+      | exn -> Lwt.reraise exn)
+  ;;
+
+  let up ?role db_label mig =
+    lock_error (fun () -> with_ctx ?role db_label (fun ctx -> apply_up ctx mig))
+  ;;
 
   let mark_applied ?role db_label mig ~steps =
     with_ctx ?role db_label
@@ -329,6 +442,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   let down ?role db_label mig =
+    lock_error
+    @@ fun () ->
     with_ctx ?role db_label
     @@ fun ctx ->
     let%lwt applied_ids = get_applied_ids ctx in
@@ -352,6 +467,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   let run_all ?role ?migrations db_label () =
+    lock_error
+    @@ fun () ->
     with_ctx ?role db_label
     @@ fun ctx ->
     let rec run = function
@@ -365,10 +482,10 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   let status ?role ?migrations db_label () =
-    with_ctx ?role db_label
+    with_read_ctx ?role db_label
     @@ fun ctx ->
-    let%lwt applied_ids = get_applied_ids ctx in
-    let applied = applied_id_set applied_ids in
+    let%lwt applied_rows = get_applied_rows ctx in
+    let applied = applied_id_set (CCList.map fst applied_rows) in
     Lwt.return
     @@ CCList.map
          (fun mig ->
@@ -391,13 +508,9 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   let check ?role ?migrations db_label () =
-    with_ctx ?role db_label
+    with_read_ctx ?role db_label
     @@ fun ctx ->
-    let req = state_request T.(unit -->* t2 string string) Dialect.select_applied_rows in
-    let%lwt raw_rows = Db.collect ctx req () in
-    let applied_rows =
-      CCList.map (fun (id, ns) -> Id.create id, Namespace.create ns) raw_rows
-    in
+    let%lwt applied_rows = get_applied_rows ctx in
     let applied = applied_id_set (CCList.map fst applied_rows) in
     let migs = migrations_for ?migrations db_label in
     (* All step IDs currently in the registry for this label *)

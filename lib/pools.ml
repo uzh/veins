@@ -8,9 +8,11 @@ let src = Logs.Src.create "veins.pools"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make (Config : Pools_sig.ConfigSig) : Pools_sig.Sig with module Config = Config =
-struct
+module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.OptionsSig) :
+  Pools_sig.Sig with module Config = Config = struct
   module Config = Config
+
+  let options = Pool_options.validate Options.options
 
   type caqti_pool = (Caqti_lwt.connection, Caqti.Error.t) Caqti_lwt_unix.Pool.t
 
@@ -45,13 +47,41 @@ struct
   module Pools_tbl = CCHashtbl.Make (Key)
   module Labels_tbl = CCHashtbl.Make (Entity.Label)
 
+  (* [failures] counts the connection errors since the last statement that
+     reached the database, [retry_at] is when the next reconnect may be tried.
+     While the one statement that tries it is under way, [probe] holds the last
+     error (for everybody else, who fails with it right away) and when to give
+     up waiting for that statement. *)
   type entry =
     { key : Key.t
     ; url : Entity.Url.t
     ; required : bool
     ; connection : connection
-    ; n_retries : int
+    ; failures : int
+    ; retry_at : float
+    ; probe : (Caqti.Error.t * float) option
     }
+
+  let now = Unix.gettimeofday
+
+  (* The first error may be a single connection that went away: reconnect
+     right away, for everybody. Only when that fails too is the database
+     taken to be gone. *)
+  let backs_off failures = failures >= 2
+
+  let backoff failures =
+    if backs_off failures
+    then (
+      let initial, max = options.Pool_options.reconnect_backoff in
+      Float.min max (initial *. (2. ** float_of_int (min 30 (failures - 2)))))
+    else 0.
+  ;;
+
+  let probe_until () =
+    match snd options.Pool_options.reconnect_backoff with
+    | window when window > 0. -> Some (now () +. window)
+    | _ -> None
+  ;;
 
   let databases : Entity.Database.t Labels_tbl.t =
     Labels_tbl.create (max 1 Config.expected_databases)
@@ -77,12 +107,47 @@ struct
          |> CCString.concat ", "))
   ;;
 
+  (* Say once per login that it runs on the owner's connection. *)
+  let shared_logins : unit Pools_tbl.t = Pools_tbl.create 8
+
+  let note_shared_login label login =
+    let key = label, Some login in
+    if not (Pools_tbl.mem shared_logins key)
+    then (
+      Pools_tbl.replace shared_logins key ();
+      Log.info (fun m ->
+        m
+          ~tags:(tags_of_key key)
+          "Login '%a' has no URL for database '%a': its roles connect as the owner"
+          Entity.Login.pp
+          login
+          Entity.Label.pp
+          label))
+  ;;
+
+  let forget_shared_logins label =
+    Pools_tbl.keys_list shared_logins
+    |> CCList.iter (fun ((shared, _) as key) ->
+      if Entity.Label.equal shared label then Pools_tbl.remove shared_logins key)
+  ;;
+
   (* The pool [login] connects with. *)
   let resolve label login =
     match Labels_tbl.find_opt databases label with
     | None -> raise_error (Error.Database_not_registered (Entity.Label.value label))
     | Some database ->
-      if Entity.Database.has_login database login then label, Some login else label, None
+      if Entity.Database.has_login database login
+      then label, Some login
+      else if Entity.Login.is_owner login
+      then label, None
+      else if Entity.Database.strict_logins database
+      then
+        raise_error
+          (Error.Login_not_configured
+             { label = Entity.Label.value label; login = Entity.Login.name login })
+      else (
+        note_shared_login label login;
+        label, None)
   ;;
 
   (* A statement the database refused. [needs] and [role] only describe it,
@@ -103,72 +168,58 @@ struct
     else raise (Error.Failed (Error.failure ?role ~login label error))
   ;;
 
-  (* Both render their SQL from the dialect of the connection they run on. *)
-  let set_utc =
-    Dialect.request
-      Caqti.Template.Request.Static
-      Caqti.Templater.T.(unit -->. unit)
-      Dialect.set_utc
+  (* Both Caqti drivers pin the session to UTC themselves when connecting
+     (the suites check it), so there is nothing to send for that. *)
+  let post_connect (module Connection : Caqti_lwt.CONNECTION) =
+    match options.Pool_options.statement_timeout with
+    | None -> Lwt_result.return ()
+    | Some (_ : float) as timeout -> Connection.set_statement_timeout timeout
   ;;
 
-  let restore_autocommit =
-    Dialect.request
-      Caqti.Template.Request.Static
-      Caqti.Templater.T.(unit -->. unit)
-      (fun kind -> Dialect.restore_autocommit kind |> CCOption.get_or ~default:"")
-  ;;
-
-  let post_connect (module Connection : Caqti_lwt.CONNECTION) = Connection.exec set_utc ()
-
-  (* Never use the driver's [rollback] (or caqti's [with_transaction]) alone,
-     see [Dialect.restore_autocommit]. *)
-  let rollback (module Connection : Caqti_lwt.CONNECTION) =
-    let%lwt rolled_back = Connection.rollback () in
-    let%lwt restored =
-      match Dialect.restore_autocommit (Dialect.kind Connection.dialect) with
-      | None -> Lwt_result.return ()
-      | Some (_ : string) -> Connection.exec restore_autocommit ()
+  let pool_config =
+    let max_size = Config.database_pool_size in
+    let max_idle_size = CCOption.map (min max_size) options.Pool_options.max_idle_size in
+    let max_idle_age =
+      CCOption.flat_map
+        (fun seconds -> Mtime.Span.of_float_ns (seconds *. 1e9))
+        options.Pool_options.max_idle_age
     in
-    Lwt.return
-      (match rolled_back with
-       | Error _ as error -> error
-       | Ok () -> restored)
-  ;;
-
-  (* caqti-driver-postgresql connects with libpq's blocking PQconnectdb, which holds up
-     the whole Lwt loop until the handshake is done, and libpq waits indefinitely by
-     default. Bound it unless the URL sets its own connect_timeout. *)
-  let with_connect_timeout uri =
-    match Uri.scheme uri with
-    | Some ("postgresql" | "postgres")
-      when Option.is_none (Uri.get_query_param uri "connect_timeout") ->
-      Uri.add_query_param' uri ("connect_timeout", "5")
-    | Some _ | None -> uri
+    Caqti.Pool.Config.create
+      ~max_size
+      ?max_idle_size
+      ~max_idle_age
+      ~max_use_count:options.Pool_options.max_use_count
+      ()
   ;;
 
   let connect_pool url =
-    let pool_config = Caqti.Pool.Config.create ~max_size:Config.database_pool_size () in
-    Caqti_lwt_unix.connect_pool
-      ~pool_config
-      ~post_connect
-      (Entity.Url.to_uri url |> with_connect_timeout)
+    Caqti_lwt_unix.connect_pool ~pool_config ~post_connect (Entity.Url.to_connect_uri url)
   ;;
 
   let failed { key; _ } error =
     Error.Failed (Error.failure ~login:(Key.login key) (fst key) error)
   ;;
 
-  let connect_base ?(retries = 2) entry =
-    match CCResult.retry retries (fun () -> connect_pool entry.url) with
-    | Error [] -> raise_error (Error.Connection_failed "Failed to connect: empty error")
-    | Error (error :: _) when entry.required -> raise (failed entry error)
-    | Error (error :: _ as errors) ->
+  let failing entry error =
+    let failures = entry.failures + 1 in
+    { entry with
+      connection = Fail error
+    ; failures
+    ; retry_at = now () +. backoff failures
+    ; probe = None
+    }
+  ;;
+
+  (* Caqti connects lazily: this only sets the pool up, and fails for a URL
+     no driver can be loaded for. Whether the database answers shows with the
+     first statement. *)
+  let connect_base entry =
+    match connect_pool entry.url with
+    | Error error when entry.required -> raise (failed entry error)
+    | Error error ->
       Log.warn (fun m ->
-        m
-          ~tags:(tags_of_key entry.key)
-          "Failed to connect: %s"
-          (CCString.concat "; " (CCList.map Caqti.Error.show errors)));
-      { entry with connection = Fail error }
+        m ~tags:(tags_of_key entry.key) "Failed to connect: %a" Caqti.Error.pp error);
+      failing entry error
     | Ok pool -> { entry with connection = Open pool }
   ;;
 
@@ -187,9 +238,19 @@ struct
     | Close | Fail _ -> ()
   ;;
 
-  let disconnect_entry ?error ?(level = Logs.Error) key =
+  let is_current entry pool =
+    match entry.connection with
+    | Open current -> CCEqual.physical current pool
+    | Close | Fail _ -> false
+  ;;
+
+  (* With [~pool], only if that pool is still the registered one: statements
+     that were under way on a pool another one already replaced fail later,
+     and must leave the replacement alone. *)
+  let disconnect_entry ?error ?pool ?(level = Logs.Error) key =
     match Pools_tbl.find_opt pools key with
     | None -> ()
+    | Some entry when not (CCOption.for_all (is_current entry) pool) -> ()
     | Some entry ->
       Log.msg level (fun m ->
         m
@@ -200,26 +261,57 @@ struct
              ~default:""
              (Format.asprintf " with error: %a" Caqti.Error.pp)
              error));
-      let connection =
-        match error with
-        | Some error -> Fail error
-        | None -> Close
-      in
-      Pools_tbl.replace pools key { entry with connection };
+      Pools_tbl.replace
+        pools
+        key
+        (match error with
+         | Some error -> failing entry error
+         | None ->
+           { entry with connection = Close; failures = 0; retry_at = 0.; probe = None });
       drain_in_background entry
+  ;;
+
+  (* A statement reached the database through [pool]. *)
+  let mark_healthy key pool =
+    match Pools_tbl.find_opt pools key with
+    | Some entry
+      when is_current entry pool && (entry.failures > 0 || Option.is_some entry.probe) ->
+      Pools_tbl.replace pools key { entry with failures = 0; retry_at = 0.; probe = None }
+    | Some _ | None -> ()
+  ;;
+
+  (* The statement trying the reconnect ended without telling whether the
+     database is back: let the next ones through. *)
+  let release_probe key pool =
+    match Pools_tbl.find_opt pools key with
+    | Some ({ probe = Some _; _ } as entry) when is_current entry pool ->
+      Pools_tbl.replace pools key { entry with probe = None }
+    | Some _ | None -> ()
   ;;
 
   (* Only a broken connection invalidates the pool; a constraint violation or
      a syntax error leaves it alone. *)
-  let raise_caqti_error ?role ?needs key input =
+  let settle ?role ?needs key pool input =
+    let connection_lost error =
+      disconnect_entry ~error ~pool key;
+      log_pools ()
+    in
     match%lwt input with
-    | Ok value -> Lwt.return value
+    | Ok value ->
+      mark_healthy key pool;
+      Lwt.return value
     | Error error ->
       if Config.Driver.is_connection_error error
-      then (
-        disconnect_entry ~error key;
-        log_pools ());
+      then connection_lost error
+      else mark_healthy key pool;
       statement_error ?role ?needs key error
+    | exception (Error.Failed { Error.error; _ } as exn)
+      when Config.Driver.is_connection_error error ->
+      connection_lost error;
+      Lwt.reraise exn
+    | exception exn ->
+      release_probe key pool;
+      Lwt.reraise exn
   ;;
 
   let raise_on_error ?role ?needs key input =
@@ -228,35 +320,104 @@ struct
     | Error error -> statement_error ?role ?needs key error
   ;;
 
-  let rec fetch_key ?(retries = 2) key =
+  (* The pool to run a statement on. A pool whose reconnect failed fails
+     right away until its backoff is over; then one statement ([~probe]) gets a
+     new pool to try, and the others keep failing until that one settled. *)
+  let fetch_key ?(probe = true) key =
     let () = log_pools () in
+    let connected entry =
+      Pools_tbl.replace pools key entry;
+      match entry.connection with
+      | Open pool -> Lwt.return pool
+      | Fail error -> raise (failed entry error)
+      | Close -> raise_error (Error.Connection_failed "Failed to connect")
+    in
     match Pools_tbl.find_opt pools key with
     | None -> raise_error (Error.Database_not_registered (Entity.Label.value (fst key)))
-    | Some ({ n_retries; _ } as entry) ->
-      (match entry.connection with
-       | Fail error when n_retries >= retries ->
-         (* Give up for this call, but reset the counter, so the next call
-            tries to reconnect again (pool tool #624). *)
-         Pools_tbl.replace pools key { entry with n_retries = 0 };
+    | Some entry ->
+      (match entry.connection, entry.probe with
+       | Open pool, None -> Lwt.return pool
+       | Open _, Some (error, until) when probe && now () < until ->
          raise (failed entry error)
-       | Fail _ ->
-         Pools_tbl.replace
-           pools
-           key
-           { (connect_base entry) with n_retries = entry.n_retries + 1 };
-         fetch_key ~retries key
-       | Close ->
-         Pools_tbl.replace pools key (connect_base entry);
-         fetch_key ~retries key
-       | Open pool ->
-         if n_retries > 0 then Pools_tbl.replace pools key { entry with n_retries = 0 };
-         Lwt.return pool)
+       | Open pool, Some (error, _) ->
+         if probe
+         then
+           Pools_tbl.replace
+             pools
+             key
+             { entry with
+               probe = CCOption.map (fun until -> error, until) (probe_until ())
+             };
+         Lwt.return pool
+       | Fail error, _ when now () < entry.retry_at -> raise (failed entry error)
+       | Fail error, _ ->
+         let entry = connect_base entry in
+         connected
+           (match entry.connection, probe && backs_off entry.failures with
+            | Open _, true ->
+              { entry with
+                probe = CCOption.map (fun until -> error, until) (probe_until ())
+              }
+            | (Open _ | Close | Fail _), _ -> entry)
+       | Close, _ -> connected (connect_base entry))
+  ;;
+
+  (* [Pool.use], giving up after [acquire_timeout] without a connection. The
+     request for one is never cancelled (Caqti's pool would lose the wake-up
+     of the next waiter): once it is served, it returns the connection
+     unused. *)
+  let use_pool key pool f =
+    match options.Pool_options.acquire_timeout with
+    | None -> Caqti_lwt_unix.Pool.use f pool
+    | Some timeout ->
+      let acquired, wake = Lwt.wait () in
+      let abandoned = ref false in
+      let used =
+        Caqti_lwt_unix.Pool.use
+          (fun connection ->
+             if !abandoned
+             then Lwt_result.return None
+             else (
+               Lwt.wakeup_later wake ();
+               let%lwt result = f connection in
+               Lwt_result.return (Some result)))
+          pool
+      in
+      let served = Lwt.choose [ acquired; Lwt.map (fun (_ : _ result) -> ()) used ] in
+      let timer = Lwt_unix.sleep timeout in
+      (match%lwt
+         Lwt.choose [ Lwt.map (fun () -> true) served; Lwt.map (fun () -> false) timer ]
+       with
+       | true ->
+         Lwt.cancel timer;
+         (match%lwt used with
+          | Ok (Some result) -> Lwt.return result
+          | Ok None -> raise_error (Error.Connection_failed "Connection abandoned")
+          | Error _ as error -> Lwt.return error)
+       | false ->
+         abandoned := true;
+         Lwt.on_failure used (fun (_ : exn) -> ());
+         raise_error
+           (Error.Connection_failed
+              (Format.asprintf
+                 "No connection of pool '%s' became free within %gs"
+                 (Key.show key)
+                 timeout)))
   ;;
 
   module Pool = struct
     let entries ?(required = false) database =
       let label = Entity.Database.label database in
-      let entry key url = { key; url; required; connection = Close; n_retries = 0 } in
+      let entry key url =
+        { key
+        ; url
+        ; required
+        ; connection = Close
+        ; failures = 0
+        ; retry_at = 0.
+        ; probe = None
+        }
+      in
       entry (label, None) (Entity.Database.owner database)
       :: CCList.map
            (fun login -> entry (label, Some login) (Entity.Database.url database login))
@@ -272,6 +433,7 @@ struct
 
     let remove label =
       Labels_tbl.remove databases label;
+      forget_shared_logins label;
       Pools_tbl.to_list pools
       |> CCList.filter (fun ((pool_label, _), _) -> Entity.Label.equal pool_label label)
       |> CCList.iter (fun (key, entry) ->
@@ -310,6 +472,7 @@ struct
     let clear () =
       let entries = Pools_tbl.values_list pools in
       Pools_tbl.clear pools;
+      Pools_tbl.clear shared_logins;
       Labels_tbl.clear databases;
       CCList.iter drain_in_background entries
     ;;
@@ -327,8 +490,8 @@ struct
              (CCList.mem ~eq:Entity.Label.equal (Entity.Database.label database) exclude))
     ;;
 
-    let fetch ?retries ?(login = Entity.Login.owner) label =
-      fetch_key ?retries (resolve label login)
+    let fetch ?retries:(_ : int option) ?(login = Entity.Login.owner) label =
+      fetch_key ~probe:false (resolve label login)
     ;;
 
     let connect ?(login = Entity.Login.owner) label =
@@ -352,6 +515,92 @@ struct
          | Some entry -> connect entry)
     ;;
 
+    let ping ?(login = Entity.Login.owner) label =
+      Lwt.catch
+        (fun () ->
+           let key = resolve label login in
+           let%lwt pool = fetch_key key in
+           let%lwt () =
+             use_pool key pool (fun (_ : Caqti_lwt.connection) -> Lwt_result.return ())
+             |> settle key pool
+           in
+           Lwt_result.return ())
+        (function
+          | Error.Exn error -> Lwt_result.fail error
+          | Error.Failed { Error.error; _ } ->
+            Lwt_result.fail (Error.Connection_failed (Caqti.Error.show error))
+          | exn -> Lwt.reraise exn)
+    ;;
+
+    let same_urls a b =
+      let open Entity in
+      let logins database =
+        Database.logins database
+        |> CCList.sort Login.compare
+        |> CCList.map (fun login -> login, Database.url database login)
+      in
+      Url.equal (Database.owner a) (Database.owner b)
+      && CCList.equal (CCPair.equal Login.equal Url.equal) (logins a) (logins b)
+    ;;
+
+    (* A test tells about the registered database only if that is the one
+       tested, not when other URLs were tried for its label. *)
+    let track_connection_issue database result =
+      let label = Entity.Database.label database in
+      let set status registered =
+        Labels_tbl.replace databases label (Entity.Database.with_status status registered)
+      in
+      match Labels_tbl.find_opt databases label with
+      | Some registered when same_urls registered database ->
+        (match Entity.Database.status registered, result with
+         | Entity.Status.Active, Error error ->
+           Log.warn (fun m ->
+             m
+               ~tags:(tags_of_key (label, None))
+               "Connection test failed, status is now %a: %a"
+               Entity.Status.pp
+               Entity.Status.ConnectionIssue
+               Error.pp
+               error);
+           set Entity.Status.ConnectionIssue registered
+         | Entity.Status.ConnectionIssue, Ok () ->
+           Log.info (fun m ->
+             m
+               ~tags:(tags_of_key (label, None))
+               "Connection test succeeded, status is %a again"
+               Entity.Status.pp
+               Entity.Status.Active);
+           set Entity.Status.Active registered
+         | ( Entity.Status.(
+               ( Active
+               | ConnectionIssue
+               | Disabled
+               | Maintenance
+               | MigrationsConnectionIssue
+               | MigrationsFailed
+               | MigrationsPending ))
+           , (Ok () | Error (_ : Error.t)) ) -> ())
+      | Some (_ : Entity.Database.t) | None -> ()
+    ;;
+
+    let test database =
+      let urls =
+        Entity.Database.owner database
+        :: CCList.map (Entity.Database.url database) (Entity.Database.logins database)
+      in
+      let%lwt result =
+        Lwt_list.fold_left_s
+          (fun result url ->
+             match result with
+             | Ok () -> Connection.test ~post_connect url
+             | Error (_ : Error.t) -> Lwt.return result)
+          (Ok ())
+          urls
+      in
+      track_connection_issue database result;
+      Lwt.return result
+    ;;
+
     let disconnect ?error ?login label =
       match login with
       | Some login -> disconnect_entry ?error (resolve label login)
@@ -370,7 +619,7 @@ struct
     let label = Ctx.label ctx in
     let login = Entity.Role.login (Ctx.role ctx) in
     try resolve label login with
-    | Error.Exn (Error.Database_not_registered _) ->
+    | Error.Exn (Error.Database_not_registered _ | Error.Login_not_configured _) ->
       label, if Entity.Login.is_owner login then None else Some login
   ;;
 
@@ -386,7 +635,8 @@ struct
     | _ ->
       let key = resolve (Ctx.label ctx) (Entity.Role.login (Ctx.role ctx)) in
       let%lwt pool = fetch_key key in
-      Caqti_lwt_unix.Pool.use f pool |> raise_caqti_error ~role ~needs key
+      use_pool key pool (fun connection -> f (Connection.fixed connection))
+      |> settle ~role ~needs key pool
   ;;
 
   let query ~needs ctx f = run ~needs ctx f
@@ -416,12 +666,6 @@ struct
       Connection.find_opt req input)
   ;;
 
-  let populate ~needs ctx table columns row_type rows =
-    query ~needs ctx (fun (module Connection : Caqti_lwt.CONNECTION) ->
-      Connection.populate ~table ~columns row_type (Caqti_lwt.Stream.of_list rows)
-      |> Lwt.map Caqti.Error.uncongested)
-  ;;
-
   let exec_each fns connection =
     CCList.fold_left
       (fun acc fn -> Lwt_result.bind acc (fun () -> fn connection))
@@ -429,23 +673,16 @@ struct
       fns
   ;;
 
-  let connection_transaction ((module Connection : Caqti_lwt.CONNECTION) as connection) fn
-    =
-    let open Lwt_result.Syntax in
-    let fail_after_rollback error =
-      let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
-      Lwt_result.fail error
-    in
-    let* () = Connection.start () in
-    match%lwt fn () with
-    | Ok result ->
-      (match%lwt Connection.commit () with
-       | Ok () -> Lwt_result.return result
-       | Error error -> fail_after_rollback error)
-    | Error error -> fail_after_rollback error
-    | exception exn ->
-      let%lwt (_ : (unit, Caqti.Error.t) result) = rollback connection in
-      Lwt.reraise exn
+  (* The connection may come from elsewhere than veins: fix it (again). *)
+  let connection_transaction connection fn =
+    let (module Connection : Caqti_lwt.CONNECTION) = Connection.fixed connection in
+    Connection.with_transaction fn
+  ;;
+
+  let populate ~needs ctx table columns row_type rows =
+    query ~needs ctx (fun (module Connection : Caqti_lwt.CONNECTION) ->
+      Connection.populate ~table ~columns row_type (Caqti_lwt.Stream.of_list rows)
+      |> Lwt.map Caqti.Error.uncongested)
   ;;
 
   let transaction ?(setup = []) ?(cleanup = []) ~needs ctx fn =
@@ -457,7 +694,11 @@ struct
         let* () = exec_each cleanup connection in
         Lwt_result.return result
       in
-      if Ctx.is_transaction ctx then fn' () else connection_transaction connection fn')
+      if Ctx.is_transaction ctx
+      then fn' ()
+      else (
+        let (module Connection : Caqti_lwt.CONNECTION) = connection in
+        Connection.with_transaction fn'))
   ;;
 
   let transaction_iter ~needs ctx fns = transaction ~needs ctx (exec_each fns)
@@ -469,16 +710,8 @@ struct
     let key = resolve label (Entity.Role.login role) in
     let role = Entity.Role.name role in
     let%lwt pool = fetch_key key in
-    try%lwt
-      match%lwt Caqti_lwt_unix.Pool.use (fun c -> f c |> Lwt_result.ok) pool with
-      | Ok value -> Lwt.return value
-      | Error error -> raise_caqti_error ~role key (Lwt.return (Error error))
-    with
-    | Error.Failed { Error.error; _ } as exn when Config.Driver.is_connection_error error
-      ->
-      disconnect_entry ~error key;
-      log_pools ();
-      Lwt.reraise exn
+    use_pool key pool (fun connection -> f (Connection.fixed connection) |> Lwt_result.ok)
+    |> settle ~role key pool
   ;;
 
   let connection_ctx ?tags ~role label f =
@@ -501,7 +734,7 @@ struct
     let locked f = Lwt_mutex.with_lock mutex f in
     let rollback exn =
       let%lwt () =
-        match%lwt locked (fun () -> rollback connection) with
+        match%lwt locked Connection.rollback with
         | Ok () -> Lwt.return (Log.debug (fun m -> m ~tags:(Ctx.tags ctx) "Rolled back"))
         | Error error ->
           Lwt.return
@@ -551,3 +784,10 @@ struct
        | None -> transaction_ctx ~tags ~role label f)
   ;;
 end
+
+module Make (Config : Pools_sig.ConfigSig) =
+  Make_with_options
+    (Config)
+    (struct
+      let options = Pool_options.default
+    end)
