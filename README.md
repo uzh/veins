@@ -283,6 +283,10 @@ lost connection or a missing privilege, which veins needs to reconnect pools and
 `Error.Permission_denied`. The SQL veins sends doesn't depend on them: Caqti 3 renders each request for the dialect
 of the connection it runs on (`Veins.Dialect.request`).
 
+caqti-driver-postgresql connects blocking (libpq's `PQconnectdb`): the whole process waits until the server
+answers, by default indefinitely. Veins adds `connect_timeout=5` (seconds) to PostgreSQL URLs that don't set it;
+put `?connect_timeout=N` in the URL to choose another limit.
+
 The `veins-gen` executable is installed as part of the `veins` package.
 
 ---
