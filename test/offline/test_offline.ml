@@ -578,6 +578,29 @@ let test_on_failure () =
     | Error (_ : Error.t) -> Lwt.return_unit
   in
   let (_ : Pool_options.failure list) = reports "ping" 0 in
+  (* a request that raises when printed is reported without it, and the
+     statement's own error is raised *)
+  let unprintable =
+    Caqti.Template.Request.create
+      Caqti.Template.Request.Static
+      T.(unit -->! int)
+      (fun _ -> failwith "not printable")
+  in
+  let%lwt raised =
+    expect
+      "unprintable request"
+      (fun () -> Reporting.find (Reporting.label_ctx label) unprintable ())
+      Fun.id
+  in
+  (match raised with
+   | Error.Failed _ -> ()
+   | exn ->
+     Alcotest.failf "expected the statement's error, got %s" (Printexc.to_string exn));
+  CCList.iter
+    (fun ({ Pool_options.request; _ } as failure) ->
+       same_exn "unprintable request" raised failure;
+       Alcotest.(check (option string)) "unprintable request: no request" None request)
+    (reports "unprintable request" 1);
   let%lwt () =
     expect
       "failing hook"

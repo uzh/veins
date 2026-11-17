@@ -14,7 +14,8 @@ type failure =
   ; request : string option
     (** The request as [Caqti.Template.Request.pp] prints it, for [exec],
         [collect], [find] and [find_opt]; [None] for statements run by a
-        function ([query], [transaction], [populate], …). *)
+        function ([query], [transaction], [populate], …) and for a request
+        that raises when printed (logged). *)
   ; exn : exn
     (** What the statement raises right after: {!Error.Failed} or
         {!Error.Exn}. *)

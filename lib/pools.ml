@@ -154,7 +154,22 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     match options.Pool_options.on_failure with
     | None -> Lwt.return_unit
     | Some on_failure ->
-      let request = CCOption.map (fun request -> request ()) request in
+      (* Rendering may raise (Caqti's printer runs the request's generator
+         with a printing dialect): report without it, never instead of
+         [exn]. *)
+      let request =
+        CCOption.flat_map
+          (fun request ->
+             try Some (request ()) with
+             | render_exn ->
+               Log.warn (fun m ->
+                 m
+                   ~tags:(tags_of_key (label, None))
+                   "on_failure: request not rendered: %s"
+                   (Printexc.to_string render_exn));
+               None)
+          request
+      in
       Lwt.catch
         (fun () -> on_failure { Pool_options.label; role; request; exn })
         (fun hook_exn ->
