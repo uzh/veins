@@ -216,45 +216,62 @@ For other pool sizes or `Pool_options`, apply `Veins.Plain.Make` to the pools yo
 
 ```zsh
 veins-gen "add users table"
-# → migration_20260424T140314_add_users_table.ml
+# → migration_20260424140314_add_users_table.ml
 ```
 
 Set `VEINS_MIGRATION_DIR` to write the file to a specific directory (defaults to the current directory):
 
 ```zsh
 VEINS_MIGRATION_DIR=lib/migrations veins-gen "add users table"
-# → lib/migrations/migration_20260424T140314_add_users_table.ml
+# → lib/migrations/migration_20260424140314_add_users_table.ml
 ```
 
-The generated file:
+`--steps N` writes `N` steps (default 1), each with a fresh id. `--dialect mariadb` or `--dialect postgresql` writes
+SQL placeholders for that dialect only (`Sql.only`), the default `both` writes one for each (`Sql.v`). Options are
+read only before the description, so `veins-gen "fix --steps bug"` is a description; put `--` before a description
+that starts with `-`.
+
+The generated file defines each step on its own, then adds them to the migration and registers it (the files in
+[`test/gen`](test/gen) are complete examples, compiled and linked by the tests):
 
 ```ocaml
 open Veins
 
+let step_1 =
+  let up =
+    Migration.Sql.v
+      ~mariadb:{sql|TODO: forward SQL|sql}
+      ~postgresql:{sql|TODO: forward SQL|sql}
+      ()
+  in
+  let down = (* the same, with TODO: reverse SQL *) in
+  Migration.Step.create
+    ~id:(Migration.Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
+    ~label:"TODO: describe step 1"
+    ~down
+    up
+;;
+
 let migration =
-  Migration.(
-    create
-      (Namespace.create "add_users_table")
-      ~written_at:(ptime_of_string "2026-04-24T14:03:14Z")
-    |> add_step
-         (Step.create
-            ~id:(Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
-            ~label:"TODO: describe step 1"
-            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
-            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
-  )
+  let namespace = Migration.Namespace.create "add_users_table" in
+  let written_at = Migration.ptime_of_string "2026-04-24T14:03:14Z" in
+  Migration.create namespace ~written_at |> Migration.add_step step_1
+;;
 
 let () = Migration.register migration
 ```
 
-Edit the SQL strings, then link the file into your application. Every statement names the dialects it is written
-for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one out if the application never runs on it),
-`Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs anywhere. Before a run applies anything,
-the runner checks that every pending step has SQL for the connection's dialect (`Runner.verify`), so a MariaDB-only
-migration fails up front on PostgreSQL instead of half way.
+Rename the steps after what they do, fill in the SQL, then link the file into your application. Every statement
+names the dialects it is written for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one out if the
+application never runs on it), `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs
+anywhere. Before a run applies anything, the runner checks that every pending step has SQL for the connection's
+dialect (`Runner.verify`), so a MariaDB-only migration fails up front on PostgreSQL instead of half way. SQL that
+starts with `TODO:`, the generator's placeholder (`Sql.is_placeholder`), fails that check like missing SQL. `down`
+likewise refuses to revert anything while an applied step's `down` is one: write it, or drop `~down`.
 
 `~id` may be left out: the step then gets `Id.derive` of the namespace and its position, which is stable as long as
-steps are only ever appended. Every file that calls `Migration.register` contributes its steps to the global registry — no explicit list to maintain.
+steps are only ever appended. Every file that calls `Migration.register` contributes its steps to the global
+registry — no explicit list to maintain.
 
 ### Applying migrations
 

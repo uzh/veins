@@ -24,13 +24,10 @@
       "configureZshAsDefaultShell": true,
       "installOhMyZsh": true,
       "installOhMyZshConfig": true,
-      // base image is already updated, keep the build reproducible
       "upgradePackages": false
     }
   },
-  "postCreateCommand": "/bin/bash .devcontainer/wait-for-database.sh -d db-mariadb/test -d db-postgres/18/docker/base .devcontainer/postCreate.sh",
-  // Use 'settings' to set *default* container specific settings.json values on container create.
-  // You can edit these settings after create using File > Preferences > Settings > Remote.
+  "postCreateCommand": "/bin/sh .devcontainer/postCreate.sh",
   "customizations": {
     "vscode": {
       "settings": {
@@ -52,7 +49,6 @@
           "switch": "5.5.2"
         }
       },
-      // Add the IDs of extensions you want installed when the container is created in the array below.
       "extensions": [
         "Anthropic.claude-code",
         "DavidAnson.vscode-markdownlint",

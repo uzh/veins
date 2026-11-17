@@ -42,7 +42,9 @@ make test
 | `lib/plain.ml` | `Veins.Plain` — the pools without roles, logins and needs (one database user) |
 | `lib/mariadb/` | `veins.mariadb` library (optional) — `Driver` (reads the driver's errors) + pre-configured `Pools.Make` / `Plain.Make` |
 | `lib/postgresql/` | `veins.postgresql` library (optional) — `Driver` (reads the driver's errors) + pre-configured `Pools.Make` / `Plain.Make` |
-| `bin/veins_gen.ml` | `veins-gen` CLI — generates migration file boilerplate |
+| `bin/veins_gen.ml` | `veins-gen` CLI — options and writing the file |
+| `bin/veins_gen_template.ml` | `veins_gen_template` library — the generated file's text (`render`), names, ids |
+| `test/gen/` | `veins-gen`'s output as fixtures (diffed, `dune promote` to accept), compiled and linked |
 | `test/unit/` | Tests without a database (run anywhere) |
 | `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |
 | `test/mariadb/`, `test/postgresql/` | Integration suites per dialect (`test/common/suite.ml`), each links only its driver |
@@ -126,7 +128,9 @@ module Runner = Migration.Make (Db)
 (`Dialect.try_lock`, session-scoped, so it must stay on that connection), the state table created, no statement
 timeout. `status`, `pending` and `check` go through `with_read_ctx` and must stay free of DDL and locks.
 
-Generate boilerplate with `veins-gen "label text"` → `migration_<timestamp>_<slug>.ml`.
+Generate boilerplate with `veins-gen "label text"` → `migration_<YYYYMMDDhhmmss>_<slug>.ml`. SQL starting with
+`TODO:` is a placeholder (`Sql.is_placeholder`): `verify` and `down` treat it as missing SQL, so keep the
+generator's placeholders starting with `TODO:`. Nothing else is (no comment or case handling, on purpose).
 New migration files call `Migration.register` — no explicit list to maintain.
 
 ### Dialects
@@ -161,10 +165,14 @@ pool.
 
 ```bash
 veins-gen "create orders table"
-# → migration_20260424T143000_create_orders_table.ml
+# → migration_20260424143000_create_orders_table.ml
+veins-gen --steps 3 --dialect postgresql "create orders table"   # options before the description, -- ends them
 ```
 
-Edit the generated file: fill in SQL strings, adjust step labels. The file self-registers via `Migration.register` at the bottom — just link it into your binary.
+`--steps N` writes N steps (default 1); `--dialect mariadb|postgresql` writes `Sql.only` placeholders, the default
+`both` one `Sql.v` with a TODO per dialect. Edit the generated file: fill in SQL strings (a `TODO:` left fails
+`Runner.verify`, and `Runner.down` for a `down`), adjust step labels. The file self-registers via
+`Migration.register` at the bottom — just link it into your binary.
 
 ## References
 

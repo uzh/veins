@@ -1,0 +1,44 @@
+; veins-gen's output, checked in as fixtures: the rules below fail when the
+; generator's output changes (accept with `dune promote`), `dune build @fmt`
+; fails when it is not ocamlformat's layout, and the test compiles and links it.
+
+(executable
+ (name gen_fixture)
+ (modules gen_fixture)
+ (libraries veins veins_gen_template))
+
+(rule
+ (with-stdout-to
+  fixture_both.ml.gen
+  (run ./gen_fixture.exe both 3 fixture_both)))
+
+(rule
+ (with-stdout-to
+  fixture_mariadb.ml.gen
+  (run ./gen_fixture.exe mariadb 1 fixture_mariadb)))
+
+(rule
+ (with-stdout-to
+  fixture_postgresql.ml.gen
+  (run ./gen_fixture.exe postgresql 2 fixture_postgresql)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff fixture_both.ml fixture_both.ml.gen)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff fixture_mariadb.ml fixture_mariadb.ml.gen)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff fixture_postgresql.ml fixture_postgresql.ml.gen)))
+
+(test
+ (name test_gen)
+ (package veins)
+ (modules test_gen fixture_both fixture_mariadb fixture_postgresql)
+ (libraries veins veins_gen_template ptime alcotest))

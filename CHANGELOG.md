@@ -22,12 +22,19 @@ To be released as 0.2.0.
   dialect before they apply any and fail with `Error.Migration_failed` naming the steps without SQL; `down` does
   the same for its `down` statements. A wrapped string becomes `Sql.any "…"`, or `Sql.only Dialect.Mariadb "…"`
   where it is MariaDB's SQL.
+- SQL that starts with `TODO:` (what `veins-gen` writes) is a placeholder, `Sql.is_placeholder`: the check
+  treats it as missing, so a step left half filled in fails before anything is applied, and `down` before anything
+  is reverted. `Sql.written` tells both apart.
 - `Runner.verify` runs that check alone (read only), and `Runner.check` reports such steps as the new drift
   `Unsupported { namespace; dialect; steps }`.
 - `Step.create ?id`: without an id, a step gets `Id.derive` of its migration's namespace and its position, so
   `Step.t.id` is an option and `Step.id` returns one. `Migration.step_ids` gives the effective ids.
 - `run_all ~migrations` runs them in the order given (only registered migrations are sorted by `written_at`).
-- `veins-gen` writes `Sql.v` with a TODO for each dialect.
+- `veins-gen` writes one step by default; `--steps N` writes more, `--dialect mariadb|postgresql` writes `Sql.only`
+  placeholders for one dialect instead of `Sql.v` with a TODO for each. Each step is a named binding with its `up`
+  and `down` SQL as `{sql|…|sql}` strings; `migration` then adds the steps in order and the file registers it. The
+  file no longer opens `Migration`: it names `Migration.create`, `Migration.register` etc. The tests compile its
+  output (`test/gen`). Options are read only before the description (`--` ends them), and `--help` exits with 0.
 
 ### Added: importing a counter-based migration table
 

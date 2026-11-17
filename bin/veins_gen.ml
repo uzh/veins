@@ -1,86 +1,58 @@
-let uuid_v4 rng = Uuidm.(v4_gen rng () |> to_string)
-
-let iso8601_now p =
-  let (y, m, d), ((hh, mm, ss), _) = Ptime.to_date_time p in
-  Format.asprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" y m d hh mm ss
-;;
-
-let slugify s =
-  let sanitized =
-    CCString.map
-      (fun c ->
-         match c with
-         | 'a' .. 'z' | '0' .. '9' -> c
-         | 'A' .. 'Z' -> Char.lowercase_ascii c
-         | _ -> ' ')
-      s
-  in
-  CCString.split_on_char ' ' sanitized
-  |> CCList.filter (fun s -> not (CCString.is_empty s))
-  |> CCString.concat "_"
-;;
-
-let template ~module_name ~namespace ~written_at =
-  let rng = Random.State.make_self_init () in
-  let uuid1 = uuid_v4 rng in
-  let uuid2 = uuid_v4 rng in
-  Format.asprintf
-    {|(** Migration: %s *)
-
-open Veins
-
-let migration =
-  Migration.(
-    create
-      (Namespace.create %S)
-      ~written_at:(ptime_of_string %S)
-    |> add_step
-         (Step.create
-            ~id:(Id.create %S)
-            ~label:"TODO: describe step 1"
-            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
-            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
-    |> add_step
-         (Step.create
-            ~id:(Id.create %S)
-            ~label:"TODO: describe step 2"
-            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
-            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
-  )
-
-let () = Migration.register migration
-|}
-    module_name
-    namespace
-    written_at
-    uuid1
-    uuid2
-;;
-
-let compact_timestamp p =
-  let (y, m, d), ((hh, mm, ss), _) = Ptime.to_date_time p in
-  Format.asprintf "%04d%02d%02d%02d%02d%02d" y m d hh mm ss
-;;
-
 let die msg =
   prerr_endline msg;
   exit 1
 ;;
 
-let usage () = die "Usage: veins-gen <migration description>"
+let usage_text =
+  "Usage: veins-gen [--steps N (1-100)] [--dialect both|mariadb|postgresql] [--] \
+   <migration description>\n\n\
+   Options are read only before the description; use -- before a description that starts \
+   with -."
+;;
 
-let module_name_of_slug slug =
-  let cap s = CCString.capitalize_ascii s in
-  let base =
-    CCString.split_on_char '_' slug
-    |> CCList.filter (fun s -> not (CCString.is_empty s))
-    |> CCList.map cap
-    |> CCString.concat ""
-  in
-  let base = if CCString.is_empty base then "Migration" else base in
-  match CCString.get base 0 with
-  | '0' .. '9' -> "Migration" ^ base
-  | _ -> base
+let usage () = die usage_text
+
+let help () =
+  print_endline usage_text;
+  exit 0
+;;
+
+let max_steps = 100
+
+type options =
+  { steps : int
+  ; dialects : Veins_gen_template.dialects
+  ; words : string list
+  }
+
+let rec parse options = function
+  | "--steps" :: n :: rest ->
+    (match CCInt.of_string n with
+     | Some steps when steps >= 1 && steps <= max_steps ->
+       parse { options with steps } rest
+     | _ ->
+       die (Format.asprintf "--steps needs a number from 1 to %d, got %S" max_steps n))
+  | "--dialect" :: d :: rest ->
+    (match Veins_gen_template.dialects_of_string d with
+     | Some dialects -> parse { options with dialects } rest
+     | None -> die (Format.asprintf "--dialect is both, mariadb or postgresql, got %S" d))
+  | ("--steps" | "--dialect") :: [] -> usage ()
+  | ("-h" | "--help") :: _ -> help ()
+  | "--" :: words -> { options with words }
+  | option :: _ when CCString.prefix ~pre:"-" option ->
+    die
+      (Format.asprintf
+         "Unknown option %S (put -- before a description that starts with -)\n%s"
+         option
+         usage_text)
+  | words ->
+    (match CCList.find_opt (fun w -> CCList.mem w [ "--steps"; "--dialect" ]) words with
+     | Some option ->
+       Format.eprintf
+         "Warning: %s after the description is part of it; options go first.@."
+         option
+     | None -> ());
+    { options with words }
 ;;
 
 let ensure_dir path =
@@ -89,19 +61,21 @@ let ensure_dir path =
 ;;
 
 let () =
+  let open Veins_gen_template in
   let now = Ptime_clock.now () in
   let args =
     match Array.to_list Sys.argv with
     | _ :: args -> args
     | [] -> assert false
   in
-  let s = CCString.trim (CCString.concat " " args) in
+  let { steps; dialects; words } =
+    parse { steps = 1; dialects = Both; words = [] } args
+  in
+  let s = CCString.trim (CCString.concat " " words) in
   if CCString.is_empty s then usage ();
   let slug = slugify s in
   if CCString.is_empty slug
   then die "Migration description must contain at least one alphanumeric character.";
-  let compact = compact_timestamp now in
-  let written_at = iso8601_now now in
   let output_dir =
     match Sys.getenv_opt "VEINS_MIGRATION_DIR" with
     | Some d when not (CCString.is_empty d) -> d
@@ -109,12 +83,20 @@ let () =
   in
   ensure_dir output_dir;
   let filename =
-    Filename.concat output_dir (Format.asprintf "migration_%s_%s.ml" compact slug)
+    Filename.concat
+      output_dir
+      (Format.asprintf "migration_%s_%s.ml" (compact_timestamp now) slug)
   in
   if Sys.file_exists filename
   then die (Format.asprintf "File already exists: %s" filename);
-  let module_name = module_name_of_slug slug in
-  let content = template ~module_name ~namespace:slug ~written_at in
+  let content =
+    render
+      ~module_name:(module_name_of_slug slug)
+      ~namespace:slug
+      ~written_at:now
+      ~dialects
+      ~ids:(random_ids (Random.State.make_self_init ()) ~steps)
+  in
   (match open_out_bin filename with
    | exception Sys_error msg -> die (Format.asprintf "Cannot create %s: %s" filename msg)
    | oc ->

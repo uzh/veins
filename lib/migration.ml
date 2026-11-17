@@ -67,6 +67,14 @@ module Sql = struct
       (fun kind -> CCOption.is_some (for_kind t kind))
       Dialect.[ Mariadb; Postgresql ]
   ;;
+
+  let is_placeholder sql = CCString.prefix ~pre:"TODO:" (CCString.trim sql)
+
+  let written t kind =
+    match for_kind t kind with
+    | Some sql -> not (is_placeholder sql)
+    | None -> false
+  ;;
 end
 
 module Step = struct
@@ -279,31 +287,31 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   (* The labels of the pending steps of every migration that has no SQL for
-     [kind]. *)
+     [kind], or only a placeholder. *)
   let unsupported kind applied migrations =
     CCList.filter_map
       (fun mig ->
          let labels =
            CCList.filter_map
              (fun { Resolved.id; label; up; _ } ->
-                if is_applied applied id || CCOption.is_some (Sql.for_kind up kind)
-                then None
-                else Some label)
+                if is_applied applied id || Sql.written up kind then None else Some label)
              (resolve mig)
          in
          if CCList.is_empty labels then None else Some (mig.namespace, labels))
       migrations
   ;;
 
-  let unsupported_error kind unsupported =
+  let unsupported_error ?(revert = false) kind unsupported =
     let describe (namespace, labels) =
       Format.asprintf "'%s' (%s)" (Namespace.show namespace) (CCString.concat ", " labels)
     in
     let msg =
       Format.asprintf
-        "No %s SQL for the pending steps of %s; nothing was applied"
+        "No %s SQL (or a TODO: placeholder) for %s of %s; nothing was %s"
         (kind_name kind)
+        (if revert then "reverting the applied steps" else "the pending steps")
         (CCString.concat ", " (CCList.map describe unsupported))
+        (if revert then "reverted" else "applied")
     in
     Log.err (fun m -> m "%s" msg);
     Error.Migration_failed msg
@@ -596,13 +604,14 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       CCList.filter_map
         (fun { Resolved.label; down; _ } ->
            match down with
-           | Some down when CCOption.is_none (Sql.for_kind down kind) -> Some label
+           | Some down when not (Sql.written down kind) -> Some label
            | Some _ | None -> None)
         applied
     in
     match CCList.length applied with
     | (_ : int) when not (CCList.is_empty missing_down) ->
-      Lwt_result.fail (unsupported_error kind [ mig.namespace, missing_down ])
+      Lwt_result.fail
+        (unsupported_error ~revert:true kind [ mig.namespace, missing_down ])
     | 0 ->
       Log.info (fun m ->
         m "No applied steps to revert for migration '%s'" (Namespace.show mig.namespace));

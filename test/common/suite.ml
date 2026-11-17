@@ -1207,7 +1207,17 @@ module Make (D : Dialect) = struct
            ~label:"other dialect only"
            (Migration.Sql.only other "INSERT INTO veins_t_dialect (id) VALUES (1)"))
     in
-    let migrations = [ supported; unsupported ] in
+    let placeholder =
+      migration
+        "dialect_todo"
+        (Migration.Step.create
+           ~label:"left a TODO"
+           (Migration.Sql.v
+              ~mariadb:"TODO: forward SQL"
+              ~postgresql:"TODO: forward SQL"
+              ()))
+    in
+    let migrations = [ supported; unsupported; placeholder ] in
     let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect") () in
     let fails name result =
@@ -1220,7 +1230,8 @@ module Make (D : Dialect) = struct
     let%lwt () = Runner.run_all ~migrations root () |> Lwt.map (fails "run_all") in
     let%lwt () = Runner.up root unsupported |> Lwt.map (fails "up") in
     let%lwt pending = Runner.pending ~migrations root () in
-    Alcotest.(check int) "nothing applied" 2 (CCList.length pending);
+    let%lwt () = Runner.up root placeholder |> Lwt.map (fails "up placeholder") in
+    Alcotest.(check int) "nothing applied" 3 (CCList.length pending);
     let%lwt drifts = Runner.check ~migrations root () in
     let unsupported_steps =
       CCList.filter_map
@@ -1231,7 +1242,7 @@ module Make (D : Dialect) = struct
     in
     Alcotest.(check (list (list string)))
       "check names the step"
-      [ [ "other dialect only" ] ]
+      [ [ "other dialect only" ]; [ "left a TODO" ] ]
       unsupported_steps;
     let%lwt () =
       Runner.run_all ~migrations:[ supported ] root ()
@@ -1245,8 +1256,38 @@ module Make (D : Dialect) = struct
         | Ok () -> ()
         | Error e -> Alcotest.failf "verify supported: %s" (Error.show e))
     in
-    let%lwt () = forget_test_migrations () in
-    Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ()
+    let unwritten_down =
+      migration
+        "dialect_down"
+        (Migration.Step.create
+           ~label:"down left a TODO"
+           ~down:
+             (Migration.Sql.v
+                ~mariadb:"TODO: reverse SQL"
+                ~postgresql:"TODO: reverse SQL"
+                ())
+           (Migration.Sql.only kind "CREATE TABLE veins_t_dialect_down (id INTEGER)"))
+    in
+    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect_down") () in
+    Lwt.finalize
+      (fun () ->
+         let%lwt () =
+           Runner.up root unwritten_down
+           |> Lwt.map (function
+             | Ok () -> ()
+             | Error e -> Alcotest.failf "up with a TODO down: %s" (Error.show e))
+         in
+         let%lwt () =
+           Runner.down root unwritten_down |> Lwt.map (fails "down placeholder")
+         in
+         let%lwt pending = Runner.pending ~migrations:[ unwritten_down ] root () in
+         Alcotest.(check int) "down reverted nothing" 0 (CCList.length pending);
+         (* the table [up] created is still there *)
+         Db.exec (root_ctx ()) (ddl "INSERT INTO veins_t_dialect_down (id) VALUES (1)") ())
+      (fun () ->
+         let%lwt () = forget_test_migrations () in
+         let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect_down") () in
+         Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ())
   ;;
 
   (* The counter bridge, on a table of its own. Uses the deprecated API on
