@@ -205,8 +205,9 @@ module type Sig = sig
 end
 
 (** The pools of [Db] without roles. The driver libraries apply it for you:
-    [Veins_mariadb.Plain.Make], [Veins_postgresql.Plain.Make]. For other
-    pool sizes or {!Veins.Pool_options}:
+    [Veins_mariadb.Plain.Make], [Veins_postgresql.Plain.Make], and with a
+    pool size and {!Veins.Pool_options} of your own their
+    [Plain.Make_with_options]. Over other pools:
 
     {[
     module Db = Veins.Plain.Make (Veins.Pools.Make_with_options (Config) (Options))

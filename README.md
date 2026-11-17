@@ -207,8 +207,9 @@ transactions, errors and `Pool` behave as above. Two bridges to code written wit
 - `Plain.Ctx.with_roles ctx` is the same context for functions that state their needs, e.g. those of a library:
   the single user grants whatever is asked for, and the statements join `ctx`'s transaction.
 
-For other pool sizes or `Pool_options`, apply `Veins.Plain.Make` to the pools you made:
-`Veins.Plain.Make (Veins.Pools.Make_with_options (Config) (Options))`.
+For another pool size or `Pool_options`, use `Veins_mariadb.Plain.Make_with_options` (or the PostgreSQL one), whose
+configuration adds `database_pool_size`; over pools of your own, `Veins.Plain.Make (Veins.Pools.Make_with_options
+(Config) (Options))`.
 
 ## Migrations
 
@@ -354,8 +355,22 @@ The `veins-gen` executable is installed as part of the `veins` package.
 
 ## Pool tuning and lost databases
 
-`Pools.Make` (and the driver libraries' `Pools.Make`) use `Pool_options.default`. `Pools.Make_with_options` takes
-your own:
+`Pools.Make` (and the driver libraries' `Pools.Make`) use `Pool_options.default`. The driver libraries'
+`Pools.Make_with_options` and `Plain.Make_with_options` take your own, and the pool size:
+
+```ocaml
+module Db =
+  Veins_mariadb.Pools.Make_with_options
+    (struct
+      let database = Database.create (Label.create "root") url
+      let database_pool_size = 20
+    end)
+    (struct
+      let options = Veins.Pool_options.{ default with statement_timeout = Some 30. }
+    end)
+```
+
+`Veins.Pools.Make_with_options` is the same with every field of the configuration:
 
 ```ocaml
 module Db =

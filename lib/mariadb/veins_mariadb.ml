@@ -34,20 +34,40 @@ module Driver : Veins.Driver.Sig = struct
   ;;
 end
 
+module type CONFIG = sig
+  val database : Veins.Database.t
+  val database_pool_size : int
+end
+
 module Pools = struct
+  module Make_with_options (C : CONFIG) (O : Veins.Pools_sig.OptionsSig) =
+    Veins.Pools.Make_with_options
+      (struct
+        let database = C.database
+        let database_pool_size = C.database_pool_size
+        let expected_databases = 5
+
+        module Driver = Driver
+      end)
+      (O)
+
   module Make (C : sig
       val database : Veins.Database.t
     end) =
-  Veins.Pools.Make (struct
-      let database = C.database
-      let database_pool_size = 10
-      let expected_databases = 5
-
-      module Driver = Driver
-    end)
+    Make_with_options
+      (struct
+        let database = C.database
+        let database_pool_size = 10
+      end)
+      (struct
+        let options = Veins.Pool_options.default
+      end)
 end
 
 module Plain = struct
+  module Make_with_options (C : CONFIG) (O : Veins.Pools_sig.OptionsSig) =
+    Veins.Plain.Make (Pools.Make_with_options (C) (O))
+
   module Make (C : sig
       val database : Veins.Database.t
     end) =

@@ -17,19 +17,41 @@
     see {!Veins.Dialect}. *)
 module Driver : Veins.Driver.Sig
 
+(** The configuration of the [Make_with_options] functors: the primary
+    database and the most connections each of its pools keeps open
+    ([Veins.Pools_sig.ConfigSig.database_pool_size]). *)
+module type CONFIG = sig
+  val database : Veins.Database.t
+  val database_pool_size : int
+end
+
 (** Connection pools with {!Driver} pre-configured. *)
 module Pools : sig
   (** {!Veins.Pools.Make} with only [database] to give: [database_pool_size]
-      is [10] and [expected_databases] is [5].
-
-      For other sizes or for {!Veins.Pool_options}, apply {!Veins.Pools.Make}
-      or {!Veins.Pools.Make_with_options} with
-      [module Driver = Veins_mariadb.Driver] in the configuration. *)
+      is [10], [expected_databases] is [5] and the options are
+      {!Veins.Pool_options.default}. *)
   module Make : functor
       (_ : sig
          val database : Veins.Database.t
        end)
       -> Veins.Pools_sig.Sig
+
+  (** {!Veins.Pools.Make_with_options} with the pool size and the
+      {!Veins.Pool_options} chosen:
+
+      {[
+      module Db =
+        Veins_mariadb.Pools.Make_with_options
+          (struct
+            let database = Veins.Database.create (Veins.Label.create "root") url
+            let database_pool_size = 20
+          end)
+          (struct
+            let options = Veins.Pool_options.{ default with statement_timeout = Some 30. }
+          end)
+      ]} *)
+  module Make_with_options : functor (_ : CONFIG) (_ : Veins.Pools_sig.OptionsSig) ->
+    Veins.Pools_sig.Sig
 end
 
 (** Pools for one database user, with {!Driver} pre-configured: no roles,
@@ -49,4 +71,9 @@ module Plain : sig
          val database : Veins.Database.t
        end)
       -> Veins.Plain.Sig
+
+  (** {!Veins.Plain.Make} of {!Pools.Make_with_options}: the pool size and
+      the {!Veins.Pool_options} chosen. *)
+  module Make_with_options : functor (_ : CONFIG) (_ : Veins.Pools_sig.OptionsSig) ->
+    Veins.Plain.Sig
 end
