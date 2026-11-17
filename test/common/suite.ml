@@ -1039,18 +1039,23 @@ module Make (D : Dialect) = struct
         create ns ~written_at:(ptime_of_string "2024-01-01T00:00:00Z")
         |> add_step
              (Step.create
-                ~id:(Id.derive ~namespace:(Namespace.value ns) ~index:0)
                 ~label:"create table"
-                ~down:"DROP TABLE IF EXISTS veins_t_mig"
-                "CREATE TABLE veins_t_mig (id INTEGER PRIMARY KEY)")
+                ~down:(Sql.any "DROP TABLE IF EXISTS veins_t_mig")
+                (Sql.any "CREATE TABLE veins_t_mig (id INTEGER PRIMARY KEY)"))
         |> add_step
              (Step.create
-                ~id:(Id.derive ~namespace:(Namespace.value ns) ~index:1)
                 ~label:"insert row without FK checks"
                 ~check_fk:false
-                ~down:"DELETE FROM veins_t_mig WHERE id = 42"
-                "INSERT INTO veins_t_mig (id) VALUES (42)"))
+                ~down:(Sql.any "DELETE FROM veins_t_mig WHERE id = 42")
+                (Sql.any "INSERT INTO veins_t_mig (id) VALUES (42)")))
     in
+    Alcotest.(check (list string))
+      "ids derived from the positions"
+      (CCList.map
+         (fun index ->
+            Migration.Id.(value (derive ~namespace:(Migration.Namespace.value ns) ~index)))
+         [ 0; 1 ])
+      (CCList.map Migration.Id.value (Migration.step_ids mig));
     Migration.register ~for_databases:(Migration.Database root) mig;
     let ok name = function
       | Ok () -> ()
@@ -1091,12 +1096,12 @@ module Make (D : Dialect) = struct
              (Step.create
                 ~id:(id 0)
                 ~label:"create table"
-                "CREATE TABLE veins_t_import (id INTEGER PRIMARY KEY)")
+                (Sql.any "CREATE TABLE veins_t_import (id INTEGER PRIMARY KEY)"))
         |> add_step
              (Step.create
                 ~id:(id 1)
                 ~label:"insert row"
-                "INSERT INTO veins_t_import (id) VALUES (1)"))
+                (Sql.any "INSERT INTO veins_t_import (id) VALUES (1)")))
     in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_import") () in
     let%lwt () =
@@ -1139,12 +1144,12 @@ module Make (D : Dialect) = struct
              (Step.create
                 ~id:(id 0)
                 ~label:"create table"
-                "CREATE TABLE veins_t_lock (id INTEGER PRIMARY KEY)")
+                (Sql.any "CREATE TABLE veins_t_lock (id INTEGER PRIMARY KEY)"))
         |> add_step
              (Step.create
                 ~id:(id 1)
                 ~label:"insert row"
-                "INSERT INTO veins_t_lock (id) VALUES (1)"))
+                (Sql.any "INSERT INTO veins_t_lock (id) VALUES (1)")))
     in
     let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_lock") () in
@@ -1162,6 +1167,187 @@ module Make (D : Dialect) = struct
     let%lwt () = forget_test_migrations () in
     Db.exec (root_ctx ()) (drop_table "veins_t_lock") ()
   ;;
+
+  let connection_kind () =
+    Db.connection_ctx ~role:owner root (fun ctx ->
+      Db.query ~needs:Need.none ctx (fun (module C : Caqti_lwt.CONNECTION) ->
+        Lwt.return_ok (Dialect.kind C.dialect)))
+  ;;
+
+  (* A run with a step that has no SQL for the connection's dialect applies
+     nothing, not even the migrations before it. *)
+  let test_migration_dialects () =
+    let%lwt kind = connection_kind () in
+    let other : Dialect.kind =
+      match kind with
+      | Dialect.Mariadb -> Dialect.Postgresql
+      | Dialect.Postgresql -> Dialect.Mariadb
+    in
+    let migration name step =
+      let namespace = Format.asprintf "veins_test_%s_%d" name (Random.int 100000) in
+      Migration.(
+        create
+          (Namespace.create namespace)
+          ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
+        |> add_step step)
+    in
+    let supported =
+      migration
+        "dialect_ok"
+        (Migration.Step.create
+           ~label:"create table"
+           (Migration.Sql.only
+              kind
+              "CREATE TABLE veins_t_dialect (id INTEGER PRIMARY KEY)"))
+    in
+    let unsupported =
+      migration
+        "dialect_other"
+        (Migration.Step.create
+           ~label:"other dialect only"
+           (Migration.Sql.only other "INSERT INTO veins_t_dialect (id) VALUES (1)"))
+    in
+    let migrations = [ supported; unsupported ] in
+    let%lwt () = forget_test_migrations () in
+    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect") () in
+    let fails name result =
+      match result with
+      | Error (Error.Migration_failed (_ : string)) -> ()
+      | Error e -> Alcotest.failf "%s: unexpected error %s" name (Error.show e)
+      | Ok () -> Alcotest.failf "%s: succeeded" name
+    in
+    let%lwt () = Runner.verify ~migrations root () |> Lwt.map (fails "verify") in
+    let%lwt () = Runner.run_all ~migrations root () |> Lwt.map (fails "run_all") in
+    let%lwt () = Runner.up root unsupported |> Lwt.map (fails "up") in
+    let%lwt pending = Runner.pending ~migrations root () in
+    Alcotest.(check int) "nothing applied" 2 (CCList.length pending);
+    let%lwt drifts = Runner.check ~migrations root () in
+    let unsupported_steps =
+      CCList.filter_map
+        (function
+          | Migration.Unsupported { steps; dialect; _ } when dialect = kind -> Some steps
+          | Migration.Unsupported _ | Migration.Pending _ | Migration.Orphaned _ -> None)
+        drifts
+    in
+    Alcotest.(check (list (list string)))
+      "check names the step"
+      [ [ "other dialect only" ] ]
+      unsupported_steps;
+    let%lwt () =
+      Runner.run_all ~migrations:[ supported ] root ()
+      |> Lwt.map (function
+        | Ok () -> ()
+        | Error e -> Alcotest.failf "supported alone: %s" (Error.show e))
+    in
+    let%lwt () =
+      Runner.verify ~migrations:[ supported ] root ()
+      |> Lwt.map (function
+        | Ok () -> ()
+        | Error e -> Alcotest.failf "verify supported: %s" (Error.show e))
+    in
+    let%lwt () = forget_test_migrations () in
+    Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ()
+  ;;
+
+  (* The counter bridge, on a table of its own. Uses the deprecated API on
+     purpose. *)
+  module Counter_tests = struct
+    [@@@alert "-deprecated"]
+
+    module Counters = Migration.Counter_state.Make (Db)
+
+    let table = "veins_test_counters"
+
+    let set_counter namespace version dirty =
+      Db.exec
+        (root_ctx ())
+        (ddl
+           (Format.asprintf
+              "INSERT INTO %s (namespace, version, dirty) VALUES ('%s', %d, %s)"
+              table
+              namespace
+              version
+              (if dirty then "TRUE" else "FALSE")))
+        ()
+    ;;
+
+    let counter namespace =
+      Db.find_opt
+        (root_ctx ())
+        (direct
+           T.(string -->? t2 int bool)
+           (Format.asprintf "SELECT version, dirty FROM %s WHERE namespace = ?" table)
+         |> Request.create ~needs:Roles.read)
+        namespace
+    ;;
+
+    let test () =
+      let namespace = Format.asprintf "veins_test_counter_%d" (Random.int 100000) in
+      let step label =
+        Migration.(
+          Step.create
+            ~label
+            (Sql.any "CREATE TABLE IF NOT EXISTS veins_t_counter (id INTEGER)"))
+      in
+      let mig =
+        Migration.(
+          create
+            (Namespace.create namespace)
+            ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
+          |> add_step (step "one")
+          |> add_step (step "two"))
+      in
+      let%lwt () = forget_test_migrations () in
+      let%lwt () = Db.exec (root_ctx ()) (drop_table table) () in
+      let pending () =
+        let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
+        Lwt.return (CCList.fold_left (fun n (_, k) -> n + k) 0 pending)
+      in
+      let imported name =
+        Lwt.map (function
+          | Ok state -> state
+          | Error (`Dirty (_ : string list)) -> Alcotest.failf "%s: dirty" name)
+      in
+      (* no table: nothing to import, [record] creates it *)
+      let%lwt state = Counters.import ~table root [ mig ] |> imported "no table" in
+      let%lwt n = pending () in
+      Alcotest.(check int) "no table, nothing marked" 2 n;
+      let%lwt () =
+        Counters.record ~table root state mig.Migration.namespace ~applied:0 ~failed:true
+      in
+      let%lwt row = counter namespace in
+      Alcotest.(check (option (pair int bool))) "table created" (Some (0, true)) row;
+      (* dirty: refused, nothing marked *)
+      let%lwt () =
+        match%lwt Counters.import ~table root [ mig ] with
+        | Error (`Dirty namespaces) ->
+          Lwt.return (Alcotest.(check (list string)) "dirty" [ namespace ] namespaces)
+        | Ok (_ : Migration.Counter_state.state) -> Alcotest.fail "dirty imported"
+      in
+      (* one step counted: marked, the other pending *)
+      let%lwt () =
+        Db.exec (root_ctx ()) (ddl (Format.asprintf "DELETE FROM %s" table)) ()
+      in
+      let%lwt () = set_counter namespace 1 false in
+      let%lwt state = Counters.import ~table root [ mig ] |> imported "counted" in
+      let%lwt n = pending () in
+      Alcotest.(check int) "one step marked" 1 n;
+      let%lwt () =
+        Runner.up root mig
+        |> Lwt.map (function
+          | Ok () -> ()
+          | Error e -> Alcotest.failf "up: %s" (Error.show e))
+      in
+      let%lwt () =
+        Counters.record ~table root state mig.Migration.namespace ~applied:2 ~failed:false
+      in
+      let%lwt row = counter namespace in
+      Alcotest.(check (option (pair int bool))) "counter updated" (Some (2, false)) row;
+      let%lwt () = forget_test_migrations () in
+      let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_counter") () in
+      Db.exec (root_ctx ()) (drop_table table) ()
+    ;;
+  end
 
   (* {1 Without roles} *)
 
@@ -1306,6 +1492,8 @@ module Make (D : Dialect) = struct
       , [ case "run_all, check, down" `Quick test_migration
         ; case "import another engine's state" `Quick test_migration_import
         ; case "concurrent runners apply once" `Quick test_migration_runs_once
+        ; case "steps without SQL for the dialect" `Quick test_migration_dialects
+        ; case "import a counter table" `Quick Counter_tests.test
         ] )
     ]
   ;;
