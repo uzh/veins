@@ -467,7 +467,7 @@ module Make (D : Dialect) = struct
   (* A second instance with a single connection, so every statement reuses the
      connection the rollback ran on. *)
   module Single = Pools.Make (struct
-      let database = database
+      let database () = database
       let database_pool_size = 1
       let expected_databases = 1
 
@@ -905,7 +905,7 @@ module Make (D : Dialect) = struct
   module Tuned =
     Pools.Make_with_options
       (struct
-        let database = database
+        let database () = database
         let database_pool_size = 1
         let expected_databases = 1
 

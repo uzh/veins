@@ -4,7 +4,7 @@
 module T = Caqti.Templater.T
 
 module Db = Veins.Pools.Make (struct
-    let database =
+    let database () =
       Veins.Database.create (Veins.Label.create "x") (Veins.Url.create "mariadb://x/y")
     ;;
 

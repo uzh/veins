@@ -35,7 +35,7 @@ module Driver : Veins.Driver.Sig = struct
 end
 
 module type CONFIG = sig
-  val database : Veins.Database.t
+  val database : unit -> Veins.Database.t
   val database_pool_size : int
 end
 
@@ -52,7 +52,7 @@ module Pools = struct
       (O)
 
   module Make (C : sig
-      val database : Veins.Database.t
+      val database : unit -> Veins.Database.t
     end) =
     Make_with_options
       (struct
@@ -69,7 +69,7 @@ module Plain = struct
     Veins.Plain.Make (Pools.Make_with_options (C) (O))
 
   module Make (C : sig
-      val database : Veins.Database.t
+      val database : unit -> Veins.Database.t
     end) =
     Veins.Plain.Make (Pools.Make (C))
 end

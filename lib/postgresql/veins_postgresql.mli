@@ -5,7 +5,7 @@
 
     {[
     module Db = Veins_postgresql.Pools.Make (struct
-        let database = Veins.Database.create (Veins.Label.create "root") url
+        let database () = Veins.Database.create (Veins.Label.create "root") url
       end)
     ]}
 
@@ -18,10 +18,11 @@
 module Driver : Veins.Driver.Sig
 
 (** The configuration of the [Make_with_options] functors: the primary
-    database and the most connections each of its pools keeps open
-    ([Veins.Pools_sig.ConfigSig.database_pool_size]). *)
+    database, called by [Pool.initialize]
+    ([Veins.Pools_sig.ConfigSig.database]), and the most connections each of
+    its pools keeps open ([Veins.Pools_sig.ConfigSig.database_pool_size]). *)
 module type CONFIG = sig
-  val database : Veins.Database.t
+  val database : unit -> Veins.Database.t
   val database_pool_size : int
 end
 
@@ -32,7 +33,7 @@ module Pools : sig
       {!Veins.Pool_options.default}. *)
   module Make : functor
       (_ : sig
-         val database : Veins.Database.t
+         val database : unit -> Veins.Database.t
        end)
       -> Veins.Pools_sig.Sig
 
@@ -43,7 +44,7 @@ module Pools : sig
       module Db =
         Veins_postgresql.Pools.Make_with_options
           (struct
-            let database = Veins.Database.create (Veins.Label.create "root") url
+            let database () = Veins.Database.create (Veins.Label.create "root") url
             let database_pool_size = 20
           end)
           (struct
@@ -61,14 +62,14 @@ module Plain : sig
 
       {[
       module Db = Veins_postgresql.Plain.Make (struct
-          let database = Veins.Database.create (Veins.Label.create "root") url
+          let database () = Veins.Database.create (Veins.Label.create "root") url
         end)
 
       let name = Db.find_opt (Db.label_ctx root) find_name 1
       ]} *)
   module Make : functor
       (_ : sig
-         val database : Veins.Database.t
+         val database : unit -> Veins.Database.t
        end)
       -> Veins.Plain.Sig
 

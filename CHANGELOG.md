@@ -42,6 +42,13 @@ To be released as 0.2.0.
   `core_migration_state` counts as applied (by derived ids) and refuses dirty namespaces, `record` keeps the counter
   up to date. Both dialects. Deprecated from the start, for the time an application moves over.
 
+### 💥 Breaking: the primary database is read at initialisation
+
+- `Pools_sig.ConfigSig.database` (and `database` in the driver libraries' configurations) is `unit -> Database.t`,
+  called by `Pool.initialize`. The module no longer needs the database (its URL, usually from the environment) when
+  it is made, so a configuration loaded later at startup (an `.env` file, a test setup) is seen without a
+  `Pool.reset`. Write `let database () = …`; a database built once already becomes `let database () = db`.
+
 ### Added: reporting failures, driver-library options
 
 - `Pool_options.on_failure`: called with every error a statement raises (label, role, request, the exception),

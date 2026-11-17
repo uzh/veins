@@ -59,7 +59,7 @@ make test
 
 ```ocaml
 module type ConfigSig = sig
-  val database : Entity.Database.t (* primary DB — label becomes key *)
+  val database : unit -> Entity.Database.t (* primary DB, called by Pool.initialize *)
   val database_pool_size : int
   val expected_databases : int
   module Driver : Driver.Sig       (* not required with Veins_mariadb / Veins_postgresql *)
@@ -70,12 +70,13 @@ Prefer the driver libraries for end users — they remove the `Driver` field:
 
 ```ocaml
 module Db = Veins_mariadb.Pools.Make (struct
-  let database = Database.create (Label.create "root") url
+  let database () = Database.create (Label.create "root") url
   (* pool_size defaults to 10, expected_databases to 5 *)
 end)
 ```
 
-Call `Db.Pool.initialize ()` once at startup before any query.
+Call `Db.Pool.initialize ()` once at startup before any query. `database` is a function so that nothing reads the
+configuration when the module is made: call it only from `Pool.initialize`.
 
 `Pools.Make_with_options (Config) (struct let options = ... end)` takes a `Pool_options.t` (connection recycling,
 `statement_timeout`, `acquire_timeout`, `reconnect_backoff`, `on_failure`); `Pools.Make` is that with `Pool_options.default`. New

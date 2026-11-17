@@ -6,7 +6,7 @@
 
     {[
     module Db = Veins_mariadb.Plain.Make (struct
-        let database =
+        let database () =
           let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
           Veins.Database.create (Veins.Label.create "root") url
         ;;

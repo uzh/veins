@@ -42,8 +42,7 @@ See [Package and libraries](#package-and-libraries).
 open Veins
 
 (* The URL is typically read from an environment variable. *)
-let url = Url.create (Sys.getenv "DATABASE_URL")
-let db  = Database.create (Label.create "root") url
+let db () = Database.create (Label.create "root") (Url.create (Sys.getenv "DATABASE_URL"))
 
 module Db = Veins_mariadb.Pools.Make (struct
   let database = db
@@ -52,6 +51,9 @@ end)
 
 let () = Db.Pool.initialize ()
 ```
+
+`database` is a function: `Pool.initialize` calls it, not the module's creation, so it may read a configuration that
+is loaded at startup (an `.env` file, a test setup).
 
 For custom pool sizes, or when you need to wire up the driver yourself:
 
@@ -362,7 +364,7 @@ The `veins-gen` executable is installed as part of the `veins` package.
 module Db =
   Veins_mariadb.Pools.Make_with_options
     (struct
-      let database = Database.create (Label.create "root") url
+      let database () = Database.create (Label.create "root") url
       let database_pool_size = 20
     end)
     (struct
@@ -376,7 +378,7 @@ module Db =
 module Db =
   Veins.Pools.Make_with_options
     (struct
-      let database = Database.create (Label.create "root") url
+      let database () = Database.create (Label.create "root") url
       let database_pool_size = 10
       let expected_databases = 5
 

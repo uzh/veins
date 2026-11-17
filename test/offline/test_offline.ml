@@ -6,7 +6,10 @@ open Veins
 module T = Caqti.Templater.T
 
 module Config = struct
-  let database = Database.create (Label.create "unused") (Url.create "mariadb://unused/x")
+  let database () =
+    Database.create (Label.create "unused") (Url.create "mariadb://unused/x")
+  ;;
+
   let database_pool_size = 5
   let expected_databases = 4
 
@@ -372,6 +375,33 @@ let test_mariadb_permission_errors () =
   Lwt.return_unit
 ;;
 
+(* [Pool.initialize] reads the primary database, making the module doesn't:
+   a configuration loaded at startup is seen. *)
+let configured_url = ref None
+
+module Deferred = Veins_mariadb.Plain.Make (struct
+    let database () =
+      match !configured_url with
+      | None -> Alcotest.fail "database read before the configuration was loaded"
+      | Some url -> Database.create (Label.create "veins_deferred") (Url.create url)
+    ;;
+  end)
+
+let test_database_read_at_initialize () =
+  configured_url := Some "mariadb://configured/x";
+  Deferred.Pool.initialize ();
+  let label = Label.create "veins_deferred" in
+  let registered = Deferred.Pool.find label in
+  Deferred.Pool.drop label;
+  Lwt.return
+    (Alcotest.(check bool)
+       "the URL configured before initialize"
+       true
+       (CCOption.exists
+          (fun db -> Url.equal (Database.owner db) (Url.create "mariadb://configured/x"))
+          registered))
+;;
+
 (* [Pool_options.on_failure] hears of every error a statement raises, once,
    and nothing of [Pool.ping]. *)
 let reported : Pool_options.failure list ref = ref []
@@ -500,6 +530,7 @@ let () =
        ; ( "logins"
          , [ case "logins share the owner's pool" `Quick test_logins_share_the_owner_pool
            ; case "registry" `Quick test_registry
+           ; case "database read at initialize" `Quick test_database_read_at_initialize
            ; case "strict logins" `Quick test_strict_logins
            ; case "MariaDB error classes" `Quick test_mariadb_permission_errors
            ] )

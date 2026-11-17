@@ -7,8 +7,11 @@
 
 (** Configuration required to instantiate a connection pool. *)
 module type ConfigSig = sig
-  (** The primary database, registered by [Pool.initialize]. *)
-  val database : Entity.Database.t
+  (** The primary database, registered by [Pool.initialize], which calls
+      this every time it runs. Nothing calls it when the module is made, so
+      it may read a configuration that is loaded later, at startup (an
+      environment file, a test setup). *)
+  val database : unit -> Entity.Database.t
 
   (** Maximum number of open connections Caqti keeps per pool (one pool per
       label for the owner, plus one per login with a URL of its own). A
@@ -60,7 +63,8 @@ module type Sig = sig
   (** {1 Pool lifecycle} *)
 
   module Pool : sig
-    (** Register the primary database from [Config] and [additional_pools].
+    (** Register the primary database ([Config.database ()]) and
+        [additional_pools].
         Labels already registered are skipped. Connections are opened lazily,
         on first use. *)
     val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit

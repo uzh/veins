@@ -482,7 +482,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     ;;
 
     let initialize ?(additional_pools = []) () =
-      Config.database :: additional_pools
+      Config.database () :: additional_pools
       |> CCList.iter (fun database ->
         if not (Labels_tbl.mem databases (Entity.Database.label database))
         then register ~required:true database)
