@@ -240,7 +240,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
 
   let is_current entry pool =
     match entry.connection with
-    | Open current -> current == pool
+    | Open current -> CCEqual.physical current pool
     | Close | Fail _ -> false
   ;;
 
