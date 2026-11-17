@@ -226,28 +226,58 @@ VEINS_MIGRATION_DIR=lib/migrations veins-gen "add users table"
 # → lib/migrations/migration_20260424T140314_add_users_table.ml
 ```
 
-The generated file:
+The generated file defines each step on its own, then adds them to the migration and registers it:
 
 ```ocaml
 open Veins
+open Migration
+
+let step_1 =
+  let up =
+    Sql.v
+      ~mariadb:
+        {sql|
+          TODO: forward SQL
+        |sql}
+      ~postgresql:
+        {sql|
+          TODO: forward SQL
+        |sql}
+      ()
+  in
+  let down =
+    Sql.v
+      ~mariadb:
+        {sql|
+          TODO: reverse SQL
+        |sql}
+      ~postgresql:
+        {sql|
+          TODO: reverse SQL
+        |sql}
+      ()
+  in
+  Step.create
+    ~id:(Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
+    ~label:"TODO: describe step 1"
+    ~down
+    up
+;;
+
+(* step_2 has the same shape *)
 
 let migration =
-  Migration.(
-    create
-      (Namespace.create "add_users_table")
-      ~written_at:(ptime_of_string "2026-04-24T14:03:14Z")
-    |> add_step
-         (Step.create
-            ~id:(Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
-            ~label:"TODO: describe step 1"
-            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
-            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
-  )
+  let namespace = Namespace.create "add_users_table" in
+  let written_at = ptime_of_string "2026-04-24T14:03:14Z" in
+  create namespace ~written_at
+  |> add_step step_1
+  |> add_step step_2
+;;
 
-let () = Migration.register migration
+let () = register migration
 ```
 
-Edit the SQL strings, then link the file into your application. Every statement names the dialects it is written
+Rename the steps after what they do, fill in the SQL, then link the file into your application. Every statement names the dialects it is written
 for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one out if the application never runs on it),
 `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs anywhere. Before a run applies anything,
 the runner checks that every pending step has SQL for the connection's dialect (`Runner.verify`), so a MariaDB-only

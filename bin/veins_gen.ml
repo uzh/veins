@@ -20,41 +20,79 @@ let slugify s =
   |> CCString.concat "_"
 ;;
 
+let step_template ~index ~id =
+  Printf.sprintf
+    {|let step_%d =
+  let up =
+    Sql.v
+      ~mariadb:
+        {sql|
+          TODO: forward SQL
+        |sql}
+      ~postgresql:
+        {sql|
+          TODO: forward SQL
+        |sql}
+      ()
+  in
+  let down =
+    Sql.v
+      ~mariadb:
+        {sql|
+          TODO: reverse SQL
+        |sql}
+      ~postgresql:
+        {sql|
+          TODO: reverse SQL
+        |sql}
+      ()
+  in
+  Step.create
+    ~id:(Id.create %S)
+    ~label:"TODO: describe step %d"
+    ~down
+    up
+;;
+|}
+    index
+    id
+    index
+;;
+
 let template ~module_name ~namespace ~written_at =
   let rng = Random.State.make_self_init () in
-  let uuid1 = uuid_v4 rng in
-  let uuid2 = uuid_v4 rng in
-  Format.asprintf
+  let indices = [ 1; 2 ] in
+  let steps =
+    CCList.map (fun index -> step_template ~index ~id:(uuid_v4 rng)) indices
+    |> CCString.concat "\n"
+  in
+  let add_steps =
+    CCList.map (Printf.sprintf "  |> add_step step_%d") indices |> CCString.concat "\n"
+  in
+  Printf.sprintf
     {|(** Migration: %s *)
 
 open Veins
+open Migration
 
+(* Steps run in the order [migration] adds them. Once a step is deployed, never
+   change or remove it: append a new step instead. *)
+
+%s
 let migration =
-  Migration.(
-    create
-      (Namespace.create %S)
-      ~written_at:(ptime_of_string %S)
-    |> add_step
-         (Step.create
-            ~id:(Id.create %S)
-            ~label:"TODO: describe step 1"
-            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
-            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
-    |> add_step
-         (Step.create
-            ~id:(Id.create %S)
-            ~label:"TODO: describe step 2"
-            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
-            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
-  )
+  let namespace = Namespace.create %S in
+  let written_at = ptime_of_string %S in
+  create namespace ~written_at
+%s
+;;
 
-let () = Migration.register migration
+let () = register migration
 |}
     module_name
+    steps
     namespace
     written_at
-    uuid1
-    uuid2
+    add_steps
 ;;
 
 let compact_timestamp p =
