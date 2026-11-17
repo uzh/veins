@@ -99,6 +99,11 @@ module type Sig = sig
     -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
     -> 'a Lwt.t
 
+  val connection_transaction
+    :  Caqti_lwt.connection
+    -> (unit -> ('a, Caqti.Error.t) Lwt_result.t)
+    -> ('a, Caqti.Error.t) Lwt_result.t
+
   val transaction_iter
     :  _ Ctx.t
     -> (Caqti_lwt.connection -> (unit, Caqti.Error.t) Lwt_result.t) list
@@ -137,5 +142,6 @@ module Make (Db : Pools_sig.Sig) = struct
   ;;
 
   let transaction ?setup ?cleanup ctx f = Db.transaction ?setup ?cleanup ~needs ctx f
+  let connection_transaction = Db.connection_transaction
   let transaction_iter ctx fs = Db.transaction_iter ~needs ctx fs
 end

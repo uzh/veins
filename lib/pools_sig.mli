@@ -192,6 +192,15 @@ module type Sig = sig
     -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
     -> 'a Lwt.t
 
+  (** [connection_transaction connection f] runs [f] in a transaction on a raw
+      [connection] (e.g. inside {!query}): commits on [Ok], rolls back on
+      [Error] and on exceptions (re-raised). Use it instead of the driver's
+      [start] / [commit] / [rollback], see {!Dialect.restore_autocommit}. *)
+  val connection_transaction
+    :  Caqti_lwt.connection
+    -> (unit -> ('a, Caqti.Error.t) Lwt_result.t)
+    -> ('a, Caqti.Error.t) Lwt_result.t
+
   (** {!transaction} running [fs] in order. *)
   val transaction_iter
     :  needs:'g Entity.Need.t

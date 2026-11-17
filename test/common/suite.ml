@@ -344,6 +344,20 @@ module Make (D : Dialect) = struct
           (Single.label_ctx ~role:owner root)
           (fun (_ : Caqti_lwt.connection) -> Lwt.fail Exit))
     in
+    (* a statement returning an Error inside a raw-connection transaction *)
+    let%lwt () =
+      Lwt.catch
+        (fun () ->
+           Single.query
+             ~needs:Need.none
+             (Single.label_ctx ~role:owner root)
+             (fun ((module C : Caqti_lwt.CONNECTION) as connection) ->
+                Single.connection_transaction connection (fun () ->
+                  C.exec (Request.caqti (insert "veins_t_missing")) (1, 1))))
+        (function
+          | Error.Failed _ -> Lwt.return_unit
+          | exn -> Lwt.reraise exn)
+    in
     let%lwt () = Single.exec (Single.label_ctx ~role:owner root) (insert table) (2, 2) in
     (* another connection sees the row only if it was committed *)
     let%lwt n = Db.find (root_ctx ()) (count table) () in
