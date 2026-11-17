@@ -1028,6 +1028,46 @@ module Make (D : Dialect) = struct
     Lwt.return (Alcotest.(check bool) "usable afterwards" true (Result.is_ok one))
   ;;
 
+  (* A connection error a callback raises as [Caqti.Error.Exn] (what
+     [Caqti_lwt.or_fail] raises) drops the pool like a returned one, and
+     reaches the caller as it is; veins' own exceptions raised by the
+     callback aren't turned into results. *)
+  let test_use_callback_exceptions () =
+    let lost =
+      Caqti.Error.Exn
+        (Caqti.Error.connect_failed ~uri:Uri.empty (Caqti.Error.Msg "connection gone"))
+    in
+    let dropped name run =
+      let%lwt before = Db.Pool.fetch root in
+      let%lwt () =
+        expect_exn name run (fun exn ->
+          Alcotest.(check bool) (name ^ ": the callback's exception") true (exn == lost))
+      in
+      let%lwt after = Db.Pool.fetch root in
+      Alcotest.(check bool) (name ^ ": pool dropped") false (before == after);
+      (* a statement reaching the database ends the count of failures, or
+         the next case would find the pool backing off *)
+      let%lwt one = Db.find (Db.label_ctx ~role:owner root) ping () in
+      Lwt.return (Alcotest.(check int) (name ^ ": reconnects") 1 one)
+    in
+    let%lwt () =
+      dropped "Pool.use" (fun () -> Db.Pool.use root (fun _ -> Lwt.fail lost))
+    in
+    let%lwt () =
+      dropped "connection_ctx" (fun () ->
+        Db.connection_ctx ~role:owner root (fun ctx ->
+          Db.query ~needs:Need.none ctx (fun _ -> Lwt.fail lost)))
+    in
+    let inner = Error.Exn (Error.Connection_failed "inner acquire timeout") in
+    let%lwt () =
+      expect_exn
+        "veins exception of the callback"
+        (fun () -> Db.Pool.use root (fun _ -> Lwt.fail inner))
+        (fun exn -> Alcotest.(check bool) "passed through" true (exn == inner))
+    in
+    Lwt.return_unit
+  ;;
+
   (* {1 Roles} *)
 
   let as_role role = Db.label_ctx ~role roles_label
@@ -1597,6 +1637,7 @@ module Make (D : Dialect) = struct
         ; case "options" `Quick test_options
         ; case "on_failure" `Quick test_on_failure
         ; case "Pool.use" `Quick test_use
+        ; case "Pool.use callback exceptions" `Quick test_use_callback_exceptions
         ] )
     ; ( "roles"
       , [ case "roles run their statements" `Quick test_roles_run_their_statements

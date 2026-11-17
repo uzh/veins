@@ -328,10 +328,11 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     | Error (_ : Caqti.Error.t) -> mark_healthy key pool
   ;;
 
-  (* What [f] raised, on its way out: a lost connection drops the pool too. *)
+  (* What [f] raised, on its way out: a lost connection drops the pool too,
+     reported by veins or by Caqti ([Caqti_lwt.or_fail]). *)
   let record_exn key pool = function
-    | Error.Failed { Error.error; _ } when Config.Driver.is_connection_error error ->
-      record key pool (Error error)
+    | (Error.Failed { Error.error; _ } | Caqti.Error.Exn error)
+      when Config.Driver.is_connection_error error -> record key pool (Error error)
     | (_ : exn) -> release_probe key pool
   ;;
 
@@ -659,7 +660,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     ;;
 
     (* What [fetch_key] and [use_pool] raise for a pool that can't give a
-       connection, as a Caqti error. *)
+       connection, as a Caqti error. Never applied to what [f] raised. *)
     let no_connection key ~fetching exn =
       match[@warning "-4"] exn with
       | Error.Failed { Error.error; _ } when fetching -> Some error
@@ -677,16 +678,25 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       match%lwt fetch_key key with
       | exception exn -> failed ~fetching:true exn
       | pool ->
-        (match%lwt
-           use_pool ~quiet:true key pool (fun connection ->
-             f (Connection.fixed connection))
-         with
+        (* Tells [f]'s exceptions, which pass through as they are, from
+           those of getting a connection. *)
+        let raised_by_f = ref None in
+        let run connection =
+          Lwt.catch
+            (fun () -> f (Connection.fixed connection))
+            (fun exn ->
+               raised_by_f := Some exn;
+               Lwt.reraise exn)
+        in
+        (match%lwt use_pool ~quiet:true key pool run with
          | result ->
            record key pool result;
            Lwt.return result
          | exception exn ->
            record_exn key pool exn;
-           failed ~fetching:false exn)
+           (match !raised_by_f with
+            | Some raised when CCEqual.physical raised exn -> Lwt.reraise exn
+            | Some (_ : exn) | None -> failed ~fetching:false exn))
     ;;
 
     let disconnect ?error ?login label =

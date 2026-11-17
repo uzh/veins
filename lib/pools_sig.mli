@@ -138,7 +138,12 @@ module type Sig = sig
         reconnect, or one that gives no connection within
         [Pool_options.acquire_timeout], gives [Error] too, a
         [`Connect_failed] for the latter. Errors are not reported to
-        [Pool_options.on_failure], and exceptions of [f] pass through.
+        [Pool_options.on_failure].
+
+        Exceptions of [f] pass through as they are, also veins' own; a lost
+        connection [f] raises ([Caqti.Error.Exn], e.g. of
+        [Caqti_lwt.or_fail], or {!Veins.Error.Failed}) drops the pool all the
+        same.
 
         @raise Veins.Error.Exn
           [Database_not_registered],
