@@ -9,17 +9,14 @@ services:
       - build:/workspace/_build:cached
       - opam-5.5.2-2.6:/home/opam/.opam:cached
       - ${HOME}/.claude:/home/opam/.claude
-      # Add database folders to dev container
-      - db-mariadb:/databases/db-mariadb/:ro
-      - db-postgres:/databases/db-postgres/:ro
     env_file: [.env]
     depends_on:
-      - database-mariadb
-      - database-postgres
+      database-mariadb:
+        condition: service_healthy
+      database-postgres:
+        condition: service_healthy
     command: sleep infinity
 
-  # NOTE: both servers run in Europe/Zurich on purpose: veins pins every session
-  # to UTC, and a UTC server would let the tests for that pass trivially.
   database-mariadb:
     image: mariadb:10.6
     restart: unless-stopped
@@ -34,6 +31,11 @@ services:
     volumes:
       - db-mariadb:/var/lib/mysql
       - ./init-mariadb:/docker-entrypoint-initdb.d/:ro
+    healthcheck:
+      test: [ "CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uadmin", "-ppassword" ]
+      interval: 2s
+      timeout: 5s
+      retries: 60
 
   database-postgres:
     image: postgres:18
@@ -47,6 +49,11 @@ services:
     volumes:
       - db-postgres:/var/lib/postgresql
       - ./init-postgres:/docker-entrypoint-initdb.d/:ro
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-h", "127.0.0.1", "-U", "root", "-d", "development" ]
+      interval: 2s
+      timeout: 5s
+      retries: 60
 
 volumes:
   build:
