@@ -38,14 +38,14 @@ let migration =
          (Step.create
             ~id:(Id.create %S)
             ~label:"TODO: describe step 1"
-            ~down:"TODO: reverse SQL"
-            "TODO: forward SQL")
+            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
+            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
     |> add_step
          (Step.create
             ~id:(Id.create %S)
             ~label:"TODO: describe step 2"
-            ~down:"TODO: reverse SQL"
-            "TODO: forward SQL")
+            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
+            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
   )
 
 let () = Migration.register migration

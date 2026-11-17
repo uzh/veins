@@ -14,6 +14,27 @@ To be released as 0.2.0.
   optional dependencies of `veins`. In an application, depend on `veins` and the driver in the opam file, and name
   `veins.mariadb` / `veins.postgresql` in dune.
 
+### 💥 Breaking: migration statements per dialect
+
+- `Migration.Step.create` takes `Migration.Sql.t` instead of strings, for `up` and `~down`: `Sql.v ~mariadb
+  ~postgresql ()` (one statement per dialect, either may be left out), `Sql.only kind sql` or `Sql.any sql` (the
+  same SQL everywhere, stated explicitly). `run_all` and `up` check every pending step against the connection's
+  dialect before they apply any and fail with `Error.Migration_failed` naming the steps without SQL; `down` does
+  the same for its `down` statements. A wrapped string becomes `Sql.any "…"`, or `Sql.only Dialect.Mariadb "…"`
+  where it is MariaDB's SQL.
+- `Runner.verify` runs that check alone (read only), and `Runner.check` reports such steps as the new drift
+  `Unsupported { namespace; dialect; steps }`.
+- `Step.create ?id`: without an id, a step gets `Id.derive` of its migration's namespace and its position, so
+  `Step.t.id` is an option and `Step.id` returns one. `Migration.step_ids` gives the effective ids.
+- `run_all ~migrations` runs them in the order given (only registered migrations are sorted by `written_at`).
+- `veins-gen` writes `Sql.v` with a TODO for each dialect.
+
+### Added: importing a counter-based migration table
+
+- `Migration.Counter_state.Make (Db)`: `import` marks the steps a counter table such as Sihl's
+  `core_migration_state` counts as applied (by derived ids) and refuses dirty namespaces, `record` keeps the counter
+  up to date. Both dialects. Deprecated from the start, for the time an application moves over.
+
 ### Added: pools without roles
 
 - `Veins.Plain` (`Veins_mariadb.Plain.Make`, `Veins_postgresql.Plain.Make`, or `Veins.Plain.Make` over any

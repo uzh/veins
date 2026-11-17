@@ -240,14 +240,21 @@ let migration =
          (Step.create
             ~id:(Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
             ~label:"TODO: describe step 1"
-            ~down:"TODO: reverse SQL"
-            "TODO: forward SQL")
+            ~down:(Sql.v ~mariadb:"TODO: reverse SQL" ~postgresql:"TODO: reverse SQL" ())
+            (Sql.v ~mariadb:"TODO: forward SQL" ~postgresql:"TODO: forward SQL" ()))
   )
 
 let () = Migration.register migration
 ```
 
-Edit the SQL strings, then link the file into your application. Every file that calls `Migration.register` contributes its steps to the global registry — no explicit list to maintain.
+Edit the SQL strings, then link the file into your application. Every statement names the dialects it is written
+for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one out if the application never runs on it),
+`Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs anywhere. Before a run applies anything,
+the runner checks that every pending step has SQL for the connection's dialect (`Runner.verify`), so a MariaDB-only
+migration fails up front on PostgreSQL instead of half way.
+
+`~id` may be left out: the step then gets `Id.derive` of the namespace and its position, which is stable as long as
+steps are only ever appended. Every file that calls `Migration.register` contributes its steps to the global registry — no explicit list to maintain.
 
 ### Applying migrations
 
@@ -275,17 +282,28 @@ so a read-only role can call them. The state table is `veins_migration_state`, o
 ### Drift detection
 
 ```ocaml
-(* Returns a list of drift values — Pending (steps not yet applied) or
-   Orphaned (applied IDs no longer present in the registry). *)
+(* Returns a list of drift values — Pending (steps not yet applied),
+   Orphaned (applied IDs no longer present in the registry) or Unsupported
+   (pending steps without SQL for the connection's dialect). *)
 let%lwt drifts = Runner.check (Label.create "root") () in
 List.iter (function
   | Migration.Pending { namespace; pending_steps; _ } ->
     Printf.eprintf "pending: %s (%d steps)\n" (Migration.Namespace.show namespace) pending_steps
   | Migration.Orphaned { namespace; step_ids } ->
     Printf.eprintf "orphaned in %s: %d step(s)\n"
-      (Migration.Namespace.show namespace) (List.length step_ids))
+      (Migration.Namespace.show namespace) (List.length step_ids)
+  | Migration.Unsupported { namespace; steps; _ } ->
+    Printf.eprintf "no SQL for this dialect in %s: %s\n"
+      (Migration.Namespace.show namespace) (String.concat ", " steps))
   drifts
 ```
+
+### Coming from a counter-based engine
+
+`Migration.Counter_state.Make (Db)` imports a table like Sihl's `core_migration_state` (one row per namespace:
+steps applied, dirty flag): `import` marks the counted steps as applied (their ids derived from the positions, so
+leave `~id` out), refuses dirty namespaces, and `record` keeps the counter up to date for a rollback to the previous
+engine. It is deprecated from the start: drop it once every database ran the import.
 
 ---
 

@@ -37,16 +37,48 @@ module Namespace = struct
   let show s = s
 end
 
+module Sql = struct
+  type t =
+    { mariadb : string option
+    ; postgresql : string option
+    }
+
+  let any sql = { mariadb = Some sql; postgresql = Some sql }
+
+  let only (kind : Dialect.kind) sql =
+    match kind with
+    | Dialect.Mariadb -> { mariadb = Some sql; postgresql = None }
+    | Dialect.Postgresql -> { mariadb = None; postgresql = Some sql }
+  ;;
+
+  let v ?mariadb ?postgresql () =
+    match mariadb, postgresql with
+    | None, None -> invalid_arg "Migration.Sql.v: no SQL for any dialect"
+    | _ -> { mariadb; postgresql }
+  ;;
+
+  let for_kind { mariadb; postgresql } : Dialect.kind -> string option = function
+    | Dialect.Mariadb -> mariadb
+    | Dialect.Postgresql -> postgresql
+  ;;
+
+  let kinds t =
+    CCList.filter
+      (fun kind -> CCOption.is_some (for_kind t kind))
+      Dialect.[ Mariadb; Postgresql ]
+  ;;
+end
+
 module Step = struct
   type t =
-    { id : Id.t
+    { id : Id.t option
     ; label : string
-    ; up : string
-    ; down : string option
+    ; up : Sql.t
+    ; down : Sql.t option
     ; check_fk : bool
     }
 
-  let create ~id ~label ?(check_fk = true) ?down up = { id; label; up; down; check_fk }
+  let create ?id ~label ?(check_fk = true) ?down up = { id; label; up; down; check_fk }
   let id { id; _ } = id
 end
 
@@ -66,7 +98,31 @@ let ptime_of_string s =
 
 let create namespace ~written_at = { namespace; written_at; steps = [] }
 let add_step s m = { m with steps = m.steps @ [ s ] }
-let step_ids m = CCList.map Step.id m.steps
+
+(* A step with its id: the given one, or the one derived from its position. *)
+module Resolved = struct
+  type t =
+    { id : Id.t
+    ; label : string
+    ; up : Sql.t
+    ; down : Sql.t option
+    ; check_fk : bool
+    }
+end
+
+let resolve { namespace; steps; _ } =
+  CCList.mapi
+    (fun index { Step.id; label; up; down; check_fk } ->
+       let id =
+         match id with
+         | Some id -> id
+         | None -> Id.derive ~namespace:(Namespace.value namespace) ~index
+       in
+       { Resolved.id; label; up; down; check_fk })
+    steps
+;;
+
+let step_ids m = CCList.map (fun { Resolved.id; _ } -> id) (resolve m)
 
 type database_target =
   | Database of Entity.Label.t
@@ -127,6 +183,11 @@ type drift =
       { namespace : Namespace.t
       ; step_ids : Id.t list
       }
+  | Unsupported of
+      { namespace : Namespace.t
+      ; dialect : Dialect.kind
+      ; steps : string list
+      }
 
 module type RunnerSig = sig
   val run_all
@@ -146,6 +207,13 @@ module type RunnerSig = sig
     -> unit Lwt.t
 
   val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
+
+  val verify
+    :  ?role:_ Entity.Role.t
+    -> ?migrations:t list
+    -> Entity.Label.t
+    -> unit
+    -> (unit, Error.t) Lwt_result.t
 
   val check
     :  ?role:_ Entity.Role.t
@@ -197,6 +265,50 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
 
   let is_applied = Hashtbl.mem
 
+  let kind_of ctx =
+    let (module C : Caqti_lwt.CONNECTION) =
+      Ctx.Internal.connection ctx
+      |> CCOption.get_exn_or "migration context without connection"
+    in
+    Dialect.kind C.dialect
+  ;;
+
+  let kind_name : Dialect.kind -> string = function
+    | Dialect.Mariadb -> "MariaDB"
+    | Dialect.Postgresql -> "PostgreSQL"
+  ;;
+
+  (* The labels of the pending steps of every migration that has no SQL for
+     [kind]. *)
+  let unsupported kind applied migrations =
+    CCList.filter_map
+      (fun mig ->
+         let labels =
+           CCList.filter_map
+             (fun { Resolved.id; label; up; _ } ->
+                if is_applied applied id || CCOption.is_some (Sql.for_kind up kind)
+                then None
+                else Some label)
+             (resolve mig)
+         in
+         if CCList.is_empty labels then None else Some (mig.namespace, labels))
+      migrations
+  ;;
+
+  let unsupported_error kind unsupported =
+    let describe (namespace, labels) =
+      Format.asprintf "'%s' (%s)" (Namespace.show namespace) (CCString.concat ", " labels)
+    in
+    let msg =
+      Format.asprintf
+        "No %s SQL for the pending steps of %s; nothing was applied"
+        (kind_name kind)
+        (CCString.concat ", " (CCList.map describe unsupported))
+    in
+    Log.err (fun m -> m "%s" msg);
+    Error.Migration_failed msg
+  ;;
+
   (* The state table's SQL follows the dialect of the connection it runs on. *)
   let state_request request_type sql =
     Dialect.request Caqti.Template.Request.Direct request_type (fun kind ->
@@ -242,7 +354,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     Lwt.return (CCList.map Id.create ids)
   ;;
 
-  let insert_applied_step ctx namespace { Step.id; label; _ } =
+  let insert_applied_step ctx namespace { Resolved.id; label; _ } =
     let n = now () in
     let req =
       state_request
@@ -286,12 +398,24 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     if check_fk then run () else with_fk_disabled ctx run
   ;;
 
-  let run_step_up ctx namespace ({ Step.id; label; up; check_fk; _ } as s) =
-    Log.debug (fun m -> m "Applying step '%s' (%s)" label (Id.show id));
-    run_statement ctx ~check_fk up (fun ctx -> insert_applied_step ctx namespace s)
+  (* [verify] ran before: a step without SQL for [kind] is a bug here. *)
+  let sql_for kind label sql =
+    match Sql.for_kind sql kind with
+    | Some sql -> sql
+    | None ->
+      raise
+        (Error.Exn
+           (Error.Migration_failed
+              (Format.asprintf "Step '%s' has no %s SQL" label (kind_name kind))))
   ;;
 
-  let run_step_down ctx { Step.id; label; down; check_fk; _ } =
+  let run_step_up ctx kind namespace ({ Resolved.id; label; up; check_fk; _ } as s) =
+    Log.debug (fun m -> m "Applying step '%s' (%s)" label (Id.show id));
+    run_statement ctx ~check_fk (sql_for kind label up) (fun ctx ->
+      insert_applied_step ctx namespace s)
+  ;;
+
+  let run_step_down ctx kind { Resolved.id; label; down; check_fk; _ } =
     match down with
     | None ->
       Log.warn (fun m ->
@@ -299,7 +423,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       Lwt.return_unit
     | Some sql ->
       Log.debug (fun m -> m "Reverting step '%s' (%s)" label (Id.show id));
-      run_statement ctx ~check_fk sql (fun ctx -> delete_applied_step ctx id)
+      run_statement ctx ~check_fk (sql_for kind label sql) (fun ctx ->
+        delete_applied_step ctx id)
   ;;
 
   let failed fmt mig exn =
@@ -310,11 +435,22 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     Lwt_result.fail (Error.Migration_failed msg)
   ;;
 
-  let apply_up ctx mig =
+  (* Before anything runs: every pending step of [migrations] has SQL for the
+     connection's dialect. *)
+  let verified ctx migrations f =
+    let kind = kind_of ctx in
+    let%lwt applied = get_applied_rows ctx in
+    let applied = applied_id_set (CCList.map fst applied) in
+    match unsupported kind applied migrations with
+    | [] -> f kind
+    | unsupported -> Lwt_result.fail (unsupported_error kind unsupported)
+  ;;
+
+  let apply_up ctx kind mig =
     let%lwt applied_ids = get_applied_ids ctx in
     let applied = applied_id_set applied_ids in
     let pending_steps =
-      CCList.filter (fun { Step.id; _ } -> not (is_applied applied id)) mig.steps
+      CCList.filter (fun { Resolved.id; _ } -> not (is_applied applied id)) (resolve mig)
     in
     match CCList.length pending_steps with
     | 0 ->
@@ -326,7 +462,9 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
         m "Applying %d step(s) for migration '%s'" n (Namespace.show mig.namespace));
       Lwt.catch
         (fun () ->
-           let%lwt () = Lwt_list.iter_s (run_step_up ctx mig.namespace) pending_steps in
+           let%lwt () =
+             Lwt_list.iter_s (run_step_up ctx kind mig.namespace) pending_steps
+           in
            Lwt_result.return ())
         (failed "Migration '%s' failed: %s" mig)
   ;;
@@ -415,7 +553,9 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   let up ?role db_label mig =
-    lock_error (fun () -> with_ctx ?role db_label (fun ctx -> apply_up ctx mig))
+    lock_error (fun () ->
+      with_ctx ?role db_label (fun ctx ->
+        verified ctx [ mig ] (fun kind -> apply_up ctx kind mig)))
   ;;
 
   let mark_applied ?role db_label mig ~steps =
@@ -424,8 +564,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let%lwt applied_ids = get_applied_ids ctx in
     let applied = applied_id_set applied_ids in
     let to_mark =
-      CCList.take steps mig.steps
-      |> CCList.filter (fun { Step.id; _ } -> not (is_applied applied id))
+      CCList.take steps (resolve mig)
+      |> CCList.filter (fun { Resolved.id; _ } -> not (is_applied applied id))
     in
     let%lwt () =
       Db.with_transaction ctx (fun ctx ->
@@ -449,9 +589,20 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let%lwt applied_ids = get_applied_ids ctx in
     let applied_set = applied_id_set applied_ids in
     let applied =
-      CCList.filter (fun { Step.id; _ } -> is_applied applied_set id) mig.steps
+      CCList.filter (fun { Resolved.id; _ } -> is_applied applied_set id) (resolve mig)
+    in
+    let kind = kind_of ctx in
+    let missing_down =
+      CCList.filter_map
+        (fun { Resolved.label; down; _ } ->
+           match down with
+           | Some down when CCOption.is_none (Sql.for_kind down kind) -> Some label
+           | Some _ | None -> None)
+        applied
     in
     match CCList.length applied with
+    | (_ : int) when not (CCList.is_empty missing_down) ->
+      Lwt_result.fail (unsupported_error kind [ mig.namespace, missing_down ])
     | 0 ->
       Log.info (fun m ->
         m "No applied steps to revert for migration '%s'" (Namespace.show mig.namespace));
@@ -461,7 +612,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
         m "Reverting %d step(s) for migration '%s'" n (Namespace.show mig.namespace));
       Lwt.catch
         (fun () ->
-           let%lwt () = Lwt_list.iter_s (run_step_down ctx) (CCList.rev applied) in
+           let%lwt () = Lwt_list.iter_s (run_step_down ctx kind) (CCList.rev applied) in
            Lwt_result.return ())
         (failed "Migration '%s' revert failed: %s" mig)
   ;;
@@ -471,14 +622,24 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     @@ fun () ->
     with_ctx ?role db_label
     @@ fun ctx ->
+    let migrations = migrations_for ?migrations db_label in
+    verified ctx migrations
+    @@ fun kind ->
     let rec run = function
       | [] -> Lwt_result.return ()
       | mig :: rest ->
-        (match%lwt apply_up ctx mig with
+        (match%lwt apply_up ctx kind mig with
          | Error e -> Lwt_result.fail e
          | Ok () -> run rest)
     in
-    run (migrations_for ?migrations db_label)
+    run migrations
+  ;;
+
+  let verify ?role ?migrations db_label () =
+    with_read_ctx ?role db_label
+    @@ fun ctx ->
+    verified ctx (migrations_for ?migrations db_label) (fun (_ : Dialect.kind) ->
+      Lwt_result.return ())
   ;;
 
   let status ?role ?migrations db_label () =
@@ -489,9 +650,9 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     Lwt.return
     @@ CCList.map
          (fun mig ->
-            let total = CCList.length mig.steps in
+            let total = CCList.length (resolve mig) in
             let n_applied =
-              CCList.count (fun { Step.id; _ } -> is_applied applied id) mig.steps
+              CCList.count (fun { Resolved.id; _ } -> is_applied applied id) (resolve mig)
             in
             mig.namespace, n_applied, total)
          (migrations_for ?migrations db_label)
@@ -519,9 +680,9 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     let pending_drifts =
       CCList.filter_map
         (fun mig ->
-           let total = CCList.length mig.steps in
+           let total = CCList.length (resolve mig) in
            let applied_count =
-             CCList.count (fun { Step.id; _ } -> is_applied applied id) mig.steps
+             CCList.count (fun { Resolved.id; _ } -> is_applied applied id) (resolve mig)
            in
            let n = total - applied_count in
            if n > 0
@@ -567,6 +728,191 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
            Orphaned { namespace = ns; step_ids = ids })
         (group_by_ns orphaned_rows)
     in
-    Lwt.return (pending_drifts @ orphan_drifts)
+    let kind = kind_of ctx in
+    let unsupported_drifts =
+      CCList.map
+        (fun (namespace, steps) ->
+           Log.warn (fun m ->
+             m
+               "[check] Migration '%s' on '%s' has no %s SQL for %d pending step(s)"
+               (Namespace.show namespace)
+               (Entity.Label.show db_label)
+               (kind_name kind)
+               (CCList.length steps));
+           Unsupported { namespace; dialect = kind; steps })
+        (unsupported kind applied migs)
+    in
+    Lwt.return (pending_drifts @ orphan_drifts @ unsupported_drifts)
   ;;
+end
+
+module Counter_state = struct
+  type row =
+    { namespace : string
+    ; version : int
+    ; dirty : bool
+    }
+
+  type state =
+    { exists : bool
+    ; rows : row list
+    }
+
+  let default_table = "core_migration_state"
+
+  let table_name = function
+    | None -> default_table
+    | Some table when Dialect.is_identifier table -> table
+    | Some table ->
+      invalid_arg
+        (Format.asprintf "Migration.Counter_state: %S is not a plain table name" table)
+  ;;
+
+  let create_table (kind : Dialect.kind) ~table =
+    match kind with
+    | Dialect.Mariadb ->
+      Format.asprintf
+        {sql|CREATE TABLE IF NOT EXISTS %s (
+               namespace VARCHAR(128) NOT NULL,
+               version INTEGER,
+               dirty BOOL NOT NULL,
+               PRIMARY KEY (namespace)
+             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci|sql}
+        table
+    | Dialect.Postgresql ->
+      Format.asprintf
+        {sql|CREATE TABLE IF NOT EXISTS %s (
+               namespace VARCHAR(128) NOT NULL PRIMARY KEY,
+               version INTEGER,
+               dirty BOOLEAN NOT NULL
+             )|sql}
+        table
+  ;;
+
+  let select_rows (_ : Dialect.kind) ~table =
+    Format.asprintf "SELECT namespace, version, dirty FROM %s" table
+  ;;
+
+  let upsert (kind : Dialect.kind) ~table =
+    match kind with
+    | Dialect.Mariadb ->
+      Format.asprintf
+        "INSERT INTO %s (namespace, version, dirty) VALUES (?, ?, ?) ON DUPLICATE KEY \
+         UPDATE version = VALUES(version), dirty = VALUES(dirty)"
+        table
+    | Dialect.Postgresql ->
+      Format.asprintf
+        "INSERT INTO %s (namespace, version, dirty) VALUES (?, ?, ?) ON CONFLICT \
+         (namespace) DO UPDATE SET version = EXCLUDED.version, dirty = EXCLUDED.dirty"
+        table
+  ;;
+
+  module Make (Db : Pools_sig.Sig) = struct
+    module Runner = Make (Db)
+
+    let request request_type sql ~table =
+      Dialect.request Caqti.Template.Request.Direct request_type (fun kind ->
+        sql kind ~table)
+      |> Request.create ~needs:Entity.Need.none
+    ;;
+
+    let read ?(role = Entity.Role.owner) ?table db_label =
+      let table = table_name table in
+      Db.connection_ctx ~role db_label
+      @@ fun ctx ->
+      let%lwt count =
+        Db.find
+          ctx
+          (Dialect.request
+             Caqti.Template.Request.Direct
+             T.(string -->! int)
+             Dialect.table_exists
+           |> Request.create ~needs:Entity.Need.none)
+          table
+      in
+      if count = 0
+      then Lwt.return { exists = false; rows = [] }
+      else (
+        let%lwt rows =
+          Db.collect
+            ctx
+            (request T.(unit -->* t3 string (option int) bool) select_rows ~table)
+            ()
+        in
+        Lwt.return
+          { exists = true
+          ; rows =
+              CCList.map
+                (fun (namespace, version, dirty) ->
+                   { namespace; version = CCOption.value ~default:0 version; dirty })
+                rows
+          })
+    ;;
+
+    let find { rows; _ } namespace =
+      CCList.find_opt (fun (row : row) -> CCString.equal row.namespace namespace) rows
+    ;;
+
+    let import ?role ?table db_label migrations =
+      let%lwt state = read ?role ?table db_label in
+      match CCList.filter (fun ({ dirty; _ } : row) -> dirty) state.rows with
+      | _ :: _ as dirty ->
+        let namespaces = CCList.map (fun ({ namespace; _ } : row) -> namespace) dirty in
+        CCList.iter
+          (fun namespace ->
+             Log.err (fun m ->
+               m
+                 "Migration '%s' on '%s' is marked dirty in %s: fix the database, then \
+                  set dirty to false"
+                 namespace
+                 (Entity.Label.show db_label)
+                 (table_name table)))
+          namespaces;
+        Lwt.return_error (`Dirty namespaces)
+      | [] ->
+        let%lwt () =
+          Lwt_list.iter_s
+            (fun (mig : t) ->
+               match find state (Namespace.value mig.namespace) with
+               | Some ({ version; _ } : row) when version > 0 ->
+                 Runner.mark_applied ?role db_label mig ~steps:version
+               | Some _ | None -> Lwt.return_unit)
+            migrations
+        in
+        Lwt.return_ok state
+    ;;
+
+    let record
+          ?(role = Entity.Role.owner)
+          ?table
+          db_label
+          state
+          namespace
+          ~applied
+          ~failed
+      =
+      let table = table_name table in
+      let namespace = Namespace.value namespace in
+      let unchanged =
+        CCOption.map_or
+          ~default:false
+          (fun ({ version; dirty; _ } : row) -> version = applied && dirty = failed)
+          (find state namespace)
+      in
+      if unchanged
+      then Lwt.return_unit
+      else
+        Db.connection_ctx ~role db_label
+        @@ fun ctx ->
+        let%lwt () =
+          if state.exists
+          then Lwt.return_unit
+          else Db.exec ctx (request T.(unit -->. unit) create_table ~table) ()
+        in
+        Db.exec
+          ctx
+          (request T.(t3 string int bool -->. unit) upsert ~table)
+          (namespace, applied, failed)
+    ;;
+  end
 end

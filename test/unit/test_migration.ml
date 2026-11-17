@@ -78,6 +78,62 @@ let test_derived_ids_are_stable () =
     (CCString.equal id (derive ~namespace:"other" ~index:0))
 ;;
 
+let test_step_ids_given_or_derived () =
+  let namespace = "202610121032" in
+  let given = Migration.Id.create "00000000-0000-0000-0000-000000000001" in
+  let mig =
+    Migration.(
+      create
+        (Namespace.create namespace)
+        ~written_at:(ptime_of_string "1970-01-01T00:00:00Z")
+      |> add_step (Step.create ~label:"first" (Sql.any "SELECT 1"))
+      |> add_step (Step.create ~id:given ~label:"second" (Sql.any "SELECT 2"))
+      |> add_step (Step.create ~label:"third" (Sql.any "SELECT 3")))
+  in
+  Alcotest.(check (list string))
+    "position decides a derived id"
+    Migration.Id.
+      [ value (derive ~namespace ~index:0)
+      ; value given
+      ; value (derive ~namespace ~index:2)
+      ]
+    (CCList.map Migration.Id.value (Migration.step_ids mig))
+;;
+
+let kind_list =
+  let name = function
+    | Dialect.Mariadb -> "mariadb"
+    | Dialect.Postgresql -> "postgresql"
+  in
+  Alcotest.testable
+    (fun f ks -> Format.pp_print_string f (CCString.concat ", " (CCList.map name ks)))
+    ( = )
+;;
+
+let test_sql_per_dialect () =
+  let open Migration.Sql in
+  Alcotest.check kind_list "any" Dialect.[ Mariadb; Postgresql ] (kinds (any "SELECT 1"));
+  Alcotest.check
+    kind_list
+    "only"
+    Dialect.[ Postgresql ]
+    (kinds (only Dialect.Postgresql "SELECT 1"));
+  let both = v ~mariadb:"m" ~postgresql:"p" () in
+  Alcotest.(check (option string)) "MariaDB's" (Some "m") (for_kind both Dialect.Mariadb);
+  Alcotest.(check (option string))
+    "PostgreSQL's"
+    (Some "p")
+    (for_kind both Dialect.Postgresql);
+  Alcotest.(check (option string))
+    "left out"
+    None
+    (for_kind (v ~mariadb:"m" ()) Dialect.Postgresql);
+  Alcotest.check_raises
+    "nothing at all"
+    (Invalid_argument "Migration.Sql.v: no SQL for any dialect")
+    (fun () -> ignore (v ()))
+;;
+
 (* The name is read once per process: only the default can be checked. *)
 let test_state_table_default () =
   match Sys.getenv_opt "VEINS_MIGRATION_TABLE" with
@@ -91,8 +147,13 @@ let () =
   Alcotest.run
     "Veins Migration"
     [ ( "id"
-      , [ Alcotest.test_case "derived ids are stable" `Quick test_derived_ids_are_stable ]
-      )
+      , [ Alcotest.test_case "derived ids are stable" `Quick test_derived_ids_are_stable
+        ; Alcotest.test_case
+            "step ids given or derived"
+            `Quick
+            test_step_ids_given_or_derived
+        ] )
+    ; "sql", [ Alcotest.test_case "SQL per dialect" `Quick test_sql_per_dialect ]
     ; ( "database_target"
       , [ Alcotest.test_case "Database exact match" `Quick test_database_matches_exact
         ; Alcotest.test_case
