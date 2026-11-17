@@ -45,7 +45,14 @@ let rec parse options = function
          "Unknown option %S (put -- before a description that starts with -)\n%s"
          option
          usage_text)
-  | words -> { options with words }
+  | words ->
+    (match CCList.find_opt (fun w -> CCList.mem w [ "--steps"; "--dialect" ]) words with
+     | Some option ->
+       Format.eprintf
+         "Warning: %s after the description is part of it; options go first.@."
+         option
+     | None -> ());
+    { options with words }
 ;;
 
 let ensure_dir path =
