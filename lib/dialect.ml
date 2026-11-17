@@ -1,42 +1,35 @@
-module type Sig = sig
-  val session_setup : string list
-  val is_connection_error : Caqti.Error.t -> bool
-  val is_permission_error : Caqti.Error.t -> bool
-  val after_rollback : string list
-  val create_migration_table : table:string -> string
-  val fk_checks_supported : bool
-  val select_applied_ids : table:string -> string
-  val select_applied_rows : table:string -> string
-  val insert_applied_step : table:string -> string
-  val delete_applied_step : table:string -> string
-  val insert_row : table:string -> columns:string list -> string
-  val uuid_select_fragment : field:string -> string
-  val uuid_value_fragment : string -> string
-end
+type t = Caqti.Template.Dialect.t
 
-let is_connection_error : Caqti.Error.t -> bool = function
-  | #Caqti.Error.load_or_connect -> true
-  | `Request_failed _
-  | `Response_failed _
-  | `Encode_rejected _
-  | `Encode_failed _
-  | `Decode_rejected _
-  | `Response_rejected _ -> false
+type kind =
+  | Mariadb
+  | Postgresql
+
+let kind : t -> kind = function
+  | Caqti.Template.Dialect.Pgsql _ -> Postgresql
+  | _ -> Mariadb
 ;;
 
-let insert_row ~table ~columns =
-  let cols = CCString.concat ", " columns in
-  let placeholders = CCString.concat ", " (CCList.map (Fun.const "?") columns) in
-  Format.asprintf "INSERT INTO %s (%s) VALUES (%s)" table cols placeholders
+let set_utc dialect =
+  match dialect with
+  | Mariadb -> "SET time_zone = '+00:00'"
+  | Postgresql -> "SET TIME ZONE 'UTC'"
 ;;
 
-module Mariadb : Sig = struct
-  let session_setup = [ "SET time_zone = '+00:00'" ]
-  let is_connection_error = is_connection_error
-  let is_permission_error (_ : Caqti.Error.t) = false
-  let after_rollback = [ "SET autocommit = 1" ]
+let restore_autocommit dialect =
+  match dialect with
+  | Mariadb -> Some "SET autocommit = 1"
+  | Postgresql -> None
+;;
 
-  let uuid_select_fragment ~field =
+let set_fk_checks dialect enabled =
+  match dialect with
+  | Mariadb -> Some (Format.asprintf "SET FOREIGN_KEY_CHECKS = %d" (Bool.to_int enabled))
+  | Postgresql -> None
+;;
+
+let uuid_select_fragment dialect ~field =
+  match dialect with
+  | Mariadb ->
     Format.asprintf
       "LOWER(CONCAT(SUBSTR(HEX(%s),1,8),'-',SUBSTR(HEX(%s),9,4),'-',SUBSTR(HEX(%s),13,4),'-',SUBSTR(HEX(%s),17,4),'-',SUBSTR(HEX(%s),21)))"
       field
@@ -44,11 +37,18 @@ module Mariadb : Sig = struct
       field
       field
       field
-  ;;
+  | Postgresql -> Format.asprintf "%s::text" field
+;;
 
-  let uuid_value_fragment name = Format.asprintf "UNHEX(REPLACE(%s,'-',''))" name
+let uuid_value_fragment dialect name =
+  match dialect with
+  | Mariadb -> Format.asprintf "UNHEX(REPLACE(%s,'-',''))" name
+  | Postgresql -> Format.asprintf "%s::uuid" name
+;;
 
-  let create_migration_table ~table =
+let create_migration_table dialect ~table =
+  match dialect with
+  | Mariadb ->
     Format.asprintf
       {|CREATE TABLE IF NOT EXISTS %s (
           id          BINARY(16)   NOT NULL,
@@ -59,45 +59,7 @@ module Mariadb : Sig = struct
           PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci|}
       table
-  ;;
-
-  let fk_checks_supported = true
-
-  let select_applied_ids ~table =
-    Format.asprintf "SELECT %s AS id FROM %s" (uuid_select_fragment ~field:"id") table
-  ;;
-
-  let select_applied_rows ~table =
-    Format.asprintf
-      "SELECT %s AS id, namespace FROM %s"
-      (uuid_select_fragment ~field:"id")
-      table
-  ;;
-
-  let insert_applied_step ~table =
-    Format.asprintf
-      "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (%s, ?, ?, \
-       ?, ?)"
-      table
-      (uuid_value_fragment "?")
-  ;;
-
-  let delete_applied_step ~table =
-    Format.asprintf "DELETE FROM %s WHERE id = %s" table (uuid_value_fragment "?")
-  ;;
-
-  let insert_row = insert_row
-end
-
-module Postgresql : Sig = struct
-  let session_setup = [ "SET TIME ZONE 'UTC'" ]
-  let is_connection_error = is_connection_error
-  let is_permission_error (_ : Caqti.Error.t) = false
-  let after_rollback = []
-  let uuid_select_fragment ~field = Format.asprintf "%s::text" field
-  let uuid_value_fragment name = Format.asprintf "%s::uuid" name
-
-  let create_migration_table ~table =
+  | Postgresql ->
     Format.asprintf
       {|CREATE TABLE IF NOT EXISTS %s (
           id          UUID         NOT NULL,
@@ -108,39 +70,35 @@ module Postgresql : Sig = struct
           PRIMARY KEY (id)
         )|}
       table
-  ;;
+;;
 
-  let fk_checks_supported = false
+let select_applied_ids dialect ~table =
+  Format.asprintf
+    "SELECT %s AS id FROM %s"
+    (uuid_select_fragment dialect ~field:"id")
+    table
+;;
 
-  let select_applied_ids ~table =
-    Format.asprintf "SELECT %s AS id FROM %s" (uuid_select_fragment ~field:"id") table
-  ;;
+let select_applied_rows dialect ~table =
+  Format.asprintf
+    "SELECT %s AS id, namespace FROM %s"
+    (uuid_select_fragment dialect ~field:"id")
+    table
+;;
 
-  let select_applied_rows ~table =
-    Format.asprintf
-      "SELECT %s AS id, namespace FROM %s"
-      (uuid_select_fragment ~field:"id")
-      table
-  ;;
+let insert_applied_step dialect ~table =
+  Format.asprintf
+    "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (%s, ?, ?, ?, \
+     ?)"
+    table
+    (uuid_value_fragment dialect "?")
+;;
 
-  let insert_applied_step ~table =
-    Format.asprintf
-      "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (%s, ?, ?, \
-       ?, ?)"
-      table
-      (uuid_value_fragment "?")
-  ;;
+let delete_applied_step dialect ~table =
+  Format.asprintf "DELETE FROM %s WHERE id = %s" table (uuid_value_fragment dialect "?")
+;;
 
-  let delete_applied_step ~table =
-    Format.asprintf "DELETE FROM %s WHERE id = %s" table (uuid_value_fragment "?")
-  ;;
-
-  let insert_row = insert_row
-end
-
-let of_url url =
-  match Uri.scheme (Entity.Url.to_uri url) with
-  | Some ("mariadb" | "mysql") -> Some (module Mariadb : Sig)
-  | Some ("postgresql" | "postgres") -> Some (module Postgresql : Sig)
-  | _ -> None
+let request policy request_type sql =
+  Caqti.Template.Request.create policy request_type (fun dialect ->
+    Caqti.Template.Query.parse (sql (kind dialect)))
 ;;

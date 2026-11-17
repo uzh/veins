@@ -17,7 +17,7 @@ module Suite = Suite.Make (struct
         let database_pool_size = 5
         let expected_databases = 4
 
-        module Dialect = Veins_mariadb.Dialect
+        module Driver = Veins_mariadb.Driver
       end)
 
     let utc_offset_sql = "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW())"

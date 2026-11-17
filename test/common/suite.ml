@@ -321,7 +321,7 @@ module Make (D : Dialect) = struct
       let database_pool_size = 1
       let expected_databases = 1
 
-      module Dialect = Db.Config.Dialect
+      module Driver = Db.Config.Driver
     end)
 
   (* caqti-driver-mariadb 3.1 turns autocommit off for a transaction and back
@@ -501,7 +501,7 @@ module Make (D : Dialect) = struct
                  Alcotest.(check bool)
                    (Format.asprintf "a connection error: %a" Caqti.Error.pp error)
                    true
-                   (Db.Config.Dialect.is_connection_error error)
+                   (Db.Config.Driver.is_connection_error error)
                | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))
          in
          let%lwt () = Net.Proxy.set_down proxy false in

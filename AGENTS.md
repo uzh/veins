@@ -60,11 +60,11 @@ module type ConfigSig = sig
   val database : Entity.Database.t (* primary DB — label becomes key *)
   val database_pool_size : int
   val expected_databases : int
-  module Dialect : Dialect.Sig     (* not required with Veins_mariadb / Veins_postgresql *)
+  module Driver : Driver.Sig       (* not required with Veins_mariadb / Veins_postgresql *)
 end
 ```
 
-Prefer the driver libraries for end users — they remove the `Dialect` field:
+Prefer the driver libraries for end users — they remove the `Driver` field:
 
 ```ocaml
 module Db = Veins_mariadb.Pools.Make (struct
@@ -83,7 +83,7 @@ closed set of polymorphic variant tags and a request's needs are a lower bound (
 role doesn't grant is a compile error. Nothing is checked at runtime; `test/typing` proves misuse doesn't compile,
 add a case there when adding an entry point that takes `~needs` or a request. Each role connects as a `Login`;
 `Database.create ?logins label owner_url`, logins without a URL share the owner's pool. A database refusing a
-statement the types allowed raises `Error.Permission_denied` (`Dialect.is_permission_error`). The context design is
+statement the types allowed raises `Error.Permission_denied` (`Driver.is_permission_error`). The context design is
 Reynir Björnsson's (uzh/z-pool-tool#647); keep the credit in `lib/ctx.mli`, `lib/pools.ml`, README and CHANGELOG.
 
 Only a pool builds contexts. The constructors and what reaches into a context (its connection, its mutex, running
@@ -92,7 +92,7 @@ make a transaction context of a connection without a transaction, or pair a role
 Use `Ctx.Internal` from veins' own modules only.
 
 Never use the driver's `rollback` or caqti's `with_transaction` directly: caqti-driver-mariadb 3.1 leaves
-`autocommit` off after a rollback, `Pools.rollback` restores it (`Dialect.Sig.after_rollback`).
+`autocommit` off after a rollback, `Pools.rollback` restores it (`Dialect.restore_autocommit`).
 
 ### Migrations
 
@@ -108,14 +108,17 @@ New migration files call `Migration.register` — no explicit list to maintain.
 
 ### Dialects
 
-`Dialect.Sig` provides DDL and DML strings. Both `Mariadb` and `Postgresql` implement it.
-`Dialect.of_url : Entity.Url.t -> (module Dialect.Sig) option` infers dialect from the URL scheme.
+There is no dialect configuration: a Caqti 3 request renders its SQL from the dialect of the connection it runs on.
+`Dialect` holds the SQL that differs (`Dialect.kind`: PostgreSQL, everything else MariaDB, since Caqti also renders
+requests for printing with an `Unknown` dialect, so these functions must never fail) and `Dialect.request` builds
+such a request. `Driver.Sig` is the only per-driver part: reading the driver's errors (`Veins_mariadb.Driver`,
+`Veins_postgresql.Driver`, `Driver.Generic`).
 
 ### Error handling
 
 Query helpers raise (not `result` returns): `Error.Failed` for what the database or driver reported (label, login,
 role, untouched Caqti error; match with `Error.cause_of_exn`), `Error.Exn` for errors veins detects itself (unknown
-label, failed migration) and for `Permission_denied`. Only `Dialect.is_connection_error` errors drop and reconnect a
+label, failed migration) and for `Permission_denied`. Only `Driver.is_connection_error` errors drop and reconnect a
 pool.
 
 ## Conventions
@@ -124,7 +127,8 @@ pool.
   only veins' own modules need stays out (a submodule removed there like `Ctx.Internal`, or a narrowed signature like
   `Url`, which hides `to_uri`).
 - **`.ml` files have no doc-comments** on types or functions that duplicate what is already in the corresponding `.mli`. Keep implementation files lean.
-- **Dialect SQL lives in `dialect.ml`** — never hardcode SQL strings in `migration.ml` or other modules.
+- **Dialect SQL lives in `dialect.ml`** — never hardcode dialect-specific SQL in `migration.ml` or other modules;
+  build requests with `Dialect.request`.
 - **`;;` terminators** are used after top-level `let` bindings in `lib/` (conventional profile, margin 90). See [.ocamlformat](.ocamlformat).
 - **opam files are generated** — edit `dune-project`, never `.opam` files directly.
 - **`include_subdirs unqualified`** is set on `lib/dune`; subdirectories that define their own library (mariadb/, postgresql/) must start their `dune` file with `(include_subdirs no)`.

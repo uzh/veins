@@ -17,9 +17,11 @@ module type ConfigSig = sig
   (** Hint for the initial hashtable capacity. *)
   val expected_databases : int
 
-  (** SQL dialect. Prefer [Veins_mariadb.Dialect] / [Veins_postgresql.Dialect]:
-      they also recognise the driver's "connection lost" errors. *)
-  module Dialect : Dialect.Sig
+  (** How to read the driver's errors. Prefer [Veins_mariadb.Driver] /
+      [Veins_postgresql.Driver], which recognise lost connections and missing
+      privileges; {!Veins.Driver.Generic} only knows connect errors. The SQL veins
+      sends follows each connection's dialect, see {!Dialect}. *)
+  module Driver : Driver.Sig
 end
 
 (** The interface of a {!Pools.Make} application.

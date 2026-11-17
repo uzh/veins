@@ -108,9 +108,8 @@ module Step : sig
           it. *)
     ; check_fk : bool
       (** When [false] the runner temporarily disables FK checks before
-          executing [up] or [down].  Has no effect on dialects where
-          {!Dialect.Sig.fk_checks_supported} is [false] (e.g.
-          PostgreSQL). *)
+          executing [up] or [down].  Has no effect where
+          {!Dialect.set_fk_checks} is [None] (PostgreSQL). *)
     }
 
   (** Build a step.
