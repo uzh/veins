@@ -4,32 +4,20 @@ open Veins
 
 (* Steps run in the order [migration] adds them. Once a step is deployed, never
    change or remove it: append a new step instead. Leave out the SQL of a
-   dialect the application never runs on: a TODO left in place fails only when
-   the step runs there. *)
+   dialect the application never runs on: the runner refuses to apply a step
+   whose SQL for the database's dialect is still a TODO. *)
 
 let step_1 =
   let up =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: forward SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: forward SQL
-        |sql}
+      ~mariadb:{sql|TODO: forward SQL|sql}
+      ~postgresql:{sql|TODO: forward SQL|sql}
       ()
   in
   let down =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: reverse SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: reverse SQL
-        |sql}
+      ~mariadb:{sql|TODO: reverse SQL|sql}
+      ~postgresql:{sql|TODO: reverse SQL|sql}
       ()
   in
   Migration.Step.create
@@ -42,26 +30,14 @@ let step_1 =
 let step_2 =
   let up =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: forward SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: forward SQL
-        |sql}
+      ~mariadb:{sql|TODO: forward SQL|sql}
+      ~postgresql:{sql|TODO: forward SQL|sql}
       ()
   in
   let down =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: reverse SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: reverse SQL
-        |sql}
+      ~mariadb:{sql|TODO: reverse SQL|sql}
+      ~postgresql:{sql|TODO: reverse SQL|sql}
       ()
   in
   Migration.Step.create
@@ -74,26 +50,14 @@ let step_2 =
 let step_3 =
   let up =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: forward SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: forward SQL
-        |sql}
+      ~mariadb:{sql|TODO: forward SQL|sql}
+      ~postgresql:{sql|TODO: forward SQL|sql}
       ()
   in
   let down =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: reverse SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: reverse SQL
-        |sql}
+      ~mariadb:{sql|TODO: reverse SQL|sql}
+      ~postgresql:{sql|TODO: reverse SQL|sql}
       ()
   in
   Migration.Step.create

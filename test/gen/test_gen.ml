@@ -29,7 +29,14 @@ let check_migration name migration ~namespace ~steps ~dialects =
          kinds
          (name ^ " down dialects")
          dialects
-         (Option.fold ~none:[] ~some:Sql.kinds step.Step.down))
+         (Option.fold ~none:[] ~some:Sql.kinds step.Step.down);
+       List.iter
+         (fun kind ->
+            Alcotest.(check bool)
+              (name ^ " placeholder is not SQL")
+              false
+              (Sql.written step.Step.up kind))
+         dialects)
     migration.steps
 ;;
 

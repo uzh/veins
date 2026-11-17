@@ -67,6 +67,14 @@ module Sql = struct
       (fun kind -> CCOption.is_some (for_kind t kind))
       Dialect.[ Mariadb; Postgresql ]
   ;;
+
+  let is_placeholder sql = CCString.prefix ~pre:"TODO" (CCString.trim sql)
+
+  let written t kind =
+    match for_kind t kind with
+    | Some sql -> not (is_placeholder sql)
+    | None -> false
+  ;;
 end
 
 module Step = struct
@@ -279,16 +287,14 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
   ;;
 
   (* The labels of the pending steps of every migration that has no SQL for
-     [kind]. *)
+     [kind], or only a placeholder. *)
   let unsupported kind applied migrations =
     CCList.filter_map
       (fun mig ->
          let labels =
            CCList.filter_map
              (fun { Resolved.id; label; up; _ } ->
-                if is_applied applied id || CCOption.is_some (Sql.for_kind up kind)
-                then None
-                else Some label)
+                if is_applied applied id || Sql.written up kind then None else Some label)
              (resolve mig)
          in
          if CCList.is_empty labels then None else Some (mig.namespace, labels))
@@ -301,7 +307,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     in
     let msg =
       Format.asprintf
-        "No %s SQL for the pending steps of %s; nothing was applied"
+        "No %s SQL (or a TODO placeholder) for the pending steps of %s; nothing was \
+         applied"
         (kind_name kind)
         (CCString.concat ", " (CCList.map describe unsupported))
     in
@@ -596,7 +603,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       CCList.filter_map
         (fun { Resolved.label; down; _ } ->
            match down with
-           | Some down when CCOption.is_none (Sql.for_kind down kind) -> Some label
+           | Some down when not (Sql.written down kind) -> Some label
            | Some _ | None -> None)
         applied
     in

@@ -227,7 +227,9 @@ VEINS_MIGRATION_DIR=lib/migrations veins-gen "add users table"
 ```
 
 `--steps N` writes `N` steps (default 1), each with a fresh id. `--dialect mariadb` or `--dialect postgresql` writes
-SQL placeholders for that dialect only (`Sql.only`), the default `both` writes one for each (`Sql.v`).
+SQL placeholders for that dialect only (`Sql.only`), the default `both` writes one for each (`Sql.v`). Options are
+read only before the description, so `veins-gen "fix --steps bug"` is a description; put `--` before a description
+that starts with `-`.
 
 The generated file defines each step on its own, then adds them to the migration and registers it (the files in
 [`test/gen`](test/gen) are complete examples, compiled and linked by the tests):
@@ -238,14 +240,8 @@ open Veins
 let step_1 =
   let up =
     Migration.Sql.v
-      ~mariadb:
-        {sql|
-          TODO: forward SQL
-        |sql}
-      ~postgresql:
-        {sql|
-          TODO: forward SQL
-        |sql}
+      ~mariadb:{sql|TODO: forward SQL|sql}
+      ~postgresql:{sql|TODO: forward SQL|sql}
       ()
   in
   let down = (* the same, with TODO: reverse SQL *) in
@@ -267,10 +263,10 @@ let () = Migration.register migration
 
 Rename the steps after what they do, fill in the SQL, then link the file into your application. Every statement
 names the dialects it is written for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one out if the
-application never runs on it), `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs anywhere. Before a run applies anything,
-the runner checks that every pending step has SQL for the connection's dialect (`Runner.verify`), so a MariaDB-only
-migration fails up front on PostgreSQL instead of half way. A TODO left for a dialect still counts as SQL for it and
-fails only when the step runs there.
+application never runs on it), `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs
+anywhere. Before a run applies anything, the runner checks that every pending step has SQL for the connection's
+dialect (`Runner.verify`), so a MariaDB-only migration fails up front on PostgreSQL instead of half way. SQL that
+starts with `TODO` is a placeholder (`Sql.is_placeholder`) and fails that check like missing SQL.
 
 `~id` may be left out: the step then gets `Id.derive` of the namespace and its position, which is stable as long as
 steps are only ever appended. Every file that calls `Migration.register` contributes its steps to the global

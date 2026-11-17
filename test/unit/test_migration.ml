@@ -134,6 +134,18 @@ let test_sql_per_dialect () =
     (fun () -> ignore (v ()))
 ;;
 
+let test_sql_placeholder () =
+  let open Migration.Sql in
+  let half = v ~mariadb:"CREATE TABLE t (id INT)" ~postgresql:"  TODO: fill in" () in
+  Alcotest.(check bool) "written" true (written half Dialect.Mariadb);
+  Alcotest.(check bool) "TODO is not written" false (written half Dialect.Postgresql);
+  Alcotest.(check bool)
+    "left out is not written"
+    false
+    (written (only Dialect.Mariadb "SELECT 1") Dialect.Postgresql);
+  Alcotest.(check bool) "TODO later on" false (is_placeholder "SELECT 1 -- TODO")
+;;
+
 (* The name is read once per process: only the default can be checked. *)
 let test_state_table_default () =
   match Sys.getenv_opt "VEINS_MIGRATION_TABLE" with
@@ -153,7 +165,10 @@ let () =
             `Quick
             test_step_ids_given_or_derived
         ] )
-    ; "sql", [ Alcotest.test_case "SQL per dialect" `Quick test_sql_per_dialect ]
+    ; ( "sql"
+      , [ Alcotest.test_case "SQL per dialect" `Quick test_sql_per_dialect
+        ; Alcotest.test_case "TODO placeholders" `Quick test_sql_placeholder
+        ] )
     ; ( "database_target"
       , [ Alcotest.test_case "Database exact match" `Quick test_database_matches_exact
         ; Alcotest.test_case

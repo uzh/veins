@@ -1207,7 +1207,17 @@ module Make (D : Dialect) = struct
            ~label:"other dialect only"
            (Migration.Sql.only other "INSERT INTO veins_t_dialect (id) VALUES (1)"))
     in
-    let migrations = [ supported; unsupported ] in
+    let placeholder =
+      migration
+        "dialect_todo"
+        (Migration.Step.create
+           ~label:"left a TODO"
+           (Migration.Sql.v
+              ~mariadb:"TODO: forward SQL"
+              ~postgresql:"TODO: forward SQL"
+              ()))
+    in
+    let migrations = [ supported; unsupported; placeholder ] in
     let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect") () in
     let fails name result =
@@ -1220,7 +1230,8 @@ module Make (D : Dialect) = struct
     let%lwt () = Runner.run_all ~migrations root () |> Lwt.map (fails "run_all") in
     let%lwt () = Runner.up root unsupported |> Lwt.map (fails "up") in
     let%lwt pending = Runner.pending ~migrations root () in
-    Alcotest.(check int) "nothing applied" 2 (CCList.length pending);
+    let%lwt () = Runner.up root placeholder |> Lwt.map (fails "up placeholder") in
+    Alcotest.(check int) "nothing applied" 3 (CCList.length pending);
     let%lwt drifts = Runner.check ~migrations root () in
     let unsupported_steps =
       CCList.filter_map
@@ -1231,7 +1242,7 @@ module Make (D : Dialect) = struct
     in
     Alcotest.(check (list (list string)))
       "check names the step"
-      [ [ "other dialect only" ] ]
+      [ [ "other dialect only" ]; [ "left a TODO" ] ]
       unsupported_steps;
     let%lwt () =
       Runner.run_all ~migrations:[ supported ] root ()

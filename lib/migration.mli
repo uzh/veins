@@ -126,6 +126,15 @@ module Sql : sig
 
   (** The dialects there is SQL for. *)
   val kinds : t -> Dialect.kind list
+
+  (** [is_placeholder sql] holds for SQL whose text starts with [TODO], like
+      the statements [veins-gen] writes. *)
+  val is_placeholder : string -> bool
+
+  (** [written t kind]: [t] has SQL for [kind] that is not a placeholder
+      ({!is_placeholder}). The runner applies or reverts a step only when it
+      is. *)
+  val written : t -> Dialect.kind -> bool
 end
 
 (** A single, individually-trackable migration step. *)
@@ -253,7 +262,8 @@ type drift =
   | Unsupported of
       { namespace : Namespace.t
       ; dialect : Dialect.kind
-      ; steps : string list (** labels of the pending steps without SQL *)
+      ; steps : string list
+        (** labels of the pending steps without SQL, or with only a placeholder *)
       }
 
 (** Interface satisfied by the output of {!Make}.
@@ -312,11 +322,12 @@ module type RunnerSig = sig
 
   (** Revert the applied steps of [migration] in reverse order. Steps without
       [down] are logged and skipped; a [down] without SQL for the
-      connection's dialect fails before any step is reverted. *)
+      connection's dialect (or only a placeholder) fails before any step is reverted. *)
   val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
 
   (** [Error (Migration_failed _)] naming every pending step that has no SQL
-      for the dialect of [db_label]'s connection. [run_all] and [up] run the
+      for the dialect of [db_label]'s connection, or only a placeholder
+      ({!Sql.is_placeholder}), like a [TODO] left by [veins-gen]. [run_all] and [up] run the
       same check before they apply anything, so a run never stops half way
       for want of SQL. Only reads, like {!check}. *)
   val verify

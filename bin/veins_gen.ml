@@ -3,10 +3,18 @@ let die msg =
   exit 1
 ;;
 
-let usage () =
-  die
-    "Usage: veins-gen [--steps N] [--dialect both|mariadb|postgresql] <migration \
-     description>"
+let usage_text =
+  "Usage: veins-gen [--steps N] [--dialect both|mariadb|postgresql] [--] <migration \
+   description>\n\n\
+   Options are read only before the description; use -- before a description that starts \
+   with -."
+;;
+
+let usage () = die usage_text
+
+let help () =
+  print_endline usage_text;
+  exit 0
 ;;
 
 type options =
@@ -16,7 +24,6 @@ type options =
   }
 
 let rec parse options = function
-  | [] -> { options with words = CCList.rev options.words }
   | "--steps" :: n :: rest ->
     (match CCInt.of_string n with
      | Some steps when steps >= 1 -> parse { options with steps } rest
@@ -26,8 +33,11 @@ let rec parse options = function
      | Some dialects -> parse { options with dialects } rest
      | None -> die (Format.asprintf "--dialect is both, mariadb or postgresql, got %S" d))
   | ("--steps" | "--dialect") :: [] -> usage ()
-  | ("-h" | "--help") :: _ -> usage ()
-  | word :: rest -> parse { options with words = word :: options.words } rest
+  | ("-h" | "--help") :: _ -> help ()
+  | "--" :: words -> { options with words }
+  | option :: _ when CCString.prefix ~pre:"-" option ->
+    die (Format.asprintf "Unknown option %S\n%s" option usage_text)
+  | words -> { options with words }
 ;;
 
 let ensure_dir path =

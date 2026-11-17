@@ -57,34 +57,36 @@ let indent n text =
   |> CCString.concat "\n"
 ;;
 
-let sql_literal todo = Printf.sprintf "{sql|\n  TODO: %s\n|sql}" todo
+let sql_literal todo = Printf.sprintf "{sql|TODO: %s|sql}" todo
 
 let sql_block ~dialects todo =
   let literal = sql_literal todo in
   match dialects with
   | Both ->
     Printf.sprintf
-      "Migration.Sql.v\n  ~mariadb:\n%s\n  ~postgresql:\n%s\n  ()"
-      (indent 4 literal)
-      (indent 4 literal)
+      "Migration.Sql.v\n  ~mariadb:%s\n  ~postgresql:%s\n  ()"
+      literal
+      literal
   | Only kind ->
     let kind =
       match kind with
       | Veins.Dialect.Mariadb -> "Mariadb"
       | Veins.Dialect.Postgresql -> "Postgresql"
     in
-    Printf.sprintf "Migration.Sql.only\n  Dialect.%s\n%s" kind (indent 2 literal)
+    Printf.sprintf "Migration.Sql.only Dialect.%s %s" kind literal
+;;
+
+let binding name sql =
+  if CCString.contains sql '\n'
+  then Printf.sprintf "  let %s =\n%s\n  in" name (indent 4 sql)
+  else Printf.sprintf "  let %s = %s in" name sql
 ;;
 
 let step ~dialects ~index ~id =
   Printf.sprintf
     {|let step_%d =
-  let up =
 %s
-  in
-  let down =
 %s
-  in
   Migration.Step.create
     ~id:(Migration.Id.create %S)
     ~label:"TODO: describe step %d"
@@ -93,8 +95,8 @@ let step ~dialects ~index ~id =
 ;;
 |}
     index
-    (indent 4 (sql_block ~dialects "forward SQL"))
-    (indent 4 (sql_block ~dialects "reverse SQL"))
+    (binding "up" (sql_block ~dialects "forward SQL"))
+    (binding "down" (sql_block ~dialects "reverse SQL"))
     id
     index
 ;;
@@ -103,11 +105,12 @@ let header_comment = function
   | Both ->
     {|(* Steps run in the order [migration] adds them. Once a step is deployed, never
    change or remove it: append a new step instead. Leave out the SQL of a
-   dialect the application never runs on: a TODO left in place fails only when
-   the step runs there. *)|}
+   dialect the application never runs on: the runner refuses to apply a step
+   whose SQL for the database's dialect is still a TODO. *)|}
   | Only _ ->
     {|(* Steps run in the order [migration] adds them. Once a step is deployed, never
-   change or remove it: append a new step instead. *)|}
+   change or remove it: append a new step instead. The runner refuses to apply
+   a step whose SQL is still a TODO. *)|}
 ;;
 
 let migration_binding ~namespace ~written_at ~steps =
