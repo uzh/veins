@@ -192,6 +192,43 @@ let test_use_returns_errors () =
   Lwt.return_unit
 ;;
 
+(* An acquire timeout of [Pool.use] is a [`Connect_failed] whose URI shows
+   no password, neither the user's nor one in the query. *)
+module Timing_out =
+  Pools.Make_with_options
+    (Config)
+    (struct
+      let options = Pool_options.{ default with acquire_timeout = Some 0.1 }
+    end)
+
+let test_use_timeout_hides_passwords () =
+  with_server
+  @@ fun server ->
+  let label = Label.create "veins_use_timeout" in
+  let url =
+    Format.asprintf
+      "mariadb://root:userpw@127.0.0.1:%d/test?password=querypw&sslpassword=sslpw"
+      server.Net.Unresponsive.port
+  in
+  Timing_out.Pool.add (Database.create label (Url.create url));
+  let%lwt result = Timing_out.Pool.use label (fun _ -> Lwt_result.return ()) in
+  Timing_out.Pool.drop label;
+  match result with
+  | Ok () -> Alcotest.fail "expected an acquire timeout"
+  | Error (`Connect_failed _ as error) ->
+    let shown = Caqti.Error.show error in
+    CCList.iter
+      (fun secret ->
+         Alcotest.(check bool)
+           (Format.asprintf "%s hidden in %s" secret shown)
+           false
+           (CCString.mem ~sub:secret shown))
+      [ "userpw"; "querypw"; "sslpw" ];
+    Lwt.return_unit
+  | Error error ->
+    Alcotest.failf "expected Connect_failed, got %s" (Caqti.Error.show error)
+;;
+
 (* A database that separates its users refuses a login it has no URL for,
    instead of running its roles as the owner. *)
 let test_strict_logins () =
@@ -570,6 +607,10 @@ let () =
            ; case "backoff" `Slow test_backoff
            ; case "on_failure" `Quick test_on_failure
            ; case "Pool.use returns errors" `Quick test_use_returns_errors
+           ; case
+               "Pool.use timeout hides passwords"
+               `Quick
+               test_use_timeout_hides_passwords
            ] )
        ; ( "logins"
          , [ case "logins share the owner's pool" `Quick test_logins_share_the_owner_pool

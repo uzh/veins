@@ -648,12 +648,14 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       Lwt.return result
     ;;
 
-    (* Veins' own connection errors (an exhausted pool) as Caqti's. *)
+    (* Veins' own connection errors (an exhausted pool) as Caqti's. The URI
+       only names the database: [Url.show] masks the password, also one in
+       the query, which Caqti's printer would show. *)
     let connect_failed key message =
       let uri =
         CCOption.map_or
           ~default:Uri.empty
-          (fun entry -> Entity.Url.to_connect_uri entry.url)
+          (fun entry -> Uri.of_string (Entity.Url.show entry.url))
           (Pools_tbl.find_opt pools key)
       in
       Caqti.Error.connect_failed ~uri (Caqti.Error.Msg message)
