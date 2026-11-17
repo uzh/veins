@@ -127,8 +127,9 @@ module Sql : sig
   (** The dialects there is SQL for. *)
   val kinds : t -> Dialect.kind list
 
-  (** [is_placeholder sql] holds for SQL whose text starts with [TODO], like
-      the statements [veins-gen] writes. *)
+  (** [is_placeholder sql] holds for SQL that starts with [TODO:] (after
+      blanks), the placeholder [veins-gen] writes. Nothing else is, not even
+      empty SQL or a comment: the runner sends those as they are. *)
   val is_placeholder : string -> bool
 
   (** [written t kind]: [t] has SQL for [kind] that is not a placeholder

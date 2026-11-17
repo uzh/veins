@@ -104,13 +104,17 @@ let step ~dialects ~index ~id =
 let header_comment = function
   | Both ->
     {|(* Steps run in the order [migration] adds them. Once a step is deployed, never
-   change or remove it: append a new step instead. Leave out the SQL of a
-   dialect the application never runs on: the runner refuses to apply a step
-   whose SQL for the database's dialect is still a TODO. *)|}
+   change its id or [up], or remove it: append a new step instead. Leave out the
+   SQL of a dialect the application never runs on, in [up] and [down] alike. The
+   runner refuses to apply a step whose [up] SQL for the database's dialect is
+   still a TODO, and to revert a migration while a [down] is: write it, or drop
+   [~down] if the step can't be reverted. *)|}
   | Only _ ->
     {|(* Steps run in the order [migration] adds them. Once a step is deployed, never
-   change or remove it: append a new step instead. The runner refuses to apply
-   a step whose SQL is still a TODO. *)|}
+   change its id or [up], or remove it: append a new step instead. The runner
+   refuses to apply a step whose [up] SQL is still a TODO, and to revert a
+   migration while a [down] is: write it, or drop [~down] if the step can't be
+   reverted. *)|}
 ;;
 
 let migration_binding ~namespace ~written_at ~steps =

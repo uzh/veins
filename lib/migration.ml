@@ -68,7 +68,7 @@ module Sql = struct
       Dialect.[ Mariadb; Postgresql ]
   ;;
 
-  let is_placeholder sql = CCString.prefix ~pre:"TODO" (CCString.trim sql)
+  let is_placeholder sql = CCString.prefix ~pre:"TODO:" (CCString.trim sql)
 
   let written t kind =
     match for_kind t kind with
@@ -301,16 +301,17 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       migrations
   ;;
 
-  let unsupported_error kind unsupported =
+  let unsupported_error ?(revert = false) kind unsupported =
     let describe (namespace, labels) =
       Format.asprintf "'%s' (%s)" (Namespace.show namespace) (CCString.concat ", " labels)
     in
     let msg =
       Format.asprintf
-        "No %s SQL (or a TODO placeholder) for the pending steps of %s; nothing was \
-         applied"
+        "No %s SQL (or a TODO: placeholder) for %s of %s; nothing was %s"
         (kind_name kind)
+        (if revert then "reverting the applied steps" else "the pending steps")
         (CCString.concat ", " (CCList.map describe unsupported))
+        (if revert then "reverted" else "applied")
     in
     Log.err (fun m -> m "%s" msg);
     Error.Migration_failed msg
@@ -609,7 +610,8 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
     in
     match CCList.length applied with
     | (_ : int) when not (CCList.is_empty missing_down) ->
-      Lwt_result.fail (unsupported_error kind [ mig.namespace, missing_down ])
+      Lwt_result.fail
+        (unsupported_error ~revert:true kind [ mig.namespace, missing_down ])
     | 0 ->
       Log.info (fun m ->
         m "No applied steps to revert for migration '%s'" (Namespace.show mig.namespace));

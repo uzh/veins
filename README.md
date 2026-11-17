@@ -266,7 +266,8 @@ names the dialects it is written for: `Sql.v ~mariadb ~postgresql ()` for one st
 application never runs on it), `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs
 anywhere. Before a run applies anything, the runner checks that every pending step has SQL for the connection's
 dialect (`Runner.verify`), so a MariaDB-only migration fails up front on PostgreSQL instead of half way. SQL that
-starts with `TODO` is a placeholder (`Sql.is_placeholder`) and fails that check like missing SQL.
+starts with `TODO:`, the generator's placeholder (`Sql.is_placeholder`), fails that check like missing SQL. `down`
+likewise refuses to revert anything while an applied step's `down` is one: write it, or drop `~down`.
 
 `~id` may be left out: the step then gets `Id.derive` of the namespace and its position, which is stable as long as
 steps are only ever appended. Every file that calls `Migration.register` contributes its steps to the global

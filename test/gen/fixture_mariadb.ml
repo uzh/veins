@@ -3,8 +3,10 @@
 open Veins
 
 (* Steps run in the order [migration] adds them. Once a step is deployed, never
-   change or remove it: append a new step instead. The runner refuses to apply
-   a step whose SQL is still a TODO. *)
+   change its id or [up], or remove it: append a new step instead. The runner
+   refuses to apply a step whose [up] SQL is still a TODO, and to revert a
+   migration while a [down] is: write it, or drop [~down] if the step can't be
+   reverted. *)
 
 let step_1 =
   let up = Migration.Sql.only Dialect.Mariadb {sql|TODO: forward SQL|sql} in

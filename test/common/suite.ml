@@ -1256,8 +1256,38 @@ module Make (D : Dialect) = struct
         | Ok () -> ()
         | Error e -> Alcotest.failf "verify supported: %s" (Error.show e))
     in
-    let%lwt () = forget_test_migrations () in
-    Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ()
+    let unwritten_down =
+      migration
+        "dialect_down"
+        (Migration.Step.create
+           ~label:"down left a TODO"
+           ~down:
+             (Migration.Sql.v
+                ~mariadb:"TODO: reverse SQL"
+                ~postgresql:"TODO: reverse SQL"
+                ())
+           (Migration.Sql.only kind "CREATE TABLE veins_t_dialect_down (id INTEGER)"))
+    in
+    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect_down") () in
+    Lwt.finalize
+      (fun () ->
+         let%lwt () =
+           Runner.up root unwritten_down
+           |> Lwt.map (function
+             | Ok () -> ()
+             | Error e -> Alcotest.failf "up with a TODO down: %s" (Error.show e))
+         in
+         let%lwt () =
+           Runner.down root unwritten_down |> Lwt.map (fails "down placeholder")
+         in
+         let%lwt pending = Runner.pending ~migrations:[ unwritten_down ] root () in
+         Alcotest.(check int) "down reverted nothing" 0 (CCList.length pending);
+         (* the table [up] created is still there *)
+         Db.exec (root_ctx ()) (ddl "INSERT INTO veins_t_dialect_down (id) VALUES (1)") ())
+      (fun () ->
+         let%lwt () = forget_test_migrations () in
+         let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect_down") () in
+         Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ())
   ;;
 
   (* The counter bridge, on a table of its own. Uses the deprecated API on

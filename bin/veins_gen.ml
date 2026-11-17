@@ -4,8 +4,8 @@ let die msg =
 ;;
 
 let usage_text =
-  "Usage: veins-gen [--steps N] [--dialect both|mariadb|postgresql] [--] <migration \
-   description>\n\n\
+  "Usage: veins-gen [--steps N (1-100)] [--dialect both|mariadb|postgresql] [--] \
+   <migration description>\n\n\
    Options are read only before the description; use -- before a description that starts \
    with -."
 ;;
@@ -17,6 +17,8 @@ let help () =
   exit 0
 ;;
 
+let max_steps = 100
+
 type options =
   { steps : int
   ; dialects : Veins_gen_template.dialects
@@ -26,8 +28,10 @@ type options =
 let rec parse options = function
   | "--steps" :: n :: rest ->
     (match CCInt.of_string n with
-     | Some steps when steps >= 1 -> parse { options with steps } rest
-     | _ -> die (Format.asprintf "--steps needs a positive number, got %S" n))
+     | Some steps when steps >= 1 && steps <= max_steps ->
+       parse { options with steps } rest
+     | _ ->
+       die (Format.asprintf "--steps needs a number from 1 to %d, got %S" max_steps n))
   | "--dialect" :: d :: rest ->
     (match Veins_gen_template.dialects_of_string d with
      | Some dialects -> parse { options with dialects } rest
@@ -36,7 +40,11 @@ let rec parse options = function
   | ("-h" | "--help") :: _ -> help ()
   | "--" :: words -> { options with words }
   | option :: _ when CCString.prefix ~pre:"-" option ->
-    die (Format.asprintf "Unknown option %S\n%s" option usage_text)
+    die
+      (Format.asprintf
+         "Unknown option %S (put -- before a description that starts with -)\n%s"
+         option
+         usage_text)
   | words -> { options with words }
 ;;
 

@@ -143,7 +143,18 @@ let test_sql_placeholder () =
     "left out is not written"
     false
     (written (only Dialect.Mariadb "SELECT 1") Dialect.Postgresql);
-  Alcotest.(check bool) "TODO later on" false (is_placeholder "SELECT 1 -- TODO")
+  List.iter
+    (fun sql -> Alcotest.(check bool) sql true (is_placeholder sql))
+    [ "TODO: forward SQL"; "\n  TODO: indented" ];
+  List.iter
+    (fun sql -> Alcotest.(check bool) sql false (is_placeholder sql))
+    [ "SELECT 1 -- TODO: later"
+    ; "TODO_items"
+    ; "todo: lower case"
+    ; "-- TODO: a comment"
+    ; ""
+    ; "-- nothing to undo"
+    ]
 ;;
 
 (* The name is read once per process: only the default can be checked. *)

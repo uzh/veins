@@ -22,8 +22,9 @@ To be released as 0.2.0.
   dialect before they apply any and fail with `Error.Migration_failed` naming the steps without SQL; `down` does
   the same for its `down` statements. A wrapped string becomes `Sql.any "…"`, or `Sql.only Dialect.Mariadb "…"`
   where it is MariaDB's SQL.
-- SQL that starts with `TODO` (what `veins-gen` writes) is a placeholder, `Sql.is_placeholder`: the check treats
-  it as missing, so a step left half filled in fails before anything is applied. `Sql.written` tells both apart.
+- SQL that starts with `TODO:` (what `veins-gen` writes) is a placeholder, `Sql.is_placeholder`: the check
+  treats it as missing, so a step left half filled in fails before anything is applied, and `down` before anything
+  is reverted. `Sql.written` tells both apart.
 - `Runner.verify` runs that check alone (read only), and `Runner.check` reports such steps as the new drift
   `Unsupported { namespace; dialect; steps }`.
 - `Step.create ?id`: without an id, a step gets `Id.derive` of its migration's namespace and its position, so

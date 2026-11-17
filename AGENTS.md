@@ -129,8 +129,8 @@ module Runner = Migration.Make (Db)
 timeout. `status`, `pending` and `check` go through `with_read_ctx` and must stay free of DDL and locks.
 
 Generate boilerplate with `veins-gen "label text"` → `migration_<YYYYMMDDhhmmss>_<slug>.ml`. SQL starting with
-`TODO` is a placeholder (`Sql.is_placeholder`): `verify` treats it as missing SQL, keep the generator's
-placeholders starting with it.
+`TODO:` is a placeholder (`Sql.is_placeholder`): `verify` and `down` treat it as missing SQL, so keep the
+generator's placeholders starting with `TODO:`. Nothing else is (no comment or case handling, on purpose).
 New migration files call `Migration.register` — no explicit list to maintain.
 
 ### Dialects
@@ -170,8 +170,9 @@ veins-gen --steps 3 --dialect postgresql "create orders table"   # options befor
 ```
 
 `--steps N` writes N steps (default 1); `--dialect mariadb|postgresql` writes `Sql.only` placeholders, the default
-`both` one `Sql.v` with a TODO per dialect. Edit the generated file: fill in SQL strings (a `TODO` left fails
-`Runner.verify`), adjust step labels. The file self-registers via `Migration.register` at the bottom — just link it into your binary.
+`both` one `Sql.v` with a TODO per dialect. Edit the generated file: fill in SQL strings (a `TODO:` left fails
+`Runner.verify`, and `Runner.down` for a `down`), adjust step labels. The file self-registers via
+`Migration.register` at the bottom — just link it into your binary.
 
 ## References
 
