@@ -7,7 +7,7 @@ module Suite = Suite.Make (struct
     let default_port = 5432
 
     module Db = Veins.Pools.Make (struct
-        let database =
+        let database () =
           Veins.Database.create
             (Veins.Label.create "root")
             (Veins.Url.create

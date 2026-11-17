@@ -7,8 +7,11 @@
 
 (** Configuration required to instantiate a connection pool. *)
 module type ConfigSig = sig
-  (** The primary database, registered by [Pool.initialize]. *)
-  val database : Entity.Database.t
+  (** The primary database, registered by [Pool.initialize], which calls
+      this every time it runs. Nothing calls it when the module is made, so
+      it may read a configuration that is loaded later, at startup (an
+      environment file, a test setup). *)
+  val database : unit -> Entity.Database.t
 
   (** Maximum number of open connections Caqti keeps per pool (one pool per
       label for the owner, plus one per login with a URL of its own). A
@@ -60,7 +63,8 @@ module type Sig = sig
   (** {1 Pool lifecycle} *)
 
   module Pool : sig
-    (** Register the primary database from [Config] and [additional_pools].
+    (** Register the primary database ([Config.database ()]) and
+        [additional_pools].
         Labels already registered are skipped. Connections are opened lazily,
         on first use. *)
     val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit
@@ -122,6 +126,33 @@ module type Sig = sig
         connects with, connecting if there is none: [Ok ()] if the database
         answered. Counts as a statement for the reconnect backoff. *)
     val ping : ?login:Entity.Login.t -> Entity.Label.t -> (unit, Error.t) Lwt_result.t
+
+    (** [use label f] runs [f] on a connection of the pool [login] (default
+        {!Veins.Login.owner}) connects with, for code that expects Caqti's
+        results instead of veins' exceptions, e.g. a framework sharing the
+        pools. It is a statement, not a context: no role, nothing checked.
+
+        [f] gets a {!Veins.Connection.fixed} connection. Its [Error] is
+        returned as it is; a lost connection drops the pool, and the next
+        statement reconnects, as for every statement. A pool waiting to
+        reconnect, or one that gives no connection within
+        [Pool_options.acquire_timeout], gives [Error] too, a
+        [`Connect_failed] for the latter. Errors are not reported to
+        [Pool_options.on_failure].
+
+        Exceptions of [f] pass through as they are, also veins' own; a lost
+        connection [f] raises ([Caqti.Error.Exn], e.g. of
+        [Caqti_lwt.or_fail], or {!Veins.Error.Failed}) drops the pool all the
+        same.
+
+        @raise Veins.Error.Exn
+          [Database_not_registered],
+          [Login_not_configured]: setup errors, not the database's. *)
+    val use
+      :  ?login:Entity.Login.t
+      -> Entity.Label.t
+      -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
+      -> ('a, Caqti.Error.t) Lwt_result.t
 
     (** [test database] connects once to every URL of [database] (the
         owner's, then each login's) with {!Veins.Connection.test}, the way the

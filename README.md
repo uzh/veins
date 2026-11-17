@@ -42,8 +42,7 @@ See [Package and libraries](#package-and-libraries).
 open Veins
 
 (* The URL is typically read from an environment variable. *)
-let url = Url.create (Sys.getenv "DATABASE_URL")
-let db  = Database.create (Label.create "root") url
+let db () = Database.create (Label.create "root") (Url.create (Sys.getenv "DATABASE_URL"))
 
 module Db = Veins_mariadb.Pools.Make (struct
   let database = db
@@ -52,6 +51,9 @@ end)
 
 let () = Db.Pool.initialize ()
 ```
+
+`database` is a function: `Pool.initialize` calls it, not the module's creation, so it may read a configuration that
+is loaded at startup (an `.env` file, a test setup).
 
 For custom pool sizes, or when you need to wire up the driver yourself:
 
@@ -207,8 +209,9 @@ transactions, errors and `Pool` behave as above. Two bridges to code written wit
 - `Plain.Ctx.with_roles ctx` is the same context for functions that state their needs, e.g. those of a library:
   the single user grants whatever is asked for, and the statements join `ctx`'s transaction.
 
-For other pool sizes or `Pool_options`, apply `Veins.Plain.Make` to the pools you made:
-`Veins.Plain.Make (Veins.Pools.Make_with_options (Config) (Options))`.
+For another pool size or `Pool_options`, use `Veins_mariadb.Plain.Make_with_options` (or the PostgreSQL one), whose
+configuration adds `database_pool_size`; over pools of your own, `Veins.Plain.Make (Veins.Pools.Make_with_options
+(Config) (Options))`.
 
 ## Migrations
 
@@ -354,14 +357,28 @@ The `veins-gen` executable is installed as part of the `veins` package.
 
 ## Pool tuning and lost databases
 
-`Pools.Make` (and the driver libraries' `Pools.Make`) use `Pool_options.default`. `Pools.Make_with_options` takes
-your own:
+`Pools.Make` (and the driver libraries' `Pools.Make`) use `Pool_options.default`. The driver libraries'
+`Pools.Make_with_options` and `Plain.Make_with_options` take your own, and the pool size:
+
+```ocaml
+module Db =
+  Veins_mariadb.Pools.Make_with_options
+    (struct
+      let database () = Database.create (Label.create "root") url
+      let database_pool_size = 20
+    end)
+    (struct
+      let options = Veins.Pool_options.{ default with statement_timeout = Some 30. }
+    end)
+```
+
+`Veins.Pools.Make_with_options` is the same with every field of the configuration:
 
 ```ocaml
 module Db =
   Veins.Pools.Make_with_options
     (struct
-      let database = Database.create (Label.create "root") url
+      let database () = Database.create (Label.create "root") url
       let database_pool_size = 10
       let expected_databases = 5
 
@@ -381,6 +398,13 @@ module Db =
 | `statement_timeout` | `None`        | Seconds after which the database aborts a statement; migrations run without it      |
 | `acquire_timeout`   | `None`        | Seconds a statement waits for a connection of an exhausted pool before it fails     |
 | `reconnect_backoff` | `(0.5, 30.)`  | Initial and longest wait before a pool that lost its database tries to reconnect    |
+| `on_failure`        | `None`        | Called with every error a statement raises, before it is raised                     |
+
+**Reporting failures.** `on_failure` gets the label, the context's role, the request (as Caqti prints it, for
+`exec`, `collect`, `find` and `find_opt`) and the exception the statement raises right after (`Error.Failed` or
+`Error.Exn`), e.g. to send it to an error tracker instead of wrapping every helper. Each error is reported once,
+where veins raises it, not again when it leaves `connection_ctx` or `transaction_ctx`; `Pool.ping` and the other
+`Pool` functions don't report. The statement waits for it, and an exception of it is logged and dropped.
 
 **Connections.** There is one pool per label for the owner and one per login with a URL of its own, each opening
 up to `database_pool_size` connections: with many databases, keep that product under the server's connection
@@ -400,6 +424,12 @@ or another group named with `?config-group=` in the URL.
 **TLS.** Veins doesn't touch the transport: for a database on another host, require TLS in the URL
 (`?sslmode=verify-full` on PostgreSQL) or, for MariaDB, in the `my.cnf` group (`ssl-ca`, `ssl-verify-server-cert`).
 `Url.pp` / `Url.show` mask the password, also one given as a `password` or `sslpassword` query parameter.
+
+**Sharing the pools.** Code that expects Caqti's results instead of veins' exceptions, e.g. a framework that runs
+its own statements, borrows a connection with `Db.Pool.use label f` (`?login` with roles). `f` gets a fixed
+connection (`Veins.Connection.fixed`) and its result comes back as it is, `(_, Caqti.Error.t) result`. A lost
+connection drops the pool and a pool that waits to reconnect gives an `Error` right away, as for every statement.
+Only an unknown label or login raises. These errors aren't reported to `on_failure`.
 
 ---
 

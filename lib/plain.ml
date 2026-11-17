@@ -43,6 +43,12 @@ module type Sig = sig
 
     val connect : Entity.Label.t -> (unit, Error.t) result
     val ping : Entity.Label.t -> (unit, Error.t) Lwt_result.t
+
+    val use
+      :  Entity.Label.t
+      -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
+      -> ('a, Caqti.Error.t) Lwt_result.t
+
     val test : Entity.Database.t -> (unit, Error.t) Lwt_result.t
     val disconnect : ?error:Caqti.Error.t -> Entity.Label.t -> unit
   end
@@ -130,6 +136,7 @@ module Make (Db : Pools_sig.Sig) = struct
     let fetch label = Db.Pool.fetch label
     let connect label = Db.Pool.connect label
     let ping label = Db.Pool.ping label
+    let use label f = Db.Pool.use label f
     let test = Db.Pool.test
     let disconnect ?error label = Db.Pool.disconnect ?error label
   end

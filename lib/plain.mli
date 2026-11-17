@@ -6,7 +6,7 @@
 
     {[
     module Db = Veins_mariadb.Plain.Make (struct
-        let database =
+        let database () =
           let url = Veins.Url.create (Sys.getenv "DATABASE_URL") in
           Veins.Database.create (Veins.Label.create "root") url
         ;;
@@ -112,6 +112,19 @@ module type Sig = sig
 
     val connect : Entity.Label.t -> (unit, Error.t) result
     val ping : Entity.Label.t -> (unit, Error.t) Lwt_result.t
+
+    (** [use label f] runs [f] on a {!Veins.Connection.fixed} connection of
+        the label and returns its result as it is, for code that expects
+        Caqti's results instead of veins' exceptions (e.g. a framework
+        sharing the pools). Lost connections drop the pool as for every
+        statement; see [Pools_sig.Sig.Pool.use].
+
+        @raise Veins.Error.Exn [Database_not_registered]. *)
+    val use
+      :  Entity.Label.t
+      -> (Caqti_lwt.connection -> ('a, Caqti.Error.t) Lwt_result.t)
+      -> ('a, Caqti.Error.t) Lwt_result.t
+
     val test : Entity.Database.t -> (unit, Error.t) Lwt_result.t
     val disconnect : ?error:Caqti.Error.t -> Entity.Label.t -> unit
   end
@@ -205,8 +218,9 @@ module type Sig = sig
 end
 
 (** The pools of [Db] without roles. The driver libraries apply it for you:
-    [Veins_mariadb.Plain.Make], [Veins_postgresql.Plain.Make]. For other
-    pool sizes or {!Veins.Pool_options}:
+    [Veins_mariadb.Plain.Make], [Veins_postgresql.Plain.Make], and with a
+    pool size and {!Veins.Pool_options} of your own their
+    [Plain.Make_with_options]. Over other pools:
 
     {[
     module Db = Veins.Plain.Make (Veins.Pools.Make_with_options (Config) (Options))

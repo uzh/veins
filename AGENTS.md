@@ -59,7 +59,7 @@ make test
 
 ```ocaml
 module type ConfigSig = sig
-  val database : Entity.Database.t (* primary DB — label becomes key *)
+  val database : unit -> Entity.Database.t (* primary DB, called by Pool.initialize *)
   val database_pool_size : int
   val expected_databases : int
   module Driver : Driver.Sig       (* not required with Veins_mariadb / Veins_postgresql *)
@@ -70,20 +70,27 @@ Prefer the driver libraries for end users — they remove the `Driver` field:
 
 ```ocaml
 module Db = Veins_mariadb.Pools.Make (struct
-  let database = Database.create (Label.create "root") url
+  let database () = Database.create (Label.create "root") url
   (* pool_size defaults to 10, expected_databases to 5 *)
 end)
 ```
 
-Call `Db.Pool.initialize ()` once at startup before any query.
+Call `Db.Pool.initialize ()` once at startup before any query. `database` is a function so that nothing reads the
+configuration when the module is made: call it only from `Pool.initialize`.
 
 `Pools.Make_with_options (Config) (struct let options = ... end)` takes a `Pool_options.t` (connection recycling,
-`statement_timeout`, `acquire_timeout`, `reconnect_backoff`); `Pools.Make` is that with `Pool_options.default`. New
-tuning goes into `Pool_options`, not into `ConfigSig` (its consumers build that module by hand).
+`statement_timeout`, `acquire_timeout`, `reconnect_backoff`, `on_failure`); `Pools.Make` is that with `Pool_options.default`. New
+tuning goes into `Pool_options`, not into `ConfigSig` (its consumers build that module by hand). The driver
+libraries' `Pools.Make_with_options` / `Plain.Make_with_options` take `database` and `database_pool_size`.
+
+`on_failure` is called where veins raises a statement's error (`fail`: `statement_error`, `statement_pool`,
+`use_pool`), never where an error only passes through (`settle`'s `exception` arms), so each is reported once;
+`Pool.ping` passes `~quiet:true`. Raise new statement errors through `fail`.
 
 A connection error drops only the pool it happened on (`settle` / `disconnect_entry ~pool`), then the pool backs
 off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one statement (`probe`) until that
-settled. Every path that takes a pool from `fetch_key` must go through `settle`, or the probe is never released.
+settled. Every path that takes a pool from `fetch_key` must go through `settle` (or, returning results like
+`Pool.use`, `record` / `record_exn`), or the probe is never released.
 Caqti's `connect_pool` is lazy, only a statement (or `Pool.ping`) tells whether the database answers.
 
 `Connection.test url` connects once without a pool; `Pool.test database` runs it for every URL of a database with

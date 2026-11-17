@@ -467,7 +467,7 @@ module Make (D : Dialect) = struct
   (* A second instance with a single connection, so every statement reuses the
      connection the rollback ran on. *)
   module Single = Pools.Make (struct
-      let database = database
+      let database () = database
       let database_pool_size = 1
       let expected_databases = 1
 
@@ -905,7 +905,7 @@ module Make (D : Dialect) = struct
   module Tuned =
     Pools.Make_with_options
       (struct
-        let database = database
+        let database () = database
         let database_pool_size = 1
         let expected_databases = 1
 
@@ -949,6 +949,123 @@ module Make (D : Dialect) = struct
     let%lwt one = Tuned.find ctx ping () in
     Tuned.Pool.clear ();
     Lwt.return (Alcotest.(check int) "reconnects" 1 one)
+  ;;
+
+  (* [on_failure] hears of a statement failing inside a transaction once, not
+     again when the error leaves the transaction and its connection. *)
+  let failures : Pool_options.failure list ref = ref []
+
+  module Reporting =
+    Pools.Make_with_options
+      (Db.Config)
+      (struct
+        let options =
+          Pool_options.
+            { default with
+              on_failure =
+                Some
+                  (fun failure ->
+                    failures := failure :: !failures;
+                    Lwt.return_unit)
+            }
+        ;;
+      end)
+
+  let test_on_failure () =
+    Reporting.Pool.initialize ();
+    let missing = int_query "SELECT n FROM veins_test_no_such_table" in
+    let%lwt () =
+      expect_exn
+        "missing table"
+        (fun () ->
+           Reporting.transaction_ctx ~role:owner root (fun ctx ->
+             Reporting.find ctx missing ()))
+        (function
+          | Error.Failed _ -> ()
+          | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))
+    in
+    let reported = !failures in
+    failures := [];
+    Reporting.Pool.clear ();
+    Alcotest.(check int) "reported once" 1 (CCList.length reported);
+    CCList.iter
+      (fun { Pool_options.request; role; _ } ->
+         Alcotest.(check (option string)) "role" (Some (Role.name owner)) role;
+         Alcotest.(check bool)
+           "request"
+           true
+           (CCOption.exists (CCString.mem ~sub:"veins_test_no_such_table") request))
+      reported;
+    Lwt.return_unit
+  ;;
+
+  (* [Pool.use] returns Caqti's results; a
+     statement error leaves the pool alone, exceptions pass through. *)
+  let test_use () =
+    let select_one (module C : Caqti_lwt.CONNECTION) = C.find (Request.caqti ping) () in
+    let%lwt one = Db.Pool.use root select_one in
+    Alcotest.(check (result int string))
+      "result of f"
+      (Ok 1)
+      (Result.map_error Caqti.Error.show one);
+    let%lwt pool = Db.Pool.fetch root in
+    let%lwt missing =
+      Db.Pool.use root (fun (module C : Caqti_lwt.CONNECTION) ->
+        C.find (Request.caqti (int_query "SELECT n FROM veins_test_no_such_table")) ())
+    in
+    Alcotest.(check bool) "statement error returned" true (Result.is_error missing);
+    let%lwt same = Db.Pool.fetch root in
+    Alcotest.(check bool) "pool kept" true (pool == same);
+    let%lwt () =
+      expect_exn
+        "exception of f"
+        (fun () -> Db.Pool.use root (fun _ -> failwith "f"))
+        (function
+          | Failure _ -> ()
+          | exn -> Alcotest.failf "expected Failure, got %s" (Printexc.to_string exn))
+    in
+    let%lwt one = Db.Pool.use root select_one in
+    Lwt.return (Alcotest.(check bool) "usable afterwards" true (Result.is_ok one))
+  ;;
+
+  (* A connection error a callback raises as [Caqti.Error.Exn] (what
+     [Caqti_lwt.or_fail] raises) drops the pool like a returned one, and
+     reaches the caller as it is; veins' own exceptions raised by the
+     callback aren't turned into results. *)
+  let test_use_callback_exceptions () =
+    let lost =
+      Caqti.Error.Exn
+        (Caqti.Error.connect_failed ~uri:Uri.empty (Caqti.Error.Msg "connection gone"))
+    in
+    let dropped name run =
+      let%lwt before = Db.Pool.fetch root in
+      let%lwt () =
+        expect_exn name run (fun exn ->
+          Alcotest.(check bool) (name ^ ": the callback's exception") true (exn == lost))
+      in
+      let%lwt after = Db.Pool.fetch root in
+      Alcotest.(check bool) (name ^ ": pool dropped") false (before == after);
+      (* a statement reaching the database ends the count of failures, or
+         the next case would find the pool backing off *)
+      let%lwt one = Db.find (Db.label_ctx ~role:owner root) ping () in
+      Lwt.return (Alcotest.(check int) (name ^ ": reconnects") 1 one)
+    in
+    let%lwt () =
+      dropped "Pool.use" (fun () -> Db.Pool.use root (fun _ -> Lwt.fail lost))
+    in
+    let%lwt () =
+      dropped "connection_ctx" (fun () ->
+        Db.connection_ctx ~role:owner root (fun ctx ->
+          Db.query ~needs:Need.none ctx (fun _ -> Lwt.fail lost)))
+    in
+    let inner = Error.Exn (Error.Connection_failed "inner acquire timeout") in
+    let%lwt () =
+      expect_exn
+        "veins exception of the callback"
+        (fun () -> Db.Pool.use root (fun _ -> Lwt.fail inner))
+        (fun exn -> Alcotest.(check bool) "passed through" true (exn == inner))
+    in
+    Lwt.return_unit
   ;;
 
   (* {1 Roles} *)
@@ -1518,6 +1635,9 @@ module Make (D : Dialect) = struct
         ; case "test an unregistered URL" `Quick test_unregistered_url
         ; case "test a database" `Quick test_database_test
         ; case "options" `Quick test_options
+        ; case "on_failure" `Quick test_on_failure
+        ; case "Pool.use" `Quick test_use
+        ; case "Pool.use callback exceptions" `Quick test_use_callback_exceptions
         ] )
     ; ( "roles"
       , [ case "roles run their statements" `Quick test_roles_run_their_statements

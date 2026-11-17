@@ -1,3 +1,10 @@
+type failure =
+  { label : Entity.Label.t
+  ; role : string option
+  ; request : string option
+  ; exn : exn
+  }
+
 type t =
   { max_use_count : int option
   ; max_idle_size : int option
@@ -5,6 +12,7 @@ type t =
   ; statement_timeout : float option
   ; acquire_timeout : float option
   ; reconnect_backoff : float * float
+  ; on_failure : (failure -> unit Lwt.t) option
   }
 
 let default =
@@ -14,6 +22,7 @@ let default =
   ; statement_timeout = None
   ; acquire_timeout = None
   ; reconnect_backoff = 0.5, 30.
+  ; on_failure = None
   }
 ;;
 
