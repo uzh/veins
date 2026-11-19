@@ -10,6 +10,8 @@ Database connection pooling and schema migration library for OCaml.
   roles for applications with one database user
 - **`veins-gen`** — CLI tool to generate migration file boilerplate
 
+API documentation: <https://uzh.github.io/veins/>
+
 ---
 
 ## Installation

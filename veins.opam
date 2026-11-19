@@ -8,6 +8,7 @@ maintainer: ["Econ IT <it@econ.uzh.ch>"]
 authors: ["Department of Economics, University of Zurich"]
 license: "MIT"
 homepage: "https://github.com/uzh/veins"
+doc: "https://uzh.github.io/veins/"
 bug-reports: "https://github.com/uzh/veins"
 depends: [
   "dune" {>= "3.17"}

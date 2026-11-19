@@ -1,0 +1,36 @@
+{0 veins}
+
+Database connection pooling and schema migrations for OCaml 5, on Lwt and
+{{:https://github.com/paurkedal/ocaml-caqti}Caqti}, for MariaDB and PostgreSQL.
+
+- {b Connection pools}: label-based pools for several databases, reconnecting
+  after a lost connection.
+- {b Roles}: statements checked against typed roles at compile time, each
+  role connecting as its own database user, or {!Veins.Plain} pools without
+  roles for applications with one database user.
+- {b Migrations}: ordered up/down steps tracked one by one, with a global
+  registry and drift detection ({!Veins.Migration}).
+- {b veins-gen}: a command line tool writing migration file boilerplate.
+
+{1 Installation}
+
+{v
+opam install veins caqti-driver-mariadb      # MariaDB / MySQL
+opam install veins caqti-driver-postgresql   # PostgreSQL
+v}
+
+The opam package [veins] installs the driver libraries when their Caqti driver
+is installed: depend on both in your opam file and name the library in dune,
+e.g. [(libraries veins veins.mariadb)].
+
+{1 Libraries}
+
+{!modules: Veins Veins_mariadb Veins_postgresql}
+
+Start with {!Veins}: its overview has a quick start, and its modules are
+grouped by what an application does with them. The driver libraries give the
+pool functors with the driver filled in ({!Veins_mariadb.Pools},
+{!Veins_postgresql.Pools}).
+
+The {{:https://github.com/uzh/veins#readme}README} walks through pools,
+roles, logins, transactions and migrations with examples.
