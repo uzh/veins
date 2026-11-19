@@ -843,7 +843,7 @@ module Make (D : Dialect) = struct
 
   let test_ping () =
     let%lwt answered = Db.Pool.ping root in
-    Alcotest.(check bool) "the database answers" true (Result.is_ok answered);
+    Alcotest.(check bool) "the database answers" true (CCResult.is_ok answered);
     let%lwt unknown = Db.Pool.ping (Label.create "veins_unknown") in
     Lwt.return
       (match unknown with
@@ -878,7 +878,7 @@ module Make (D : Dialect) = struct
       Db.Pool.find label |> CCOption.map Database.status |> CCOption.map Status.show
     in
     let%lwt tested = Db.Pool.test roles_database in
-    Alcotest.(check bool) "owner and logins answer" true (Result.is_ok tested);
+    Alcotest.(check bool) "owner and logins answer" true (CCResult.is_ok tested);
     Alcotest.(check (option string))
       "an active database stays active"
       (Some "active")
@@ -891,7 +891,7 @@ module Make (D : Dialect) = struct
     Lwt.finalize
       (fun () ->
          let%lwt tested = Db.Pool.test database in
-         Alcotest.(check bool) "the database answers" true (Result.is_ok tested);
+         Alcotest.(check bool) "the database answers" true (CCResult.is_ok tested);
          Lwt.return
            (Alcotest.(check (option string))
               "the connection issue is over"
@@ -1007,13 +1007,13 @@ module Make (D : Dialect) = struct
     Alcotest.(check (result int string))
       "result of f"
       (Ok 1)
-      (Result.map_error Caqti.Error.show one);
+      (CCResult.map_err Caqti.Error.show one);
     let%lwt pool = Db.Pool.fetch root in
     let%lwt missing =
       Db.Pool.use root (fun (module C : Caqti_lwt.CONNECTION) ->
         C.find (Request.caqti (int_query "SELECT n FROM veins_test_no_such_table")) ())
     in
-    Alcotest.(check bool) "statement error returned" true (Result.is_error missing);
+    Alcotest.(check bool) "statement error returned" true (CCResult.is_error missing);
     let%lwt same = Db.Pool.fetch root in
     Alcotest.(check bool) "pool kept" true (pool == same);
     let%lwt () =
@@ -1025,7 +1025,7 @@ module Make (D : Dialect) = struct
           | exn -> Alcotest.failf "expected Failure, got %s" (Printexc.to_string exn))
     in
     let%lwt one = Db.Pool.use root select_one in
-    Lwt.return (Alcotest.(check bool) "usable afterwards" true (Result.is_ok one))
+    Lwt.return (Alcotest.(check bool) "usable afterwards" true (CCResult.is_ok one))
   ;;
 
   (* A connection error a callback raises as [Caqti.Error.Exn] (what
@@ -1661,7 +1661,7 @@ module Make (D : Dialect) = struct
 
   let run name =
     Random.self_init ();
-    if Option.is_some (env_opt "VEINS_TEST_DEBUG")
+    if CCOption.is_some (env_opt "VEINS_TEST_DEBUG")
     then (
       Logs.set_reporter (Logs_fmt.reporter ());
       Logs.set_level (Some Logs.Debug));

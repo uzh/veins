@@ -134,7 +134,7 @@ let test_backoff () =
     server.Net.Unresponsive.accepted;
   Alcotest.(check bool) "failed right away" true (waited < 0.2);
   let%lwt pinged = Backoff.Pool.ping label in
-  Alcotest.(check bool) "ping fails during the backoff" true (Result.is_error pinged);
+  Alcotest.(check bool) "ping fails during the backoff" true (CCResult.is_error pinged);
   let%lwt () = Lwt_unix.sleep 2.1 in
   (* one statement tries, the ones arriving meanwhile still fail right away *)
   let trying = attempt () in
@@ -316,11 +316,14 @@ let test_registry () =
   Alcotest.(check int)
     "kept the first registration"
     2
-    (Db.Pool.find label |> Option.get |> Database.logins |> CCList.length);
+    (Db.Pool.find label
+     |> CCOption.get_exn_or "registered"
+     |> Database.logins
+     |> CCList.length);
   let%lwt reader_pool' = Db.Pool.fetch ~login:Roles.reader_login label in
   Alcotest.(check bool) "same pool" true (reader_pool == reader_pool');
   Db.Pool.drop label;
-  Alcotest.(check bool) "dropped" true (Option.is_none (Db.Pool.find label));
+  Alcotest.(check bool) "dropped" true (CCOption.is_none (Db.Pool.find label));
   expect
     "dropped label"
     (fun () -> Db.Pool.fetch ~login:Roles.reader_login label)
@@ -379,7 +382,12 @@ let test_database_test_tracks_connection_issue () =
     Url.create (Format.asprintf "mariadb://%s:pw@127.0.0.1:%d/x" name port)
   in
   let label = Label.create "veins_tested" in
-  let status () = Db.Pool.find label |> Option.get |> Database.status |> Status.show in
+  let status () =
+    Db.Pool.find label
+    |> CCOption.get_exn_or "registered"
+    |> Database.status
+    |> Status.show
+  in
   let fails name database =
     match%lwt Db.Pool.test database with
     | Ok () -> Alcotest.failf "%s: expected an error" name
@@ -539,7 +547,7 @@ let test_on_failure () =
     expect
       "find"
       (fun () -> Reporting.find (Reporting.label_ctx label) select_one ())
-      Fun.id
+      CCFun.id
   in
   CCList.iter
     (fun ({ Pool_options.label = reported_label; request; _ } as failure) ->
@@ -558,7 +566,7 @@ let test_on_failure () =
       "connection_ctx"
       (fun () ->
          Reporting.connection_ctx label (fun ctx -> Reporting.find ctx select_one ()))
-      Fun.id
+      CCFun.id
   in
   CCList.iter (same_exn "connection_ctx" raised) (reports "connection_ctx" 1);
   let%lwt raised =
@@ -569,7 +577,7 @@ let test_on_failure () =
            (Reporting.label_ctx (Label.create "veins_unknown"))
            (Caqti.Templater.static T.(unit -->. unit) "SELECT 1")
            ())
-      Fun.id
+      CCFun.id
   in
   CCList.iter (same_exn "unregistered label" raised) (reports "unregistered label" 1);
   let%lwt () =
@@ -590,7 +598,7 @@ let test_on_failure () =
     expect
       "unprintable request"
       (fun () -> Reporting.find (Reporting.label_ctx label) unprintable ())
-      Fun.id
+      CCFun.id
   in
   (match raised with
    | Error.Failed _ -> ()
@@ -612,7 +620,7 @@ let test_on_failure () =
       "parameters"
       (fun () ->
          Reporting.find (Reporting.label_ctx label) login ("alice@example.com", "hunter2"))
-      Fun.id
+      CCFun.id
   in
   CCList.iter
     (fun { Pool_options.params; _ } ->
@@ -642,7 +650,7 @@ let test_on_failure () =
            (Reporting.label_ctx label)
            (Caqti.Templater.static T.(rejecting -->! int) "SELECT ?")
            1)
-      Fun.id
+      CCFun.id
   in
   CCList.iter
     (fun ({ Pool_options.request; params; _ } as failure) ->
@@ -650,7 +658,7 @@ let test_on_failure () =
        Alcotest.(check bool)
          "unprintable parameters: request"
          true
-         (Option.is_some request);
+         (CCOption.is_some request);
        Alcotest.(check (option string)) "unprintable parameters: none" None params)
     (reports "unprintable parameters" 1);
   let%lwt () =

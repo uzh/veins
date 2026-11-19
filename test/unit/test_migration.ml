@@ -67,7 +67,7 @@ let test_derived_ids_are_stable () =
     "same input, same id"
     id
     (derive ~namespace:"202301010000_guardian" ~index:0);
-  Alcotest.(check bool) "valid UUID" true (Option.is_some (Uuidm.of_string id));
+  Alcotest.(check bool) "valid UUID" true (CCOption.is_some (Uuidm.of_string id));
   Alcotest.(check bool)
     "index matters"
     false
@@ -143,10 +143,10 @@ let test_sql_placeholder () =
     "left out is not written"
     false
     (written (only Dialect.Mariadb "SELECT 1") Dialect.Postgresql);
-  List.iter
+  CCList.iter
     (fun sql -> Alcotest.(check bool) sql true (is_placeholder sql))
     [ "TODO: forward SQL"; "\n  TODO: indented" ];
-  List.iter
+  CCList.iter
     (fun sql -> Alcotest.(check bool) sql false (is_placeholder sql))
     [ "SELECT 1 -- TODO: later"
     ; "TODO_items"

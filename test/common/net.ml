@@ -73,7 +73,7 @@ module Proxy = struct
 
   let locked t f =
     Mutex.lock t.lock;
-    Fun.protect ~finally:(fun () -> Mutex.unlock t.lock) f
+    CCFun.protect ~finally:(fun () -> Mutex.unlock t.lock) f
   ;;
 
   let quietly f fd =
@@ -126,9 +126,10 @@ module Proxy = struct
           ; Thread.create (fun () -> pump ~src:upstream ~dst:client) ()
           ]
         in
-        List.iter Thread.join pumps;
+        CCList.iter Thread.join pumps;
         locked t (fun () ->
-          t.open_fds <- List.filter (fun fd -> fd != client && fd != upstream) t.open_fds));
+          t.open_fds
+          <- CCList.filter (fun fd -> fd != client && fd != upstream) t.open_fds));
       close client;
       close upstream
   ;;
@@ -184,7 +185,7 @@ module Proxy = struct
         t.down <- down;
         if down then t.open_fds else [])
     in
-    List.iter cut fds;
+    CCList.iter cut fds;
     Lwt.return_unit
   ;;
 

@@ -31,7 +31,8 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     ;;
 
     let hash (label, login) =
-      Hashtbl.hash (Entity.Label.value label, CCOption.map Entity.Login.name login)
+      CCHash.(pair string (opt string))
+        (Entity.Label.value label, CCOption.map Entity.Login.name login)
     ;;
 
     let show (label, login) =
@@ -73,7 +74,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     if backs_off failures
     then (
       let initial, max = options.Pool_options.reconnect_backoff in
-      Float.min max (initial *. (2. ** float_of_int (min 30 (failures - 2)))))
+      CCFloat.min max (initial *. (2. ** float_of_int (min 30 (failures - 2)))))
     else 0.
   ;;
 
@@ -329,7 +330,8 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
   let mark_healthy key pool =
     match Pools_tbl.find_opt pools key with
     | Some entry
-      when is_current entry pool && (entry.failures > 0 || Option.is_some entry.probe) ->
+      when is_current entry pool && (entry.failures > 0 || CCOption.is_some entry.probe)
+      ->
       Pools_tbl.replace pools key { entry with failures = 0; retry_at = 0.; probe = None }
     | Some _ | None -> ()
   ;;
