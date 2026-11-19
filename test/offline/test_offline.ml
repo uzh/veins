@@ -550,8 +550,9 @@ let test_on_failure () =
       CCFun.id
   in
   CCList.iter
-    (fun ({ Pool_options.label = reported_label; request; _ } as failure) ->
+    (fun ({ Pool_options.label = reported_label; request; connection_error; _ } as failure) ->
        same_exn "find" raised failure;
+       Alcotest.(check bool) "find: a connection error" true connection_error;
        Alcotest.(check string)
          "find: label"
          (Label.value label)
@@ -579,7 +580,14 @@ let test_on_failure () =
            ())
       CCFun.id
   in
-  CCList.iter (same_exn "unregistered label" raised) (reports "unregistered label" 1);
+  CCList.iter
+    (fun ({ Pool_options.connection_error; _ } as failure) ->
+       same_exn "unregistered label" raised failure;
+       Alcotest.(check bool)
+         "unregistered label: no connection error"
+         false
+         connection_error)
+    (reports "unregistered label" 1);
   let%lwt () =
     match%lwt Reporting.Pool.ping label with
     | Ok () -> Alcotest.fail "ping: expected an error"
@@ -698,6 +706,46 @@ let test_on_failure () =
   Lwt.return_unit
 ;;
 
+(* [is_connection_error] answers as the pool's reconnect does. *)
+let test_is_connection_error () =
+  let label = Label.create "veins_is_connection_error" in
+  let error errno =
+    Caqti.Error.request_failed
+      ~uri:(Uri.of_string "mariadb://x/y")
+      ~query:"SELECT 1"
+      (Caqti_driver_mariadb.Error_msg { errno; error = "error" })
+  in
+  let failed error = Error.Failed (Error.failure ~login:Login.owner label error) in
+  let connect_failed =
+    Caqti.Error.connect_failed
+      ~uri:(Uri.of_string "mariadb://x/y")
+      (Caqti.Error.Msg "refused")
+  in
+  CCList.iter
+    (fun (name, expected, exn) ->
+       Alcotest.(check bool) name expected (Db.is_connection_error exn);
+       Alcotest.(check bool)
+         ("Plain: " ^ name)
+         expected
+         (Reporting.is_connection_error exn))
+    [ "connection lost (2013)", true, failed (error 2013)
+    ; "server gone (2006)", true, failed (error 2006)
+    ; "connect failed", true, failed connect_failed
+    ; "Caqti.Error.Exn", true, Caqti.Error.Exn (error 2013)
+    ; "Connection_failed", true, Error.Exn (Error.Connection_failed "refused")
+    ; "duplicate key (1062)", false, failed (error 1062)
+    ; "Database_not_registered", false, Error.Exn (Error.Database_not_registered "x")
+    ; ( "Permission_denied"
+      , false
+      , Error.Exn
+          (Error.Permission_denied
+             { label = "x"; login = "owner"; role = None; needs = []; message = "denied" })
+      )
+    ; "Not_found", false, Not_found
+    ];
+  Lwt.return_unit
+;;
+
 let () =
   let open Alcotest_lwt in
   let case name speed f = test_case name speed (fun (_ : Lwt_switch.t) () -> f ()) in
@@ -712,6 +760,7 @@ let () =
            ; case "failed pool retries" `Quick test_failed_pool_retries
            ; case "backoff" `Slow test_backoff
            ; case "on_failure" `Quick test_on_failure
+           ; case "is_connection_error" `Quick test_is_connection_error
            ; case "Pool.use returns errors" `Quick test_use_returns_errors
            ; case
                "Pool.use timeout hides passwords"

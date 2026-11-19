@@ -151,6 +151,13 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
         label, None)
   ;;
 
+  let is_connection_error = function[@warning "-4"]
+    | Error.Failed { Error.error; _ } | Caqti.Error.Exn error ->
+      Config.Driver.is_connection_error error
+    | Error.Exn (Error.Connection_failed _) -> true
+    | _ -> false
+  ;;
+
   (* A request and its parameters, printed for [on_failure] only when the
      statement failed. *)
   type statement =
@@ -185,7 +192,15 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
         | Some { sql; params } -> render "request" sql, render "parameters" params
       in
       Lwt.catch
-        (fun () -> on_failure { Pool_options.label; role; request; params; exn })
+        (fun () ->
+           on_failure
+             { Pool_options.label
+             ; role
+             ; request
+             ; params
+             ; exn
+             ; connection_error = is_connection_error exn
+             })
         (fun hook_exn ->
            Lwt.return
              (Log.err (fun m ->

@@ -60,6 +60,17 @@ module type Sig = sig
   (** The options the pools were made with. *)
   val options : Pool_options.t
 
+  (** [is_connection_error exn] is [true] when [exn], raised by a statement,
+      means the database is unreachable: a {!Veins.Error.Failed} (or
+      [Caqti.Error.Exn]) whose error [Config.Driver] reads as a lost or
+      refused connection, and [Veins.Error.Exn (Connection_failed _)]. These
+      are the errors on which veins drops the pool and reconnects, so an
+      application can tell an outage (log it, show "try again later") from a
+      statement that failed. [false] for anything else.
+      [Pool_options.failure.connection_error] carries the same answer to
+      [on_failure]. *)
+  val is_connection_error : exn -> bool
+
   (** {1 Pool lifecycle} *)
 
   module Pool : sig

@@ -404,7 +404,9 @@ module Db =
 
 **Reporting failures.** `on_failure` gets the label, the context's role, the request and its parameters (as Caqti
 prints them, for `exec`, `collect`, `find` and `find_opt`) and the exception the statement raises right after
-(`Error.Failed` or `Error.Exn`), e.g. to send it to an error tracker instead of wrapping every helper. Each error is
+(`Error.Failed` or `Error.Exn`), e.g. to send it to an error tracker instead of wrapping every helper. Its
+`connection_error` says whether the database was unreachable, so an outage can be logged instead of opening an issue
+per statement. Each error is
 reported once, where veins raises it, not again when it leaves `connection_ctx` or `transaction_ctx`; `Pool.ping`
 and the other `Pool` functions don't report. The statement waits for it, and an exception of it is logged and
 dropped.
@@ -426,6 +428,8 @@ limit. Idle connections are closed after `max_idle_age`.
 **Lost databases.** A connection error drops the pool, and the next statement reconnects. If that fails too, the
 pool backs off: statements fail right away with the last connection error, and after the wait a single statement
 tries again. The wait doubles up to the maximum and resets once a statement reached the database.
+`Db.is_connection_error exn` tells whether what a statement raised is such an error (the driver's lost or refused
+connection, or `Error.Connection_failed`), e.g. to show "could not connect, try again later" instead of a failure.
 `Pool.ping label` tells whether a database answers; `Pool.connect` only sets the pool up. `Veins.Connection.test url`
 checks a URL without a pool, and `Pool.test database` every URL of a database before (or after) it is registered: a
 failed test of the registered database sets its status to `ConnectionIssue`, the next successful one back to `Active`.

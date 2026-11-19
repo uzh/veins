@@ -26,6 +26,10 @@ type failure =
   ; exn : exn
     (** What the statement raises right after: {!Error.Failed} or
         {!Error.Exn}. *)
+  ; connection_error : bool
+    (** The database is unreachable: [Pools_sig.Sig.is_connection_error exn],
+        for an application that only logs during an outage instead of
+        reporting every statement. *)
   }
 
 type t =
