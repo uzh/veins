@@ -17,20 +17,20 @@ let check_migration name migration ~namespace ~steps ~dialects =
     (name ^ " namespace")
     namespace
     (Namespace.value migration.namespace);
-  Alcotest.(check int) (name ^ " step count") steps (List.length migration.steps);
+  Alcotest.(check int) (name ^ " step count") steps (CCList.length migration.steps);
   Alcotest.(check (list string))
     (name ^ " ids in order")
-    (List.init steps (fun i -> Printf.sprintf "00000000-0000-4000-8000-%012d" (i + 1)))
-    (List.map Id.value (step_ids migration));
-  List.iter
+    (CCList.init steps (fun i -> Printf.sprintf "00000000-0000-4000-8000-%012d" (i + 1)))
+    (CCList.map Id.value (step_ids migration));
+  CCList.iter
     (fun (step : Step.t) ->
        Alcotest.check kinds (name ^ " up dialects") dialects (Sql.kinds step.Step.up);
        Alcotest.check
          kinds
          (name ^ " down dialects")
          dialects
-         (Option.fold ~none:[] ~some:Sql.kinds step.Step.down);
-       List.iter
+         (CCOption.map_or ~default:[] Sql.kinds step.Step.down);
+       CCList.iter
          (fun kind ->
             Alcotest.(check bool)
               (name ^ " placeholder is not SQL")
@@ -63,9 +63,9 @@ let test_fixtures () =
 
 let test_random_ids () =
   let ids = T.random_ids (Random.State.make [| 42 |]) ~steps:4 in
-  Alcotest.(check int) "count" 4 (List.length ids);
-  Alcotest.(check int) "distinct" 4 (List.length (List.sort_uniq compare ids));
-  List.iter (fun id -> ignore (Migration.Id.create id)) ids
+  Alcotest.(check int) "count" 4 (CCList.length ids);
+  Alcotest.(check int) "distinct" 4 (CCList.length (CCList.sort_uniq ~cmp:compare ids));
+  CCList.iter (fun id -> ignore (Migration.Id.create id)) ids
 ;;
 
 let test_no_ids () =

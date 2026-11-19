@@ -4,9 +4,11 @@
 let () =
   match Sys.argv with
   | [| _; dialects; steps; namespace |] ->
-    let dialects = Option.get (Veins_gen_template.dialects_of_string dialects) in
+    let dialects =
+      CCOption.get_exn_or "dialects" (Veins_gen_template.dialects_of_string dialects)
+    in
     let ids =
-      List.init (int_of_string steps) (fun i ->
+      CCList.init (int_of_string steps) (fun i ->
         Printf.sprintf "00000000-0000-4000-8000-%012d" (i + 1))
     in
     print_string

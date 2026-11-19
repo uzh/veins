@@ -5,7 +5,7 @@ module Label = struct
   let value s = s
   let equal = CCString.equal
   let compare = CCString.compare
-  let hash = Hashtbl.hash
+  let hash = CCHash.string
   let pp = Format.pp_print_string
   let show s = s
 end
@@ -26,7 +26,7 @@ module Login = struct
   let is_owner = CCString.equal owner_name
   let equal = CCString.equal
   let compare = CCString.compare
-  let hash = Hashtbl.hash
+  let hash = CCHash.string
   let pp = Format.pp_print_string
   let show t = t
 end
@@ -75,7 +75,7 @@ module Url = struct
     let uri = to_uri url in
     match Uri.scheme uri with
     | Some ("postgresql" | "postgres")
-      when Option.is_none (Uri.get_query_param uri "connect_timeout") ->
+      when CCOption.is_none (Uri.get_query_param uri "connect_timeout") ->
       Uri.add_query_param' uri ("connect_timeout", "5")
     | Some _ | None -> uri
   ;;
@@ -93,7 +93,7 @@ module Url = struct
     let is_secret (name, _) =
       CCList.mem ~eq:CCString.equal (CCString.lowercase_ascii name) secret_params
     in
-    if Option.is_none with_password && not (CCList.exists is_secret query)
+    if CCOption.is_none with_password && not (CCList.exists is_secret query)
     then s
     else
       Uri.with_query

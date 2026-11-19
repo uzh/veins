@@ -5,7 +5,7 @@
 (executable
  (name gen_fixture)
  (modules gen_fixture)
- (libraries veins veins_gen_template))
+ (libraries veins veins_gen_template containers))
 
 (rule
  (with-stdout-to
@@ -41,4 +41,4 @@
  (name test_gen)
  (package veins)
  (modules test_gen fixture_both fixture_mariadb fixture_postgresql)
- (libraries veins veins_gen_template ptime alcotest))
+ (libraries veins veins_gen_template ptime alcotest containers))

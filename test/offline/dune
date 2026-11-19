@@ -9,6 +9,7 @@
   veins
   veins.mariadb
   veins_test_common
+  logs
   caqti
   caqti-lwt
   caqti-lwt.unix

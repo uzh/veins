@@ -23,7 +23,8 @@ let restore_autocommit dialect =
 
 let set_fk_checks dialect enabled =
   match dialect with
-  | Mariadb -> Some (Format.asprintf "SET FOREIGN_KEY_CHECKS = %d" (Bool.to_int enabled))
+  | Mariadb ->
+    Some (Format.asprintf "SET FOREIGN_KEY_CHECKS = %d" (CCBool.to_int enabled))
   | Postgresql -> None
 ;;
 

@@ -161,6 +161,9 @@ pool.
   only veins' own modules need stays out (a submodule removed there like `Ctx.Internal`, or a narrowed signature like
   `Url`, which hides `to_uri`). Doc references in signatures that are shown outside `Veins` (`pools_sig.mli`) name
   modules as `Veins.X`, so they resolve in the driver libraries' docs too.
+- **containers over the stdlib**: `CCOption`, `CCList`, `CCResult`, `CCString`, `CCFun`, `CCHash` etc., not `Option`,
+  `List`, …; only polymorphic `Hashtbl` tables stay (containers has no `CCHashtbl.create`; with a known key type use
+  `CCHashtbl.Make`).
 - **`.ml` files have no doc-comments** on types or functions that duplicate what is already in the corresponding `.mli`. Keep implementation files lean.
 - **Dialect SQL lives in `dialect.ml`** — never hardcode dialect-specific SQL in `migration.ml` or other modules;
   build requests with `Dialect.request`.

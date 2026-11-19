@@ -64,7 +64,7 @@ let () =
   let open Veins_gen_template in
   let now = Ptime_clock.now () in
   let args =
-    match Array.to_list Sys.argv with
+    match CCArray.to_list Sys.argv with
     | _ :: args -> args
     | [] -> assert false
   in
@@ -101,7 +101,7 @@ let () =
    | exception Sys_error msg -> die (Format.asprintf "Cannot create %s: %s" filename msg)
    | oc ->
      (match
-        Fun.protect
+        CCFun.protect
           ~finally:(fun () -> close_out_noerr oc)
           (fun () ->
              output_string oc content;

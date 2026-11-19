@@ -525,7 +525,7 @@ module Make (Db : Pools_sig.Sig) : RunnerSig = struct
       else (
         if waited = 0.
         then Log.info (fun m -> m "Waiting for another process migrating this database");
-        let pause = Float.min 0.5 (timeout -. waited) in
+        let pause = CCFloat.min 0.5 (timeout -. waited) in
         let%lwt () = Lwt_unix.sleep pause in
         acquire (waited +. pause))
     in

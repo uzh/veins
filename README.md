@@ -400,11 +400,22 @@ module Db =
 | `reconnect_backoff` | `(0.5, 30.)`  | Initial and longest wait before a pool that lost its database tries to reconnect    |
 | `on_failure`        | `None`        | Called with every error a statement raises, before it is raised                     |
 
-**Reporting failures.** `on_failure` gets the label, the context's role, the request (as Caqti prints it, for
-`exec`, `collect`, `find` and `find_opt`) and the exception the statement raises right after (`Error.Failed` or
-`Error.Exn`), e.g. to send it to an error tracker instead of wrapping every helper. Each error is reported once,
-where veins raises it, not again when it leaves `connection_ctx` or `transaction_ctx`; `Pool.ping` and the other
-`Pool` functions don't report. The statement waits for it, and an exception of it is logged and dropped.
+**Reporting failures.** `on_failure` gets the label, the context's role, the request and its parameters (as Caqti
+prints them, for `exec`, `collect`, `find` and `find_opt`) and the exception the statement raises right after
+(`Error.Failed` or `Error.Exn`), e.g. to send it to an error tracker instead of wrapping every helper. Each error is
+reported once, where veins raises it, not again when it leaves `connection_ctx` or `transaction_ctx`; `Pool.ping`
+and the other `Pool` functions don't report. The statement waits for it, and an exception of it is logged and
+dropped.
+
+Parameters of a type marked `redacted` print as `#redacted#`; everything else is printed as it is. Mark every
+secret (passwords, tokens, keys) in the request's type before reporting parameters anywhere:
+
+```ocaml
+let login =
+  {sql| SELECT id FROM users WHERE email = ? AND password_hash = ? |sql}
+  |> Caqti.Templater.(static T.(t2 string (redacted string) -->? string))
+(* reported as: "alice@example.com", #redacted# *)
+```
 
 **Connections.** There is one pool per label for the owner and one per login with a URL of its own, each opening
 up to `database_pool_size` connections: with many databases, keep that product under the server's connection
@@ -482,3 +493,14 @@ Environment variables used by the test suite (defaults match the devcontainer):
 | `POSTGRES_URL`                                   | `postgresql://root:root@database-postgres/development`      |
 | `MARIADB_{READER,WRITER,MIGRATOR}_URL`           | `MARIADB_URL` (a single all-rights user)                    |
 | `POSTGRES_{READER,WRITER,MIGRATOR}_URL`          | `POSTGRES_URL` (a single all-rights user)                   |
+
+## Release a new version
+
+1. Document the changes under `## [unreleased]` in `CHANGELOG.md`.
+1. On an up-to-date, clean `main`, run `make version-{patch|minor|major}`, or `make version V=X.Y.Z` to release a
+   version already set in `dune-project`. This sets the version in `dune-project` and `veins.opam`, turns the
+   unreleased section into `## [X.Y.Z](…) - date` under a new empty one, commits and tags `X.Y.Z`.
+1. Push the commit and the tag: `git push && git push origin X.Y.Z`.
+
+CI runs on the tag; when every job passes, the `release` job checks that the tag matches the package version and
+creates the GitHub release with that version's `CHANGELOG.md` section as its notes.

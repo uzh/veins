@@ -1,4 +1,4 @@
-.PHONY: all build test clean fmt fmt-check doc lint-opam watch help
+.PHONY: all build test clean fmt fmt-check doc lint-opam watch help version version-patch version-minor version-major
 
 OPAM_EXEC := opam exec --
 
@@ -41,6 +41,20 @@ deps:
 ## Watch for file changes and rebuild continuously
 watch:
 	$(OPAM_EXEC) dune build @all --watch
+
+## Release: bump dune-project/veins.opam, date the CHANGELOG section, commit and tag (on main)
+## make version-{patch|minor|major}, or make version V=X.Y.Z for an explicit version
+version:
+	@if [ -n "$(V)" ]; then ./scripts/bump-version.sh "$(V)"; else echo "Usage: make version-{patch|minor|major} or make version V=X.Y.Z"; fi
+
+version-patch:
+	./scripts/bump-version.sh --patch
+
+version-minor:
+	./scripts/bump-version.sh --minor
+
+version-major:
+	./scripts/bump-version.sh --major
 
 help:
 	@grep -E '^##' Makefile | sed 's/^## //'

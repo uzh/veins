@@ -26,7 +26,7 @@ module Schema = struct
 end
 
 let custom ~encode ~decode schema =
-  let encode data = encode data |> Result.map Data.make_value in
+  let encode data = encode data |> CCResult.map Data.make_value in
   Caqti.Template.Row_type.custom ~encode ~decode (Schema.make_type schema)
 ;;
 

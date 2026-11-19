@@ -28,7 +28,7 @@ let slugify s =
       (fun c ->
          match c with
          | 'a' .. 'z' | '0' .. '9' -> c
-         | 'A' .. 'Z' -> Char.lowercase_ascii c
+         | 'A' .. 'Z' -> CCChar.lowercase_ascii c
          | _ -> ' ')
       s
   in

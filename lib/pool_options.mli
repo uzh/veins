@@ -16,6 +16,13 @@ type failure =
         [collect], [find] and [find_opt]; [None] for statements run by a
         function ([query], [transaction], [populate], …) and for a request
         that raises when printed (logged). *)
+  ; params : string option
+    (** The request's parameters, as [Caqti.Template.Row.pp] prints them,
+        when there is a [request]: fields of a type marked secret with
+        [Row_type.redacted] show as [#redacted#], e.g. a password declared
+        [T.(redacted string)] in the request's type. Mark every secret so:
+        the rest is printed as it is. [None] when there is no [request] or
+        printing raised (logged; a custom type's encoder runs). *)
   ; exn : exn
     (** What the statement raises right after: {!Error.Failed} or
         {!Error.Exn}. *)
