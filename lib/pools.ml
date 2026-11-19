@@ -150,28 +150,38 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
         label, None)
   ;;
 
+  (* A request and its parameters, printed for [on_failure] only when the
+     statement failed. *)
+  type statement =
+    { sql : unit -> string
+    ; params : unit -> string
+    }
+
   let notify ?request ?role label exn =
     match options.Pool_options.on_failure with
     | None -> Lwt.return_unit
     | Some on_failure ->
-      (* Rendering may raise (Caqti's printer runs the request's generator
-         with a printing dialect): report without it, never instead of
-         [exn]. *)
-      let request =
-        CCOption.flat_map
-          (fun request ->
-             try Some (request ()) with
-             | render_exn ->
-               Log.warn (fun m ->
-                 m
-                   ~tags:(tags_of_key (label, None))
-                   "on_failure: request not rendered: %s"
-                   (Printexc.to_string render_exn));
-               None)
-          request
+      (* Printing may raise (Caqti's printer runs the request's generator
+         with a printing dialect, and custom types' encoders): report
+         without it, never instead of [exn]. *)
+      let render what print =
+        try Some (print ()) with
+        | render_exn ->
+          Log.warn (fun m ->
+            m
+              ~tags:(tags_of_key (label, None))
+              "on_failure: %s not printed: %s"
+              what
+              (Printexc.to_string render_exn));
+          None
+      in
+      let request, params =
+        match request with
+        | None -> None, None
+        | Some { sql; params } -> render "request" sql, render "parameters" params
       in
       Lwt.catch
-        (fun () -> on_failure { Pool_options.label; role; request; exn })
+        (fun () -> on_failure { Pool_options.label; role; request; params; exn })
         (fun hook_exn ->
            Lwt.return
              (Log.err (fun m ->
@@ -770,32 +780,43 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
 
   let query ~needs ctx f = run ~needs ctx f
 
-  let request ctx request f =
+  (* On one line: Caqti's printers put break hints between fields. *)
+  let one_line pp value = Format.asprintf "@[<h>%a@]" pp value
+
+  (* Parameters print as Caqti prints rows: fields of a [Row_type.redacted]
+     type as [#redacted#]. *)
+  let request ctx request input f =
     let caqti = Request.caqti request in
-    run
-      ~request:(fun () -> Format.asprintf "%a" Caqti.Template.Request.pp caqti)
-      ~needs:(Request.needs request)
-      ctx
-      (fun connection -> f connection caqti)
+    let statement =
+      { sql = (fun () -> one_line Caqti.Template.Request.pp caqti)
+      ; params =
+          (fun () ->
+            one_line
+              (Caqti.Template.Row.pp (Caqti.Template.Request.param_type caqti))
+              input)
+      }
+    in
+    run ~request:statement ~needs:(Request.needs request) ctx (fun connection ->
+      f connection caqti input)
   ;;
 
   let exec ctx req input =
-    request ctx req (fun (module Connection : Caqti_lwt.CONNECTION) req ->
+    request ctx req input (fun (module Connection : Caqti_lwt.CONNECTION) req input ->
       Connection.exec req input)
   ;;
 
   let collect ctx req input =
-    request ctx req (fun (module Connection : Caqti_lwt.CONNECTION) req ->
+    request ctx req input (fun (module Connection : Caqti_lwt.CONNECTION) req input ->
       Connection.collect_list req input)
   ;;
 
   let find ctx req input =
-    request ctx req (fun (module Connection : Caqti_lwt.CONNECTION) req ->
+    request ctx req input (fun (module Connection : Caqti_lwt.CONNECTION) req input ->
       Connection.find req input)
   ;;
 
   let find_opt ctx req input =
-    request ctx req (fun (module Connection : Caqti_lwt.CONNECTION) req ->
+    request ctx req input (fun (module Connection : Caqti_lwt.CONNECTION) req input ->
       Connection.find_opt req input)
   ;;
 

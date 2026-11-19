@@ -601,6 +601,58 @@ let test_on_failure () =
        same_exn "unprintable request" raised failure;
        Alcotest.(check (option string)) "unprintable request: no request" None request)
     (reports "unprintable request" 1);
+  (* parameters are reported, those of a redacted type masked *)
+  let login =
+    Caqti.Templater.static
+      T.(t2 string (redacted string) -->! int)
+      "SELECT 1 FROM users WHERE email = ? AND password = ?"
+  in
+  let%lwt (_ : exn) =
+    expect
+      "parameters"
+      (fun () ->
+         Reporting.find (Reporting.label_ctx label) login ("alice@example.com", "hunter2"))
+      Fun.id
+  in
+  CCList.iter
+    (fun { Pool_options.params; _ } ->
+       let params = CCOption.get_or ~default:"" params in
+       Alcotest.(check bool)
+         ("plain parameter shown in " ^ params)
+         true
+         (CCString.mem ~sub:"alice@example.com" params);
+       Alcotest.(check bool)
+         ("secret masked in " ^ params)
+         true
+         (CCString.mem ~sub:"#redacted#" params
+          && not (CCString.mem ~sub:"hunter2" params)))
+    (reports "parameters" 1);
+  (* a parameter whose encoder fails is reported without parameters *)
+  let rejecting =
+    Caqti.Template.Row_type.custom
+      ~encode:(fun (_ : int) -> Error "no encoding")
+      ~decode:(fun (_ : string) -> Error "no decoding")
+      T.string
+  in
+  let%lwt raised =
+    expect
+      "unprintable parameters"
+      (fun () ->
+         Reporting.find
+           (Reporting.label_ctx label)
+           (Caqti.Templater.static T.(rejecting -->! int) "SELECT ?")
+           1)
+      Fun.id
+  in
+  CCList.iter
+    (fun ({ Pool_options.request; params; _ } as failure) ->
+       same_exn "unprintable parameters" raised failure;
+       Alcotest.(check bool)
+         "unprintable parameters: request"
+         true
+         (Option.is_some request);
+       Alcotest.(check (option string)) "unprintable parameters: none" None params)
+    (reports "unprintable parameters" 1);
   let%lwt () =
     expect
       "failing hook"

@@ -2,6 +2,7 @@ type failure =
   { label : Entity.Label.t
   ; role : string option
   ; request : string option
+  ; params : string option
   ; exn : exn
   }
 

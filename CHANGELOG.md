@@ -51,7 +51,8 @@ To be released as 0.2.0.
 
 ### Added: reporting failures, driver-library options, sharing the pools
 
-- `Pool_options.on_failure`: called with every error a statement raises (label, role, request, the exception),
+- `Pool_options.on_failure`: called with every error a statement raises (label, role, request, its parameters
+  with fields of a `Row_type.redacted` type masked as `#redacted#`, the exception),
   once, where veins raises it, so an application can report failures (e.g. to an error tracker) without wrapping
   every helper. `Pool.ping` and the other `Pool` functions don't report. A record of `Pool_options.t` written out
   in full needs the new field.
