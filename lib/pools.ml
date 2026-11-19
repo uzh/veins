@@ -165,15 +165,18 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
       (* Printing may raise (Caqti's printer runs the request's generator
          with a printing dialect, and custom types' encoders): report
          without it, never instead of [exn]. *)
+      (* Only the exception's name: its message may carry the value that
+         failed to encode (a custom type's [Error], raised as [Reject]),
+         secret even when the field prints redacted. *)
       let render what print =
         try Some (print ()) with
         | render_exn ->
           Log.warn (fun m ->
             m
               ~tags:(tags_of_key (label, None))
-              "on_failure: %s not printed: %s"
+              "on_failure: %s not printed (%s)"
               what
-              (Printexc.to_string render_exn));
+              (Printexc.exn_slot_name render_exn));
           None
       in
       let request, params =

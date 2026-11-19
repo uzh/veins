@@ -635,23 +635,46 @@ let test_on_failure () =
          (CCString.mem ~sub:"#redacted#" params
           && not (CCString.mem ~sub:"hunter2" params)))
     (reports "parameters" 1);
-  (* a parameter whose encoder fails is reported without parameters *)
+  (* a parameter whose encoder fails is reported without parameters, and
+     the log doesn't show the encoder's message, which may hold the secret *)
   let rejecting =
     Caqti.Template.Row_type.custom
-      ~encode:(fun (_ : int) -> Error "no encoding")
+      ~encode:(fun token -> Error ("invalid token: " ^ token))
       ~decode:(fun (_ : string) -> Error "no decoding")
-      T.string
+      T.(redacted string)
   in
+  let logged = Buffer.create 256 in
+  let reporter = Logs.reporter () in
+  let level = Logs.level () in
+  let log_ppf = Format.formatter_of_buffer logged in
+  Logs.set_reporter (Logs.format_reporter ~app:log_ppf ~dst:log_ppf ());
+  Logs.set_level (Some Logs.Warning);
   let%lwt raised =
-    expect
-      "unprintable parameters"
+    Lwt.finalize
       (fun () ->
-         Reporting.find
-           (Reporting.label_ctx label)
-           (Caqti.Templater.static T.(rejecting -->! int) "SELECT ?")
-           1)
-      CCFun.id
+         expect
+           "unprintable parameters"
+           (fun () ->
+              Reporting.find
+                (Reporting.label_ctx label)
+                (Caqti.Templater.static T.(rejecting -->! int) "SELECT ?")
+                "s3cret-token")
+           CCFun.id)
+      (fun () ->
+         Format.pp_print_flush log_ppf ();
+         Logs.set_reporter reporter;
+         Logs.set_level level;
+         Lwt.return_unit)
   in
+  let logged = Buffer.contents logged in
+  Alcotest.(check bool)
+    ("rendering failure logged: " ^ logged)
+    true
+    (CCString.mem ~sub:"parameters not printed" logged);
+  Alcotest.(check bool)
+    ("no secret in the log: " ^ logged)
+    false
+    (CCString.mem ~sub:"s3cret-token" logged);
   CCList.iter
     (fun ({ Pool_options.request; params; _ } as failure) ->
        same_exn "unprintable parameters" raised failure;
