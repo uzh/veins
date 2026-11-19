@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ["*"]
   pull_request:
   schedule:
     - cron: "0 5 * * 1"
@@ -294,3 +295,42 @@ jobs:
           tar -xzf "${archive}" gitleaks
       - name: gitleaks
         run: ${{ runner.temp }}/gitleaks git --redact --verbose .
+
+  release:
+    name: Release a new version
+    needs: [formatting, linting, test, package-scan, sast, secret-detection]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag matches the package version
+        run: |
+          version=$(sed -n 's/^(version \(.*\))$/\1/p' dune-project)
+          opam_version=$(sed -n 's/^version: "\(.*\)"$/\1/p' veins.opam)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$version" ] || [ "$tag" != "$opam_version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match dune-project (${version}) / veins.opam (${opam_version})"
+            exit 1
+          fi
+
+      - name: Extract version changelog
+        run: |
+          awk -v version="${GITHUB_REF_NAME#v}" '
+            /^## / { if (found) exit; found = index($0, "## [" version "]") == 1; next }
+            found
+          ' CHANGELOG.md > changes.md
+          if ! grep -q '[^[:space:]]' changes.md; then
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}"
+            exit 1
+          fi
+          cat changes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body_path: changes.md

@@ -493,3 +493,14 @@ Environment variables used by the test suite (defaults match the devcontainer):
 | `POSTGRES_URL`                                   | `postgresql://root:root@database-postgres/development`      |
 | `MARIADB_{READER,WRITER,MIGRATOR}_URL`           | `MARIADB_URL` (a single all-rights user)                    |
 | `POSTGRES_{READER,WRITER,MIGRATOR}_URL`          | `POSTGRES_URL` (a single all-rights user)                   |
+
+## Release a new version
+
+1. Document the changes under `## [unreleased]` in `CHANGELOG.md`.
+1. On an up-to-date, clean `main`, run `make version-{patch|minor|major}`, or `make version V=X.Y.Z` to release a
+   version already set in `dune-project`. This sets the version in `dune-project` and `veins.opam`, turns the
+   unreleased section into `## [X.Y.Z](…) - date` under a new empty one, commits and tags `X.Y.Z`.
+1. Push the commit and the tag: `git push && git push origin X.Y.Z`.
+
+CI runs on the tag; when every job passes, the `release` job checks that the tag matches the package version and
+creates the GitHub release with that version's `CHANGELOG.md` section as its notes.
