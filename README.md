@@ -22,7 +22,7 @@ opam install veins caqti-driver-postgresql   # for PostgreSQL
 There is one opam package, `veins`. Its driver libraries are installed when their Caqti driver is, so name both in
 your opam file and the library in dune:
 
-```
+```dune
 depends: [ "veins" "caqti-driver-mariadb" ]
 ```
 
