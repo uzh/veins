@@ -161,11 +161,41 @@ jobs:
           OPAMSWITCH: ${{ github.workspace }}
         run: opam exec -- ~/tools/_opam/bin/opam-dune-lint
 
-      - name: Documentation (odoc warnings are errors)
-        if: success() || failure()
+  documentation:
+    name: Documentation
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ env.OCAML_VERSION }}
+      - name: Restore veins' dependencies
+        uses: actions/cache/restore@v6
+        with:
+          path: _opam
+          key: ${{ needs.setup.outputs.deps-key }}
+          fail-on-cache-miss: true
+
+      - name: odoc (warnings are errors)
         env:
           ODOC_WARN_ERROR: "true"
         run: opam exec -- dune build @doc
+
+      - name: Assemble the site, its root redirecting to the package page
+        run: |
+          site="${RUNNER_TEMP}/site"
+          cp -R _build/default/_doc/_html "$site"
+          chmod -R u+w "$site"
+          printf '%s\n' '<!DOCTYPE html>' '<meta charset="utf-8">' '<title>veins</title>' \
+            '<meta http-equiv="refresh" content="0; url=veins/index.html">' \
+            '<a href="veins/index.html">veins</a>' > "$site/index.html"
+
+      - name: Upload the documentation site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/site
 
   test:
     name: Type checking and tests
@@ -296,9 +326,29 @@ jobs:
       - name: gitleaks
         run: ${{ runner.temp }}/gitleaks git --redact --verbose .
 
+  pages:
+    name: Publish the documentation
+    needs: [documentation, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
   release:
     name: Release a new version
-    needs: [formatting, linting, test, package-scan, sast, secret-detection]
+    needs: [formatting, linting, documentation, test, package-scan, sast, secret-detection]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10

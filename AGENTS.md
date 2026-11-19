@@ -11,7 +11,7 @@ make build          # dune build @all
 make test           # dune test (needs live DBs — see below)
 make format         # dune fmt (in-place)
 make format-check   # dune build @fmt (CI check)
-make doc            # odoc → _build/default/_doc/_html/
+make doc            # odoc → _build/default/_doc/_html/veins/ (CI publishes it to GitHub Pages from main)
 make lint-opam      # opam lint *.opam
 make watch          # dune build @all --watch
 make deps           # opam install . --deps-only --with-test
@@ -49,6 +49,7 @@ make test
 | `test/common/` | Helpers shared by the integration suites (`veins_test_common`) |
 | `test/mariadb/`, `test/postgresql/` | Integration suites per dialect (`test/common/suite.ml`), each links only its driver |
 | `test/offline/` | Resilience and role checks against a fake server (MariaDB driver, no database) |
+| `doc/index.mld` | Package landing page of the odoc docs (https://uzh.github.io/veins/) |
 | `dune-project` | Source of truth for the package and its dependencies (drivers are `depopts`) |
 
 ## Key Architecture

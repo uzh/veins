@@ -19,6 +19,8 @@
 
 (homepage "https://github.com/uzh/veins")
 
+(documentation "https://uzh.github.io/veins/")
+
 (bug_reports "https://github.com/uzh/veins")
 
 (package

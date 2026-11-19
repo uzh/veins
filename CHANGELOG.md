@@ -4,6 +4,11 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [Unreleased](https://github.com/uzh/veins/tree/HEAD)
 
+### Added
+
+- API documentation on GitHub Pages: <https://uzh.github.io/veins/>, published from `main` by CI, with a package
+  landing page (`doc/index.mld`).
+
 ## [0.2.0](https://github.com/uzh/veins/tree/0.2.0) - 2026-11-19
 
 Entries marked 💥 break existing code. The context design (`Veins.Ctx`) is Reynir Björnsson's database

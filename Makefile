@@ -28,7 +28,7 @@ format-check:
 ## Build odoc documentation
 doc:
 	$(OPAM_EXEC) dune build @doc
-	@echo "Docs at _build/default/_doc/_html/index.html"
+	@echo "Docs at _build/default/_doc/_html/veins/index.html"
 
 ## Validate .opam files (mirrors CI lint-opam)
 lint-opam:
