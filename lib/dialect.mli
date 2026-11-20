@@ -116,20 +116,53 @@ val uuid_value_fragment : kind -> string -> string
 (** {1 Migration state}
 
     The table is {!Migration.state_table}: [veins_migration_state], or
-    [VEINS_MIGRATION_TABLE]. *)
+    [VEINS_MIGRATION_TABLE]. One row per step: a numeric [id] (primary key),
+    the step's [uuid] (unique), [namespace], [label], [status] ([applied] or
+    [failed]; a MariaDB [ENUM], a PostgreSQL [VARCHAR] with a [CHECK]),
+    [last_error], [run_at], [created_at] and [updated_at]. *)
 
+(** Creates the table in its current layout, if there is none. *)
 val create_migration_table : kind -> table:string -> string
 
-(** [SELECT id FROM <table>]: every applied step id. *)
-val select_applied_ids : kind -> table:string -> string
+(** Counts the columns of the given name in a table of the connection's
+    database. Parameters: the table name, the column name. *)
+val column_exists : kind -> string
 
-(** [SELECT id, namespace FROM <table>]: every applied step with its
-    namespace, for drift detection. *)
-val select_applied_rows : kind -> table:string -> string
+(** The name of a table's primary key constraint (no row without one).
+    Parameter: the table name. *)
+val primary_key_name : kind -> string
 
-(** Records an applied step. Parameters: id, namespace, label, created_at,
-    updated_at. *)
-val insert_applied_step : kind -> table:string -> string
+(** Upgrades a table of the first layout ([id] the step's UUID and primary
+    key, no [status], [last_error], [run_at]) to the current one: [id]
+    becomes [uuid], a new numeric [id] the primary key, every row [applied].
+    One statement on MariaDB; on PostgreSQL several, to run in one
+    transaction. [primary_key] is the name of the table's primary key
+    constraint ({!primary_key_name}), used on PostgreSQL only. *)
+val upgrade_migration_table : kind -> table:string -> primary_key:string -> string list
 
-(** Removes a step's record. Parameter: id. *)
-val delete_applied_step : kind -> table:string -> string
+(** Every row: id, uuid (dashed), namespace, label, status, last_error and
+    [COALESCE(run_at, created_at)], by id. *)
+val select_state_rows : kind -> table:string -> string
+
+(** {!select_state_rows} for a table of the first layout, not upgraded yet:
+    no id ([NULL]), every row [applied], no error, [created_at]. *)
+val select_state_rows_v1 : kind -> table:string -> string
+
+(** Writes a step's row, or updates the one it has (on [uuid]): status,
+    run_at and updated_at are replaced, last_error only by a value that isn't
+    [NULL]. Parameters: uuid, namespace, label, status, last_error, run_at,
+    created_at, updated_at. *)
+val upsert_step_row : kind -> table:string -> string
+
+(** {!upsert_step_row} that leaves an existing row as it is. *)
+val insert_step_row_if_missing : kind -> table:string -> string
+
+(** [repair_mark_applied kind ~table ~uuid]: the statement an admin runs to
+    mark a failed step applied after completing it by hand, with the UUID
+    written out ([UNHEX(REPLACE('…', '-', ''))] on MariaDB). *)
+val repair_mark_applied : kind -> table:string -> uuid:string -> string
+
+(** [repair_delete kind ~table ~uuid]: the statement an admin runs to remove
+    a failed step's row after undoing what it left behind, so the step runs
+    again. *)
+val repair_delete : kind -> table:string -> uuid:string -> string

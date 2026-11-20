@@ -116,51 +116,162 @@ let create_migration_table dialect ~table =
   | Mariadb ->
     Format.asprintf
       {|CREATE TABLE IF NOT EXISTS %s (
-          id          BINARY(16)   NOT NULL,
+          id          BIGINT       NOT NULL AUTO_INCREMENT,
+          uuid        BINARY(16)   NOT NULL,
           namespace   VARCHAR(128) NOT NULL,
           label       VARCHAR(256) NOT NULL,
+          status      ENUM('applied','failed') NOT NULL DEFAULT 'applied',
+          last_error  TEXT         NULL,
+          run_at      DATETIME(3)  NULL,
           created_at  DATETIME(3)  NOT NULL,
           updated_at  DATETIME(3)  NOT NULL,
-          PRIMARY KEY (id)
+          PRIMARY KEY (id),
+          UNIQUE KEY %s_uuid (uuid)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci|}
+      table
       table
   | Postgresql ->
     Format.asprintf
       {|CREATE TABLE IF NOT EXISTS %s (
-          id          UUID         NOT NULL,
+          id          BIGINT       GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          uuid        UUID         NOT NULL,
           namespace   VARCHAR(128) NOT NULL,
           label       VARCHAR(256) NOT NULL,
+          status      VARCHAR(16)  NOT NULL DEFAULT 'applied'
+                      CONSTRAINT %s_status CHECK (status IN ('applied', 'failed')),
+          last_error  TEXT         NULL,
+          run_at      TIMESTAMPTZ  NULL,
           created_at  TIMESTAMPTZ  NOT NULL,
           updated_at  TIMESTAMPTZ  NOT NULL,
-          PRIMARY KEY (id)
+          CONSTRAINT %s_uuid UNIQUE (uuid)
         )|}
+      table
+      table
       table
 ;;
 
-let select_applied_ids dialect ~table =
+let column_exists dialect =
+  match dialect with
+  | Mariadb ->
+    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND \
+     table_name = ? AND column_name = ?"
+  | Postgresql ->
+    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ANY \
+     (current_schemas(false)) AND table_name = LOWER(?) AND column_name = LOWER(?)"
+;;
+
+let primary_key_name dialect =
+  match dialect with
+  | Mariadb ->
+    "SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema \
+     = DATABASE() AND table_name = ? AND constraint_type = 'PRIMARY KEY'"
+  | Postgresql ->
+    "SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema \
+     = ANY (current_schemas(false)) AND table_name = LOWER(?) AND constraint_type = \
+     'PRIMARY KEY'"
+;;
+
+let upgrade_migration_table dialect ~table ~primary_key =
+  match dialect with
+  | Mariadb ->
+    [ Format.asprintf
+        {|ALTER TABLE %s
+            CHANGE id uuid BINARY(16) NOT NULL,
+            DROP PRIMARY KEY,
+            ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST,
+            ADD UNIQUE KEY %s_uuid (uuid),
+            ADD COLUMN status ENUM('applied','failed') NOT NULL DEFAULT 'applied' AFTER label,
+            ADD COLUMN last_error TEXT NULL AFTER status,
+            ADD COLUMN run_at DATETIME(3) NULL AFTER last_error|}
+        table
+        table
+    ]
+  | Postgresql ->
+    [ Format.asprintf "ALTER TABLE %s RENAME COLUMN id TO uuid" table
+    ; Format.asprintf "ALTER TABLE %s DROP CONSTRAINT \"%s\"" table primary_key
+    ; Format.asprintf
+        {|ALTER TABLE %s
+            ADD COLUMN id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            ADD CONSTRAINT %s_uuid UNIQUE (uuid),
+            ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'applied'
+              CONSTRAINT %s_status CHECK (status IN ('applied', 'failed')),
+            ADD COLUMN last_error TEXT NULL,
+            ADD COLUMN run_at TIMESTAMPTZ NULL|}
+        table
+        table
+        table
+    ]
+;;
+
+let select_state_rows dialect ~table =
   Format.asprintf
-    "SELECT %s AS id FROM %s"
+    "SELECT id, %s AS uuid, namespace, label, status, last_error, COALESCE(run_at, \
+     created_at) FROM %s ORDER BY id"
+    (uuid_select_fragment dialect ~field:"uuid")
+    table
+;;
+
+let select_state_rows_v1 dialect ~table =
+  Format.asprintf
+    "SELECT NULL, %s AS uuid, namespace, label, 'applied', NULL, created_at FROM %s \
+     ORDER BY created_at"
     (uuid_select_fragment dialect ~field:"id")
     table
 ;;
 
-let select_applied_rows dialect ~table =
-  Format.asprintf
-    "SELECT %s AS id, namespace FROM %s"
-    (uuid_select_fragment dialect ~field:"id")
-    table
+let upsert_step_row dialect ~table =
+  match dialect with
+  | Mariadb ->
+    Format.asprintf
+      "INSERT INTO %s (uuid, namespace, label, status, last_error, run_at, created_at, \
+       updated_at) VALUES (%s, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = \
+       VALUES(status), last_error = COALESCE(VALUES(last_error), last_error), run_at = \
+       VALUES(run_at), updated_at = VALUES(updated_at)"
+      table
+      (uuid_value_fragment dialect "?")
+  | Postgresql ->
+    Format.asprintf
+      "INSERT INTO %s AS s (uuid, namespace, label, status, last_error, run_at, \
+       created_at, updated_at) VALUES (%s, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (uuid) DO \
+       UPDATE SET status = EXCLUDED.status, last_error = COALESCE(EXCLUDED.last_error, \
+       s.last_error), run_at = EXCLUDED.run_at, updated_at = EXCLUDED.updated_at"
+      table
+      (uuid_value_fragment dialect "?")
 ;;
 
-let insert_applied_step dialect ~table =
-  Format.asprintf
-    "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES (%s, ?, ?, ?, \
-     ?)"
-    table
-    (uuid_value_fragment dialect "?")
+let insert_step_row_if_missing dialect ~table =
+  match dialect with
+  | Mariadb ->
+    Format.asprintf
+      "INSERT INTO %s (uuid, namespace, label, status, last_error, run_at, created_at, \
+       updated_at) VALUES (%s, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE uuid = uuid"
+      table
+      (uuid_value_fragment dialect "?")
+  | Postgresql ->
+    Format.asprintf
+      "INSERT INTO %s (uuid, namespace, label, status, last_error, run_at, created_at, \
+       updated_at) VALUES (%s, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (uuid) DO NOTHING"
+      table
+      (uuid_value_fragment dialect "?")
 ;;
 
-let delete_applied_step dialect ~table =
-  Format.asprintf "DELETE FROM %s WHERE id = %s" table (uuid_value_fragment dialect "?")
+(* A UUID as an SQL literal, for statements printed for an admin to run. *)
+let uuid_literal dialect uuid =
+  let quoted = "'" ^ CCString.replace ~sub:"'" ~by:"''" uuid ^ "'" in
+  match dialect with
+  | Mariadb -> Format.asprintf "UNHEX(REPLACE(%s, '-', ''))" quoted
+  | Postgresql -> quoted
+;;
+
+let repair_mark_applied dialect ~table ~uuid =
+  Format.asprintf
+    "UPDATE %s SET status = 'applied' WHERE uuid = %s"
+    table
+    (uuid_literal dialect uuid)
+;;
+
+let repair_delete dialect ~table ~uuid =
+  Format.asprintf "DELETE FROM %s WHERE uuid = %s" table (uuid_literal dialect uuid)
 ;;
 
 let request policy request_type sql =

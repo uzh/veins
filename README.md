@@ -3,7 +3,7 @@
 Database connection pooling and schema migration library for OCaml.
 
 - **Connection pools** — label-based multi-database pool management backed by [Caqti](https://github.com/paurkedal/ocaml-caqti) and Lwt
-- **Migrations** — ordered, versioned, up/down migration steps with a global registry and drift detection
+- **Migrations** — roll-forward migrations in typed sets, each step tracked, failures recorded, a startup check and a read-only dry run for CI
 - **MariaDB and PostgreSQL** — veins' SQL follows each connection's dialect; use the driver library you need
   (`veins.mariadb` or `veins.postgresql`)
 - **Roles or a single user** — statements checked against typed roles at compile time, or `Plain` pools without
@@ -207,7 +207,7 @@ let rename ctx name = Db.exec ctx create_user name
 These are the same pools underneath (`Db.With_roles`), every context being one of `Role.owner`: reconnects,
 transactions, errors and `Pool` behave as above. Two bridges to code written with roles:
 
-- `Veins.Migration.Make (Db.With_roles)` is the migration runner (leave its `?role` out).
+- `Veins.Migration.App.Make (Db.With_roles)` runs the migrations (leave its `?role` out).
 - `Plain.Ctx.with_roles ctx` is the same context for functions that state their needs, e.g. those of a library:
   the single user grants whatever is asked for, and the statements join `ctx`'s transaction.
 
@@ -216,6 +216,10 @@ configuration adds `database_pool_size`; over pools of your own, `Veins.Plain.Ma
 (Config) (Options))`.
 
 ## Migrations
+
+Migrations are **roll-forward only**: there are no downs and no rollbacks, a mistake is fixed by a new migration.
+Each step runs on its own, a failed step is recorded and blocks further runs until an admin repairs it by hand, and
+the application refuses to start on a database whose migration state isn't clean. Both dialects behave the same.
 
 ### Generating a migration file
 
@@ -236,8 +240,8 @@ SQL placeholders for that dialect only (`Sql.only`), the default `both` writes o
 read only before the description, so `veins-gen "fix --steps bug"` is a description; put `--` before a description
 that starts with `-`.
 
-The generated file defines each step on its own, then adds them to the migration and registers it (the files in
-[`test/gen`](test/gen) are complete examples, compiled and linked by the tests):
+The generated file defines each step on its own, then adds them to the migration and registers it into the default
+set (the files in [`test/gen`](test/gen) are complete examples, compiled and linked by the tests):
 
 ```ocaml
 open Veins
@@ -249,11 +253,9 @@ let step_1 =
       ~postgresql:{sql|TODO: forward SQL|sql}
       ()
   in
-  let down = (* the same, with TODO: reverse SQL *) in
   Migration.Step.create
     ~id:(Migration.Id.create "30d5a1e5-81eb-4de6-b81e-6f0695ab3421")
     ~label:"TODO: describe step 1"
-    ~down
     up
 ;;
 
@@ -266,66 +268,185 @@ let migration =
 let () = Migration.register migration
 ```
 
-Rename the steps after what they do, fill in the SQL, then link the file into your application. Every statement
-names the dialects it is written for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one out if the
-application never runs on it), `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs
-anywhere. Before a run applies anything, the runner checks that every pending step has SQL for the connection's
-dialect (`Runner.verify`), so a MariaDB-only migration fails up front on PostgreSQL instead of half way. SQL that
-starts with `TODO:`, the generator's placeholder (`Sql.is_placeholder`), fails that check like missing SQL. `down`
-likewise refuses to revert anything while an applied step's `down` is one: write it, or drop `~down`.
+Rename the steps after what they do and fill in the SQL; write one statement per step where possible. Every
+statement names the dialects it is written for: `Sql.v ~mariadb ~postgresql ()` for one statement each (leave one
+out if the application never runs on it), `Sql.only kind sql` for a single dialect, `Sql.any sql` for SQL that runs
+anywhere. Before a run applies anything, veins checks that every pending step has SQL for the connection's dialect,
+so a MariaDB-only migration fails up front on PostgreSQL instead of half way. SQL that starts with `TODO:`, the
+generator's placeholder (`Sql.is_placeholder`), fails that check like missing SQL.
 
 `~id` may be left out: the step then gets `Id.derive` of the namespace and its position, which is stable as long as
-steps are only ever appended. Every file that calls `Migration.register` contributes its steps to the global
-registry — no explicit list to maintain.
+steps are only ever appended.
 
-### Applying migrations
+**Linking.** A migration file registers itself when its module is initialised, and nothing references it: the
+linker drops it unless its library is linked whole. Put `(library_flags (-linkall))` on the library holding the
+migrations (or `(link_flags (-linkall))` on the executable).
 
-```ocaml
-module Runner = Migration.Make (Db)
+### Migrations in an application
 
-let root = Label.create "root"
-
-(* Apply all pending migrations in chronological order. *)
-let () = Lwt_main.run
-  (match%lwt Runner.run_all root () with
-   | Ok () -> Lwt.return_unit
-   | Error e -> failwith (Error.show e))
-```
-
-Each runner call holds one connection, as the database owner unless you pass another role, e.g.
-`Runner.run_all ~role:migrator root ()`; migration statements declare no needs, the login's grants limit them.
-
-`run_all`, `up`, `down` and `mark_applied` hold a lock on the database while they run (MariaDB `GET_LOCK`,
-PostgreSQL advisory lock), so instances starting together apply each step once; the others wait, at most
-`VEINS_MIGRATION_LOCK_TIMEOUT` seconds (default 600). `status`, `pending` and `check` only read: no lock, no DDL,
-so a read-only role can call them. The state table is `veins_migration_state`, or the plain table name in
-`VEINS_MIGRATION_TABLE`.
-
-### Drift detection
+An application registers its migrations, then calls one function to migrate and one to check at startup. With one
+kind of database, register into the default set (`Migration.register`, as the generated files do) and use
+`Migration.App.Make`:
 
 ```ocaml
-(* Returns a list of drift values — Pending (steps not yet applied),
-   Orphaned (applied IDs no longer present in the registry) or Unsupported
-   (pending steps without SQL for the connection's dialect). *)
-let%lwt drifts = Runner.check (Label.create "root") () in
-List.iter (function
-  | Migration.Pending { namespace; pending_steps; _ } ->
-    Printf.eprintf "pending: %s (%d steps)\n" (Migration.Namespace.show namespace) pending_steps
-  | Migration.Orphaned { namespace; step_ids } ->
-    Printf.eprintf "orphaned in %s: %d step(s)\n"
-      (Migration.Namespace.show namespace) (List.length step_ids)
-  | Migration.Unsupported { namespace; steps; _ } ->
-    Printf.eprintf "no SQL for this dialect in %s: %s\n"
-      (Migration.Namespace.show namespace) (String.concat ", " steps))
-  drifts
+module Migrate = Migration.App.Make (Db)
+
+(* the application's "migrate" command: up, dry-run, status, check *)
+let migrate args = Migrate.command_exit [ root ] args
+
+(* at startup: raises unless the database is clean *)
+let start () = Migrate.ensure_clean ~skip:(is_test ()) [ root ]
 ```
 
-### Coming from a counter-based engine
+With several kinds of databases, say a root database and tenants, give each kind a typed set and tell veins which
+set each database uses. `register` requires `~sets`, so a migration can't land in every set by accident, and a tag
+that isn't one of the sets doesn't compile:
 
-`Migration.Counter_state.Make (Db)` imports a table like Sihl's `core_migration_state` (one row per namespace:
-steps applied, dirty flag): `import` marks the counted steps as applied (their ids derived from the positions, so
-leave `~id` out), refuses dirty namespaces, and `record` keeps the counter up to date for a rollback to the previous
-engine. It is deprecated from the start: drop it once every database ran the import.
+```ocaml
+module Sets =
+  Migration.Sets.Make
+    (struct
+      type t = [ `Root | `Tenant ]
+
+      let all = [ `Root; `Tenant ]
+      let name = function `Root -> "root" | `Tenant -> "tenant"
+      let out_of_order = function `Root -> `Fail | `Tenant -> `Warn
+    end)
+    (Db)
+
+module Migrate = Sets.App (struct
+    let set_for label = if Label.equal label root then `Root else `Tenant
+  end)
+
+(* in a migration file *)
+let () = Sets.register ~sets:[ `Tenant ] migration
+```
+
+The same namespace twice in one set raises when it is registered; the same namespace in different sets is fine.
+Registration can happen at module initialisation or later: a set is read when it is used.
+
+**Order.** `written_at` is the one timeline: a set runs in `written_at` order, ties broken by namespace
+(`Migration.order`). A migration that depends on another is written after it; when that isn't so, out-of-order
+detection (below) says so.
+
+**`migrate`** orders the set, takes the migration lock, upgrades the state table if needed, then refuses if a
+pending step has no SQL for the dialect, if the database is uninitialized (no migration state, but other tables:
+import first, see below), if a step has failed, or if a migration is out of order under `` `Fail ``. Otherwise it runs
+the pending steps in order, each on its own, and stops at the first failure. Errors, also an unreachable database,
+are returned, not raised.
+
+**`command`** is the application's migrate command, given its arguments; it prints, runs every label and returns the
+worst exit code, so CI and deploy scripts see a failure without parsing output (`command_exit` calls `exit` with it):
+
+| Arguments | Does | Exit code |
+| --- | --- | --- |
+| `[]`, `["up"]` | `migrate` every label | 0, or 1 if any fails |
+| `["up"; "--allow-out-of-order"; ns; …]` | the same, allowing `ns` out of order; the flag can be repeated | 0, or 1 |
+| `["dry-run"]` (same flags) | what `migrate` would do, read-only | 0, or 1 if `migrate` would refuse on any label |
+| `["status"]` | each label's report, failed steps with UUID, `last_error` and the repair SQL | 0 |
+| `["check"]` | the same | 0, or 1 unless every label is clean |
+| anything else | the usage | 2 |
+
+An error that prevents the answer (an unreachable database) is 1 too: CI never passes because the database couldn't
+be reached.
+
+#### When a step fails
+
+The failed step gets a row with `status = 'failed'`, the error in `last_error` and `run_at`; the steps before it stay
+applied, nothing after it runs. On PostgreSQL the step's transaction reverts what it did; on MariaDB DDL commits
+implicitly, so a step with several statements can be left half applied (one statement per step!). A missing
+privilege is such a failure too: the database's error ends up in `last_error`.
+
+While a step of the set has failed, `migrate` refuses and names it. An admin inspects the database and repairs it by
+hand, addressing the row by the step's UUID (the same on every database, unlike the row's `id`); the refusal,
+`report` and `command ["status"]` print both statements for the connection's dialect, ready to copy:
+
+| The admin… | MariaDB | PostgreSQL | Next `migrate` |
+| --- | --- | --- | --- |
+| completed the step by hand | `UPDATE veins_migration_state SET status = 'applied' WHERE uuid = UNHEX(REPLACE('<uuid>', '-', ''))` | `UPDATE veins_migration_state SET status = 'applied' WHERE uuid = '<uuid>'` | continues after it |
+| undid what the step left behind | `DELETE FROM veins_migration_state WHERE uuid = UNHEX(REPLACE('<uuid>', '-', ''))` | `DELETE FROM veins_migration_state WHERE uuid = '<uuid>'` | runs it again |
+
+`last_error` stays after the `UPDATE`, as a record of what happened. Veins has no retry flag and no repair command.
+
+#### Out of order
+
+A pending migration is out of order when the set already has an applied migration that comes after it: what happens
+when an older branch is merged after a newer migration was deployed (a step appended to an older migration counts
+too). The policy is per set: `` `Fail `` (the default set's) refuses and names each one with the newest applied
+migration; `` `Warn `` logs and runs it. `dry_run`, `report` and `check` list them under either policy.
+
+Under `` `Fail `` there are two ways out:
+
+1. **Move its `written_at`** after the newest applied migration. That's the normal way. Keep the namespace, even one
+   that holds a timestamp: step UUIDs derive from the namespace, not from `written_at`, so where the migration ran
+   already it stays applied, and a fresh database runs it in the same place as every other one.
+2. **Allow it by name** on the database that refuses it: `command ["up"; "--allow-out-of-order"; ns]`. A migration
+   that is out of order and isn't named is still refused; once it ran, it's applied and never out of order again on
+   that database. In CI, set the pipeline variable `ALLOW_OUT_OF_ORDER` (namespaces separated by commas or
+   whitespace): `up` and `dry-run` both read it, so the preflight and the deploy check and apply the same allowance.
+   A name that isn't out of order is ignored with a log line.
+
+A migration allowed this way runs later on that database than on a fresh one, so it must not depend on the order; if
+in doubt, move its `written_at`.
+
+#### Startup
+
+A database's `Status.t` is what `migrate` would do with it: `Ready` (nothing to run), `Pending` (`migrate` runs the
+pending steps) or `Blocked (refusal, report)` (`migrate` refuses, a person has to act first; the `Refusal.t` is the
+reason: a failed step, an uninitialized database, steps without SQL for the dialect, out-of-order migrations of a
+`` `Fail `` set, a namespace twice).
+
+`ensure_clean labels` reads every label's status and, unless each is `Ready`, logs what `migrate` would do and
+raises `Error.Exn (Migration_not_clean _)`, so the application doesn't start. Rows outside the set (orphaned) and
+out-of-order migrations of a `` `Warn `` set are logged, not raised. `~skip:true` reads nothing, for tests. An
+application that must keep serving the other databases when one isn't ready (tenants) uses `ready` or
+`check ~policy:(`Fail | `Warn | `Skip)` per database instead, e.g. `Pending` → maintenance until migrated,
+`Blocked` → maintenance until repaired. `report` gives the full picture.
+
+#### Dry run in CI
+
+`dry_run` (`command ["dry-run"]`) answers "would `migrate` run, and what would it do?" without changing anything:
+it reads the state table and `information_schema`, takes no lock and writes nothing, so it works with a read-only
+login. A pipeline can run it on every merge request against the production database (read-only credentials as a CI
+secret) and catch an out-of-order migration before it's merged, not at deploy time. CI uses the set's own policy,
+the same as production.
+
+#### Roll-forward: keep the previous release working
+
+There are no rollbacks. An older release deployed in an emergency runs against the newer schema: it reports the
+rows it doesn't know as orphaned and starts anyway, so the schema must work for it. Expand, then contract in a later
+release: add a column nullable or with a default, drop the old one only once no release reads it, never rename in
+place.
+
+#### Importing another engine's state
+
+A database migrated by another engine has tables but no veins rows, so `migrate` refuses it as uninitialized. Import
+its state once per database, from a command of the application's own (it needs the application's migrations):
+
+```ocaml
+Migrate.Import.run ~source:(Migration.Import.counter_state ()) root
+```
+
+`counter_state ?table ()` reads a counter table like Sihl's `core_migration_state` (namespace, version, dirty): the
+first `version` steps of each namespace become `applied` rows, a dirty namespace's next step a `failed` row
+(`last_error` `"<table>: marked dirty after <n> step(s)"`), repaired by hand like any failed step. The import runs
+under the migration lock, never refuses, only writes rows for steps that have none and reports namespaces the set
+doesn't know and counters larger than a migration's steps. Other engines fit the same `Import.Source` (entries of
+namespace, applied count, failure).
+
+#### The state table
+
+`veins_migration_state` (or the plain table name in `VEINS_MIGRATION_TABLE`) has one row per step: a numeric `id`,
+the step's `uuid`, `namespace`, `label`, `status` (`applied` / `failed`), `last_error`, `run_at`, `created_at` and
+`updated_at`. A step without a row is pending. Veins upgrades the table itself, under the migration lock, on every
+`migrate` and import; reads without the upgrade (a read-only login first) understand every older layout.
+
+The upgrade to this layout is **one-way**: a release on an older veins version can't read the table any more, so
+once a database ran this veins version, no release older than that may be deployed on it.
+
+Migrating holds a lock on the database (MariaDB `GET_LOCK`, PostgreSQL advisory lock), so instances starting together
+apply each step once; the others wait, at most `VEINS_MIGRATION_LOCK_TIMEOUT` seconds (default 600). Migrations run
+as the database owner unless you pass `~role`, on one held connection, without the pools' statement timeout.
 
 ---
 

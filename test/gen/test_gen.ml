@@ -11,7 +11,7 @@ let pp_kind ppf = function
 
 let kinds = Alcotest.(list (testable pp_kind ( = )))
 
-let check_migration name migration ~namespace ~steps ~dialects =
+let check_migration name (migration : Veins.Migration.t) ~namespace ~steps ~dialects =
   let open Migration in
   Alcotest.(check string)
     (name ^ " namespace")
@@ -25,11 +25,6 @@ let check_migration name migration ~namespace ~steps ~dialects =
   CCList.iter
     (fun (step : Step.t) ->
        Alcotest.check kinds (name ^ " up dialects") dialects (Sql.kinds step.Step.up);
-       Alcotest.check
-         kinds
-         (name ^ " down dialects")
-         dialects
-         (CCOption.map_or ~default:[] Sql.kinds step.Step.down);
        CCList.iter
          (fun kind ->
             Alcotest.(check bool)

@@ -152,6 +152,6 @@ module Dynparam = Dynparam
 
 (** {1 Migrations} *)
 
-(** Standalone migration module.  Types and registry at the top level;
-    apply [Migration.Make(Db)] to get a runner for a specific pool. *)
+(** Migrations: register them into sets, then [Migration.App.Make (Db)] or
+    [Migration.Sets.Make]'s [App] to migrate, check at startup and dry-run. *)
 module Migration = Migration

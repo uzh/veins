@@ -14,6 +14,7 @@ type t =
       ; login : string
       }
   | Migration_failed of string
+  | Migration_not_clean of (string * string) list
   | Unsupported of string
 
 exception Exn of t
@@ -40,6 +41,12 @@ let show : t -> string = function
       label
       login
   | Migration_failed msg -> "Migration failed: " ^ msg
+  | Migration_not_clean databases ->
+    Format.asprintf
+      "Not migrated, run the migrations or repair a failed step by hand: %s"
+      (CCString.concat
+         "; "
+         (CCList.map (fun (label, status) -> label ^ ": " ^ status) databases))
   | Unsupported msg -> "Unsupported: " ^ msg
 ;;
 

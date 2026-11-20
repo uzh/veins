@@ -18,8 +18,9 @@
   logs.fmt
   threads.posix
   unix)
- ; tests match one expected error and fail on anything else
+ ; tests match one expected error and fail on anything else, and read records
+ ; of veins' modules unqualified
  (flags
-  (:standard -w -4))
+  (:standard -w -4-40))
  (preprocess
   (pps lwt_ppx)))

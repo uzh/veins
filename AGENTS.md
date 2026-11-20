@@ -126,21 +126,33 @@ on a connection taken from the Caqti pool without it, and add new driver workaro
 
 ### Migrations
 
-Steps are tracked individually by UUID (not per-namespace counters). `run_all` applies in `written_at` ascending order.
+Roll-forward only: no downs, a mistake is fixed by a new migration. Steps are tracked individually by UUID in `veins_migration_state`, one row per step, updated in place:
+numeric `id`, `uuid`, `namespace`, `label`, `status` (`applied` / `failed`), `last_error`, `run_at`. A step without a
+row is pending; a `failed` row blocks the set's runs until an admin repairs it by hand (`Migration.Repair`).
 
-```ocaml
-module Runner = Migration.Make (Db)
-(* then: Runner.run_all, Runner.up, Runner.down, Runner.check, Runner.status, Runner.pending *)
-```
+Applications use `Migration.App.Make (Db)` (default set, `Migration.register`) or `Migration.Sets.Make (S) (Db)`'s
+`App` (typed sets, `register ~sets`): `migrate`, `dry_run`, `ready`, `report`, `check`, `ensure_clean`, `command`,
+`Import.run`. There is no public runner below them: all of it is `Make_app` over `Make_internal` (state table, lock,
+running steps), which `migration.mli` doesn't export; `Dry_run.decide` is the one place
+that decides what `migrate` refuses (a `Refusal.t`; `dry_run`, `ready` / `Status.of_dry_run`, `check` and
+`ensure_clean` read it too, so the startup check always agrees with `migrate`), so keep refusals there. Keep
+application glue in veins, not in the consumers. Order is `Migration.order`: `written_at`, then namespace, the one timeline (no dependency graph).
 
-`run_all`, `up`, `down` and `mark_applied` go through `with_ctx`: one held connection, the migration lock
-(`Dialect.try_lock`, session-scoped, so it must stay on that connection), the state table created, no statement
-timeout. `status`, `pending` and `check` go through `with_read_ctx` and must stay free of DDL and locks.
+`migrate` and `Import.run` go through `with_ctx`: one held
+connection, the migration lock (`Dialect.try_lock`, session-scoped, so it must stay on that connection), the internal
+upgrades, no statement timeout. `dry_run`, `ready`, `report`, `check` and `ensure_clean` go through `with_read_ctx` and must stay free of DDL, writes and locks (a read-only
+login runs them; CI points `dry-run` at production).
+
+**Internal upgrades** (`internal_upgrades` in `Make_internal`) are veins' own changes to its state table: an ordered
+list, each detecting whether it's needed (`information_schema`), run on every `with_ctx`, never tracked in the table.
+A new change to the table is one more entry with its SQL in `dialect.ml`, plus a case in `read_rows` for the layout
+before it (reads run without the upgrades) and a test upgrading every older layout. The upgrade to the current
+layout is one-way.
 
 Generate boilerplate with `veins-gen "label text"` → `migration_<YYYYMMDDhhmmss>_<slug>.ml`. SQL starting with
-`TODO:` is a placeholder (`Sql.is_placeholder`): `verify` and `down` treat it as missing SQL, so keep the
-generator's placeholders starting with `TODO:`. Nothing else is (no comment or case handling, on purpose).
-New migration files call `Migration.register` — no explicit list to maintain.
+`TODO:` is a placeholder (`Sql.is_placeholder`): `migrate` treats it as missing SQL, so keep the generator's
+placeholders starting with `TODO:`. Nothing else is (no comment or case handling, on purpose). New migration files
+call `Migration.register` — no explicit list to maintain, but the library needs `-linkall`.
 
 ### Dialects
 
@@ -183,14 +195,14 @@ veins-gen --steps 3 --dialect postgresql "create orders table"   # options befor
 
 `--steps N` writes N steps (default 1); `--dialect mariadb|postgresql` writes `Sql.only` placeholders, the default
 `both` one `Sql.v` with a TODO per dialect. Edit the generated file: fill in SQL strings (a `TODO:` left fails
-`Runner.verify`, and `Runner.down` for a `down`), adjust step labels. The file self-registers via
-`Migration.register` at the bottom — just link it into your binary.
+`migrate` and `dry_run`), adjust step labels. The file self-registers via
+`Migration.register` at the bottom — link its library with `(library_flags (-linkall))`.
 
 ## References
 
 - [README.md](README.md) — installation, quick-start, usage examples
 - [lib/pools_sig.mli](lib/pools_sig.mli) — full pool functor interface (`ConfigSig`, `Sig`, all query helpers)
-- [lib/migration.mli](lib/migration.mli) — migration types, `RunnerSig`, step construction
+- [lib/migration.mli](lib/migration.mli) — migration types, sets, `App_sig`, step construction
 - [lib/veins.mli](lib/veins.mli) — the public modules, by section
 - [lib/dialect.mli](lib/dialect.mli) — `kind`, `request` and the SQL that differs per dialect
 - [.devcontainer/docker-compose.yml](.devcontainer/docker-compose.yml) — database service definitions

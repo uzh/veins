@@ -53,3 +53,31 @@ let (_ : string option Lwt.t) = Plain.find_opt (Plain.label_ctx label) plain_fin
 let (_ : unit Lwt.t) =
   Plain.transaction_ctx label (fun ctx -> save (Veins.Plain.Ctx.with_roles ctx) 1)
 ;;
+
+(* Typed migration sets: [register] takes only the tags of [S.t]. *)
+module Sets =
+  Veins.Migration.Sets.Make
+    (struct
+      type t =
+        [ `Root
+        | `Tenant
+        ]
+
+      let all = [ `Root; `Tenant ]
+
+      let name = function
+        | `Root -> "root"
+        | `Tenant -> "tenant"
+      ;;
+
+      let out_of_order (_ : t) = `Fail
+    end)
+    (Db)
+
+let migration =
+  Veins.Migration.create
+    (Veins.Migration.Namespace.create "m")
+    ~written_at:(Veins.Migration.ptime_of_string "2024-01-01T00:00:00Z")
+;;
+
+let () = Sets.register ~sets:[ `Root; `Tenant ] migration

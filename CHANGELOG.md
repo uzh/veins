@@ -17,6 +17,48 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   `` `Connect_failed `` for it.
 - `Pool_options.failure.connection_error`: the same answer for `on_failure`, which can't call the pool module it
   configures.
+- Migrations in an application, roll-forward only:
+  - `Migration.App.Make (Db)` (the default set) and `Migration.Sets.Make (S) (Db)` for typed sets (`register ~sets`,
+    a tag outside the sets doesn't compile; `App (struct let set_for = … end)`), with `migrate`, `dry_run`,
+    `ready`, `report`, `check ~policy`, `ensure_clean` and `command` / `command_exit` (`up`, `dry-run`, `status`,
+    `check`, exit codes 0 / 1 / 2).
+  - Order: `written_at` is the one timeline, ties by namespace (`Migration.order`).
+  - Failures: each step runs on its own; a failed step gets a `failed` row with `last_error` and blocks the set's
+    runs until an admin repairs it by hand (`Migration.Repair` prints the statements per dialect).
+  - Out of order: per set `` `Fail `` (default) or `` `Warn ``; `migrate ~allow_out_of_order`,
+    `--allow-out-of-order` and the variable `ALLOW_OUT_OF_ORDER` allow a migration by name.
+  - `Status.t` (`Ready`, `Pending`, `Blocked` with its `Refusal.t`) is what `migrate` would do; `ensure_clean`
+    raises `Error.Exn (Migration_not_clean _)` at startup unless every database is `Ready`.
+  - `dry_run`: what `migrate` would do, read-only, without the lock (CI preflight with a read-only login).
+  - `Migration.Import` with `Import.Source` and `counter_state`: imports another engine's state once per database
+    (`Import.run` of the application); a database with tables but no migration state is refused as uninitialized.
+- 💥 The migration state table's new layout: numeric `id` primary key, the step's UUID in `uuid`, `status`
+  (`applied` / `failed`), `last_error`, `run_at`. Veins upgrades the table itself on every migration run, one way:
+  once a database ran this version, releases on an older veins version can't read the table.
+- 💥 `Error.Migration_not_clean`.
+
+### Changed
+
+- `Migration.Namespace.compare`.
+- 💥 `Dialect`'s migration-state SQL follows the new layout: `select_state_rows`, `upsert_step_row`,
+  the upgrade statements and the repair statements replace `select_applied_ids`,
+  `select_applied_rows`, `insert_applied_step` and `delete_applied_step`.
+- Migrations of the default set run in `written_at` order with
+  ties by namespace (were in reverse registration order); two migrations for one database with the same namespace or
+  step id are refused before a run applies anything, and the same namespace registered twice into the default set
+  raises.
+- `veins-gen` no longer writes a `down`, and its files say how to link them (`-linkall`).
+
+### Removed
+
+- 💥 The runner `Migration.Make` (`RunnerSig`: `run_all`, `up`, `down`, `mark_applied`, `verify`, `check`, `status`,
+  `pending`) and `Migration.drift`: `Migration.App.Make` / `Migration.Sets.Make` do it all, and `Import` takes the
+  place of `mark_applied`.
+- 💥 `Step.t`'s `down` and `Step.create ?down`: roll-forward only, a mistake is fixed by a new migration.
+- 💥 `Migration.register ?for_databases`, `database_target` and `target_applies_to`: register into the default
+  set, or into typed sets with `Migration.Sets.Make`.
+- 💥 `Migration.Counter_state` (`import`, `record`): veins no longer writes counter tables; reading one is
+  `Migration.Import.counter_state`'s job.
 
 ## [0.2.0](https://github.com/uzh/veins/tree/0.2.0) - 2026-11-19
 

@@ -1,45 +1,44 @@
-(** Standalone migration module.
+(** Migrations.
 
-    Types and the global registry live at the top level.  Apply {!Make} to a
-    pool module (the output of {!Pools.Make}) to get a runner with
-    {!RunnerSig.run_all}, {!RunnerSig.up}, {!RunnerSig.down},
-    {!RunnerSig.check}, {!RunnerSig.status}, and {!RunnerSig.pending}.
+    An application registers its migrations, into the default set
+    ({!register}) or into typed sets ({!Sets.Make}), and calls one function
+    to migrate and one to check at startup ({!App_sig}). Veins handles the
+    order, running each step, failures, out-of-order migrations, the startup
+    check, a read-only dry run for CI and the reports.
 
     {b Design principles}
-    - Steps are tracked individually by UUID, not by a per-namespace
-      version counter.  An already-applied step is always skipped,
-      regardless of its position in the list.
-    - Migrations are applied in ascending [written_at] order when calling
-      {!RunnerSig.run_all}, so the apply order is deterministic regardless
-      of the order modules call {!register}.
-    - Steps within a migration are applied in list order (always append new
+    - {b Roll-forward only.} There are no downs and no rollbacks: a mistake
+      is fixed by a new migration. Migrations keep the previous release
+      working (expand, then contract in a later release), because an older
+      release deployed in an emergency runs against the newer schema.
+    - Steps are tracked individually by UUID, in the state table
+      ({!state_table}), one row per step with its {!Row_status.t}.
+    - [written_at] is the one timeline: migrations run in its order, ties by
+      namespace ({!order}). A migration that depends on another is written
+      after it. Steps within a migration run in list order (always append new
       steps at the end).
-    - Migrations can target different databases.  Use [~for_databases] to
-      associate a migration with specific {!Veins.Label.t} values.  Omitting the
-      argument defaults to [All].
-    - Every statement says which dialects it is written for ({!Sql}). The
-      runner checks all pending steps against the connection's dialect
-      before it applies the first one.
-    - Down migrations are optional.  A step whose [~down] is absent is
-      irreversible; {!RunnerSig.down} will log a warning and skip it.
+    - {b Each step runs on its own}: a step that succeeded stays applied; a
+      failure is recorded ([failed], with [last_error]) and stops the run.
+      A failed step blocks further runs until an admin repairs the database
+      by hand ({!Repair}). Write one statement per step where possible: on
+      MariaDB a step with several DDL statements can be left half applied;
+      on PostgreSQL the step's transaction reverts it.
+    - Every statement says which dialects it is written for ({!Sql}).
 
     {b Quick-start}
     {[
     module Db = Veins.Pools.Make (MyCfg)
-    module M = Veins.Migration.Make (Db)
+    module Migrations = Veins.Migration.App.Make (Db)
 
     let () =
       let open Veins.Migration in
       register
-        ~for_databases:(Database (Veins.Label.create "root"))
         (create
-           (Namespace.create "my_app")
+           (Namespace.create "202401151000_users")
            ~written_at:(ptime_of_string "2024-01-15T10:00:00Z")
          |> add_step
               (Step.create
-                 ~id:(Id.create "550e8400-e29b-41d4-a716-446655440001")
                  ~label:"create users table"
-                 ~down:(Sql.any "DROP TABLE IF EXISTS users")
                  (Sql.v
                     ~mariadb:
                       {|CREATE TABLE users (
@@ -54,20 +53,14 @@
                     ())))
     ;;
 
-    let () =
-      Db.Pool.initialize ();
-      Lwt_main.run
-        (let%lwt drifts = M.check (Veins.Label.create "root") () in
-         (* drifts is [] when the DB is fully up to date *)
-         match%lwt M.run_all (Veins.Label.create "root") () with
-         | Ok () -> Lwt.return_unit
-         | Error e -> invalid_arg (Veins.Error.show e))
-    ;;
+    (* the application's migrate command; at startup:
+       Migrations.ensure_clean [ root ] *)
+    let migrate args = Migrations.command_exit [ root ] args
     ]}
 
     @canonical Veins.Migration *)
 
-(** Parse an RFC 3339 string into [Ptime.t].  Raises [Invalid_argument] if
+(** Parse an RFC 3339 string into [Ptime.t].  Raises [Invalid_argument] if
     the string is malformed.  Use for static authoring timestamps:
     [ptime_of_string "2024-01-15T10:00:00Z"]. *)
 val ptime_of_string : string -> Ptime.t
@@ -79,10 +72,8 @@ module Id : sig
   val create : string -> t
 
   (** [derive ~namespace ~index] is a stable UUID (v5) for the step at
-      0-based position [index] of [namespace]. Use it for migrations written
-      without step ids, e.g. when importing the state of a counter-based
-      migration table: the same namespace and position always give the same
-      id.
+      0-based position [index] of [namespace]: the same namespace and
+      position always give the same id, on every database.
 
       Raises [Invalid_argument] for a negative [index]. *)
   val derive : namespace:string -> index:int -> t
@@ -93,20 +84,21 @@ module Id : sig
   val show : t -> string
 end
 
-(** Opaque type for a migration's group name. *)
+(** Opaque type for a migration's name. *)
 module Namespace : sig
   type t
 
   val create : string -> t
   val value : t -> string
   val equal : t -> t -> bool
+  val compare : t -> t -> int
   val pp : Format.formatter -> t -> unit
   val show : t -> string
 end
 
 (** The SQL of a step, per dialect. A step applies only to a database whose
-    dialect it has SQL for: the runner checks every pending step before it
-    applies any (see {!RunnerSig.verify}). *)
+    dialect it has SQL for: {!App_sig.migrate} checks every pending step
+    before it applies any. *)
 module Sql : sig
   type t
 
@@ -129,12 +121,11 @@ module Sql : sig
 
   (** [is_placeholder sql] holds for SQL that starts with [TODO:] (after
       blanks), the placeholder [veins-gen] writes. Nothing else is, not even
-      empty SQL or a comment: the runner sends those as they are. *)
+      empty SQL or a comment: veins sends those as they are. *)
   val is_placeholder : string -> bool
 
   (** [written t kind]: [t] has SQL for [kind] that is not a placeholder
-      ({!is_placeholder}). The runner applies or reverts a step only when it
-      is. *)
+      ({!is_placeholder}). {!App_sig.migrate} applies a step only when it is. *)
   val written : t -> Dialect.kind -> bool
 end
 
@@ -142,20 +133,16 @@ end
 module Step : sig
   type t =
     { id : Id.t option
-      (** Stable id, the primary key in the migration-state table; it must
-          be unique across the application and never change once deployed.
+      (** Stable id, the [uuid] in the migration-state table; it must be
+          unique across the application and never change once deployed.
           [None] takes {!Id.derive} of the migration's namespace and the
           step's position, so steps must then only ever be appended. *)
     ; label : string (** Human-readable description (used in log output). *)
-    ; up : Sql.t (** SQL to apply this step (forward migration). *)
-    ; down : Sql.t option
-      (** SQL to revert this step.  [None] means the step is
-          irreversible; {!RunnerSig.down} will log a warning and skip
-          it. *)
+    ; up : Sql.t (** SQL to apply this step. *)
     ; check_fk : bool
-      (** When [false] the runner temporarily disables FK checks before
-          executing [up] or [down].  Has no effect where
-          {!Dialect.set_fk_checks} is [None] (PostgreSQL). *)
+      (** When [false] veins temporarily disables FK checks before
+          executing [up].  Has no effect where {!Dialect.set_fk_checks} is
+          [None] (PostgreSQL). *)
     }
 
   (** Build a step.
@@ -166,9 +153,8 @@ module Step : sig
         Defaults to [true]. Pass [false] to disable FK
         checks around this step on dialects that support it
         (MariaDB / MySQL only).
-      @param down Optional SQL to revert the step.
       @param up (positional) SQL to apply the step. *)
-  val create : ?id:Id.t -> label:string -> ?check_fk:bool -> ?down:Sql.t -> Sql.t -> t
+  val create : ?id:Id.t -> label:string -> ?check_fk:bool -> Sql.t -> t
 
   (** The step's id, if it was given one. *)
   val id : t -> Id.t option
@@ -177,22 +163,24 @@ end
 (** A named, ordered group of migration steps. *)
 type t =
   { namespace : Namespace.t
-    (** Unique identifier for this migration group, e.g.
-        [Namespace.create "my_app"].  Used as the [namespace] column
-        in the migration-state table. *)
+    (** Unique name of this migration within its set, e.g.
+        [Namespace.create "202401151000_users"]. Stored in the state table's
+        [namespace] column. *)
   ; written_at : Ptime.t
-    (** Authoring timestamp used to sort migrations before applying.
-        {!RunnerSig.run_all} sorts all registered migrations for a
-        database label by [written_at] (ascending) before applying
-        them, so the apply order is deterministic regardless of
-        registration order. *)
+    (** Authoring timestamp: migrations run in [written_at] order
+        ({!order}). Moving it doesn't change the step ids, which derive from
+        the namespace. *)
   ; steps : Step.t list
     (** Steps in timeline / dependency order.  Always {b append} new
         steps at the end — never re-order or remove already-deployed
         steps. *)
   }
 
+(** [t], for the modules below that have a [t] of their own. *)
+type migration = t
+
 (** Create a migration without steps. Add steps with {!add_step}.
+
     @param written_at
       Authoring timestamp.  Use {!ptime_of_string} for
       static literals, e.g.
@@ -206,222 +194,463 @@ val add_step : Step.t -> t -> t
     one, or the one derived from its position. *)
 val step_ids : t -> Id.t list
 
-(** Specifies which database(s) a migration should be applied to.
+(** [order migrations] is the order the migrations of a set run in:
+    [written_at], ties by namespace. *)
+val order : t list -> t list
 
-    - [Database label] — exactly one database identified by [label].
-    - [Databases labels] — every database whose label appears in [labels].
-    - [All] — every database in the pool, regardless of label.
-    - [AllExcept labels] — every database {i except} those in [labels]. *)
-type database_target =
-  | Database of Entity.Label.t
-  | Databases of Entity.Label.t list
-  | All
-  | AllExcept of Entity.Label.t list
+(** {1 Registration} *)
 
-(** [target_applies_to target label] returns [true] when [target] covers
-    [label]. *)
-val target_applies_to : database_target -> Entity.Label.t -> bool
+(** Register [migration] into the {b default set}, the one {!App.Make} runs:
+    for applications with one kind of database. Use {!Sets.Make} for
+    several.
 
-(** Register [migration] so it will be applied when
-    {!RunnerSig.run_all} is next called for a matching label.
+    [register] is a pure synchronous operation and can be called at module
+    initialisation time or later; a set is read when it is used.
 
-    [register] is a pure synchronous operation and can be called at
-    module initialisation time or from inside an [Lwt.t] callback.
-    To target databases whose labels are only known at runtime (e.g.
-    fetched via a query), call [register] inside the Lwt sequence
-    before invoking the runner:
+    {b Linking.} A migration registered at module initialisation in a library
+    runs only when the module is linked: a module that nothing references is
+    dropped from an executable. Link the migrations' library with
+    [(library_flags (-linkall))], or reference every migration module.
 
-    {[
-    let%lwt labels = Db.collect root fetch_tenant_labels () in
-    Migration.register ~for_databases:(Migration.Databases labels) my_migration;
-    M.run_all root ()
-    ]}
+    Raises [Invalid_argument] if a migration of the same namespace is in the
+    default set already. *)
+val register : t -> unit
 
-    @param for_databases Which database(s) this migration targets.
-                         Defaults to [All]. *)
-val register : ?for_databases:database_target -> t -> unit
+(** {1 State} *)
 
 (** The name of the migration state table: [veins_migration_state], or
     [VEINS_MIGRATION_TABLE]. For code that treats it specially, e.g. emptying
     every table but this one.
 
+    One row per step that ran or was imported ({!Row.t}). Veins upgrades the
+    table itself, under the migration lock, whenever it migrates; the
+    upgrade to the current layout (numeric [id], [uuid], [status],
+    [last_error], [run_at]) is one-way: a release on an older veins version
+    can't read the table any more.
+
     Raises [Invalid_argument] if [VEINS_MIGRATION_TABLE] is not a plain table name. *)
 val state_table : unit -> string
 
-(** A discrepancy between the in-process registry and the migration-state
-    table in a database.  Returned by {!RunnerSig.check}. *)
-type drift =
-  | Pending of
-      { namespace : Namespace.t
-      ; pending_steps : int
-      ; total_steps : int
-      }
-  | Orphaned of
-      { namespace : Namespace.t
-      ; step_ids : Id.t list
-      }
-  | Unsupported of
-      { namespace : Namespace.t
-      ; dialect : Dialect.kind
-      ; steps : string list
-        (** labels of the pending steps without SQL, or with only a placeholder *)
-      }
+(** A step's state in its row. A step without a row is pending. *)
+module Row_status : sig
+  type t =
+    | Applied
+    | Failed (** Blocks the set's runs until repaired by hand ({!Repair}). *)
 
-(** Interface satisfied by the output of {!Make}.
+  val to_string : t -> string
 
-    Every function runs on one connection held for the whole call, as
-    [?role] (default {!Veins.Role.owner}, i.e. the database's own URL).
-    Migration statements declare no needs: the login's grants are what
-    limits them. Each step runs in a
-    transaction together with its state row (PostgreSQL rolls back both on
-    failure; MariaDB commits DDL implicitly).
+  (** [Error _] for anything but ["applied"] and ["failed"]: reading such a
+      row is a decode error. *)
+  val of_string : string -> (t, string) result
 
-    [run_all], [check], [status] and [pending] work on the migrations
-    registered for the label, or on [?migrations] when given.
-
-    {b One runner at a time.} [run_all], [up], [down] and [mark_applied]
-    hold a lock on the database while they run (MariaDB [GET_LOCK],
-    PostgreSQL advisory lock), so instances of an application starting
-    together apply each step once: the others wait, for at most
-    [VEINS_MIGRATION_LOCK_TIMEOUT] seconds (default 600), then fail with
-    [Error.Migration_failed]. They also create the state table if it is
-    missing, and run without the pools' statement timeout
-    ([Pool_options.statement_timeout]).
-
-    [check], [status] and [pending] only read: they take no lock and run no
-    DDL, so a role that may only read can call them, and a database without
-    a state table has nothing applied.
-
-    The state table is [veins_migration_state], or the plain table name in
-    [VEINS_MIGRATION_TABLE] (letters, digits and [_]; anything else raises
-    [Invalid_argument]). *)
-module type RunnerSig = sig
-  (** Apply all unapplied steps for every migration registered for
-      [db_label], oldest [written_at] first, or for [?migrations] in the
-      order given. Checks them all first ({!verify}), then returns [Error _]
-      on the first failure, leaving the remaining migrations unattempted. *)
-  val run_all
-    :  ?role:_ Entity.Role.t
-    -> ?migrations:t list
-    -> Entity.Label.t
-    -> unit
-    -> (unit, Error.t) Lwt_result.t
-
-  (** Apply the unapplied steps of [migration] to [db_label]. *)
-  val up : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
-
-  (** [mark_applied db_label migration ~steps] records the first [steps]
-      steps of [migration] as applied without running them, e.g. to import the
-      state of another migration engine (see {!Id.derive}). Steps recorded
-      already are skipped. *)
-  val mark_applied
-    :  ?role:_ Entity.Role.t
-    -> Entity.Label.t
-    -> t
-    -> steps:int
-    -> unit Lwt.t
-
-  (** Revert the applied steps of [migration] in reverse order. Steps without
-      [down] are logged and skipped; a [down] without SQL for the
-      connection's dialect (or only a placeholder) fails before any step is reverted. *)
-  val down : ?role:_ Entity.Role.t -> Entity.Label.t -> t -> (unit, Error.t) Lwt_result.t
-
-  (** [Error (Migration_failed _)] naming every pending step that has no SQL
-      for the dialect of [db_label]'s connection, or only a placeholder
-      ({!Sql.is_placeholder}), like a [TODO] left by [veins-gen]. [run_all] and [up] run the
-      same check before they apply anything, so a run never stops half way
-      for want of SQL. Only reads, like {!check}. *)
-  val verify
-    :  ?role:_ Entity.Role.t
-    -> ?migrations:t list
-    -> Entity.Label.t
-    -> unit
-    -> (unit, Error.t) Lwt_result.t
-
-  (** Compare the registry with the state table and return every {!drift}
-      ([[]] when in sync). Also logs each one as a warning. *)
-  val check
-    :  ?role:_ Entity.Role.t
-    -> ?migrations:t list
-    -> Entity.Label.t
-    -> unit
-    -> drift list Lwt.t
-
-  (** [(namespace, applied_count, total_count)] for every migration
-      registered for [db_label]. *)
-  val status
-    :  ?role:_ Entity.Role.t
-    -> ?migrations:t list
-    -> Entity.Label.t
-    -> unit
-    -> (Namespace.t * int * int) list Lwt.t
-
-  (** [(namespace, pending_step_count)] for every migration with unapplied
-      steps. *)
-  val pending
-    :  ?role:_ Entity.Role.t
-    -> ?migrations:t list
-    -> Entity.Label.t
-    -> unit
-    -> (Namespace.t * int) list Lwt.t
+  val equal : t -> t -> bool
+  val pp : Format.formatter -> t -> unit
 end
 
-(** Instantiate a migration runner backed by [Db].
+(** A row of the state table. *)
+module Row : sig
+  type t =
+    { id : int option (** The row's id; [None] before the table's upgrade. *)
+    ; uuid : Id.t (** The step's id: what reports and repairs use. *)
+    ; namespace : Namespace.t
+    ; label : string
+    ; status : Row_status.t
+    ; last_error : string option
+      (** The most recent failure; stays after the step was marked applied. *)
+    ; run_at : Ptime.t option
+      (** When the step last ran (or the row was written, for imported rows). *)
+    }
+end
+
+(** The statements an admin runs to repair a failed step, by its UUID, for
+    the state table of {!state_table}:
+
+    - completed the step by hand: {!Repair.mark_applied}; the next run continues
+      after it ([last_error] stays, as a record);
+    - undid what the step left behind: {!Repair.delete}; the next run runs it
+      again. *)
+module Repair : sig
+  val mark_applied : Dialect.kind -> Id.t -> string
+  val delete : Dialect.kind -> Id.t -> string
+end
+
+(** {1 Applications} *)
+
+(** A pending migration that comes before a migration applied already, in
+    the set's order: what happens when an older branch is merged after a
+    newer migration was deployed. A migration with a step appended after a
+    later migration was applied is one too. *)
+module Out_of_order : sig
+  type t =
+    { namespace : Namespace.t
+    ; newest_applied : Namespace.t (** The last applied migration of the set. *)
+    }
+end
+
+(** What {!App_sig.migrate} does with out-of-order migrations: [`Fail]
+    refuses to run unless each one is allowed by name
+    ([~allow_out_of_order]), [`Warn] logs and runs them. *)
+type out_of_order_policy =
+  [ `Warn
+  | `Fail
+  ]
+
+(** A database's migration state, judged against the set of the running
+    release. *)
+module Report : sig
+  type t =
+    { label : Entity.Label.t
+    ; set : string (** The set's name. *)
+    ; dialect : Dialect.kind
+    ; pending : (Namespace.t * string list) list
+      (** The pending steps' labels per migration, in the order they'd run. *)
+    ; out_of_order : Out_of_order.t list (** Under either policy. *)
+    ; failed : Row.t list (** Failed steps of the set: block the runs. *)
+    ; orphaned : Row.t list
+      (** Rows outside the set, e.g. after an older release was deployed:
+          reported, never acted on, failed ones included. *)
+    ; unsupported : (Namespace.t * string list) list
+      (** Pending steps without SQL for the dialect (their labels), by
+          migration. *)
+    ; uninitialized : bool
+      (** No row in the state table, but other tables: import the previous
+          engine's state first ({!Import}). *)
+    }
+
+  (** Several lines; failed steps with the repair statements ({!Repair}). *)
+  val pp : Format.formatter -> t -> unit
+
+  val show : t -> string
+end
+
+(** Why {!App_sig.migrate} refuses to run. *)
+module Refusal : sig
+  (** The first in [migrate]'s order. *)
+  type t =
+    | Duplicates of string (** A namespace or step id is in the set twice. *)
+    | Missing_dialect of (Namespace.t * string list) list
+    (** Pending steps without SQL for the dialect (their labels), by
+        migration. *)
+    | Uninitialized
+    (** No row in the state table, but other tables: import the previous
+        engine's state first ({!Import}). *)
+    | Failed of Row.t list
+    (** Failed steps of the set: repair them by hand ({!Repair}). *)
+    | Out_of_order of Out_of_order.t list
+    (** Only under [`Fail]: the out-of-order migrations not allowed. *)
+
+  (** What to do, with the repair statements for [dialect]; several lines. *)
+  val pp : dialect:Dialect.kind -> Format.formatter -> t -> unit
+
+  val show : dialect:Dialect.kind -> t -> string
+
+  (** One line. *)
+  val summary : t -> string
+end
+
+(** Would {!App_sig.migrate} run, and what would it do? *)
+module Dry_run : sig
+  type t =
+    { report : Report.t
+    ; allowed : Out_of_order.t list
+      (** Out-of-order migrations that would run: allowed by name, or all
+          under [`Warn]. *)
+    ; refusal : Refusal.t option (** [None]: [migrate] would run. *)
+    }
+
+  (** [of_state ~label ~set ~out_of_order ~dialect ~other_tables ~rows migrations] decides as [migrate] does, from the state table's [rows]
+      and whether the database has [other_tables]. *)
+  val of_state
+    :  ?allow_out_of_order:Namespace.t list
+    -> label:Entity.Label.t
+    -> set:string
+    -> out_of_order:out_of_order_policy
+    -> dialect:Dialect.kind
+    -> other_tables:bool
+    -> rows:Row.t list
+    -> migration list
+    -> t
+
+  val pp : Format.formatter -> t -> unit
+  val show : t -> string
+end
+
+(** A database's state for the startup check: what {!App_sig.migrate} would
+    do with it, without any out-of-order allowance. *)
+module Status : sig
+  type t =
+    | Ready
+    (** Nothing pending, nothing refused. Orphaned rows and out-of-order
+        migrations under [`Warn] don't count. *)
+    | Pending of Report.t (** [migrate] runs the pending steps. *)
+    | Blocked of Refusal.t * Report.t (** [migrate] refuses: a person has to act first. *)
+
+  val of_dry_run : Dry_run.t -> t
+  val is_ready : t -> bool
+
+  (** One line. *)
+  val pp : Format.formatter -> t -> unit
+
+  val show : t -> string
+end
+
+(** Importing the state of another migration engine, once per database.
+    Run it with [Import.run] of an application ({!App_sig}), from a command
+    of the application's own: it needs the application's migrations. *)
+module Import : sig
+  (** One migration of the other engine. *)
+  type entry =
+    { namespace : Namespace.t
+    ; applied : int (** The first [applied] steps are applied. *)
+    ; failed : string option
+      (** Step [applied + 1] failed, with this message (a dirty flag). *)
+    }
+
+  (** Where the entries come from. *)
+  module type Source = sig
+    (** Prefixes [last_error] of the failed rows. *)
+    val name : string
+
+    (** Reads the entries, without writing, on the connection the import
+        runs on (the migration lock held). *)
+    val read : Caqti_lwt.connection -> (entry list, Caqti.Error.t) Lwt_result.t
+  end
+
+  (** A counter table (namespace, version, dirty) like Sihl's,
+      [core_migration_state] by default. A missing table has no entries; a
+      dirty namespace becomes a [failed] row.
+
+      Raises [Invalid_argument] if [table] is not a plain table name. *)
+  val counter_state : ?table:string -> unit -> (module Source)
+
+  module Report : sig
+    type t =
+      { applied : (Namespace.t * int) list (** Steps imported as applied. *)
+      ; failed : (Namespace.t * string) list (** Steps imported as failed. *)
+      ; unknown : Namespace.t list (** Not in the set: skipped. *)
+      ; too_large : (Namespace.t * int * int) list
+        (** Counters larger than the migration's step count (counter,
+            steps). *)
+      }
+
+    (** One line, for the deploy log. *)
+    val pp : Format.formatter -> t -> unit
+
+    val show : t -> string
+  end
+
+  (** [plan ~source migrations ~existing entries]: the rows an import writes
+      (with no [id] and no [run_at]) and its report. Steps in [existing] (with
+      a row already) are left as they are. *)
+  val plan
+    :  source:string
+    -> migration list
+    -> existing:Id.t list
+    -> entry list
+    -> Report.t * Row.t list
+end
+
+(** The arguments of {!App_sig.command}. *)
+module Command : sig
+  type action =
+    | Up of Namespace.t list (** [up], with the namespaces allowed out of order. *)
+    | Dry_run of Namespace.t list
+    | Status
+    | Check
+
+  val usage : string
+
+  (** [[]] and [["up"]] are [Up []]; [--allow-out-of-order] takes one or more
+      namespaces and may be repeated, after [up] or [dry-run]. [Error usage]
+      for anything else. *)
+  val parse : string list -> (action, string) result
+
+  (** The namespaces of [ALLOW_OUT_OF_ORDER]'s value, separated by commas or
+      whitespace. *)
+  val allowed_of_env : string option -> Namespace.t list
+
+  (** ["ALLOW_OUT_OF_ORDER"]. *)
+  val env_variable : string
+end
+
+(** Importing another engine's state into a label's set ({!Import}). *)
+module type Import_sig = sig
+  (** Under the migration lock, after veins' upgrades of its state table:
+      writes a row for every step the source counts that has none ([applied],
+      or [failed] with [last_error] ["<source>: <message>"]), and never
+      changes a row veins has. Never refuses: a failed entry is repaired by
+      hand like any failed step. Idempotent. *)
+  val run
+    :  ?role:_ Entity.Role.t
+    -> source:(module Import.Source)
+    -> Entity.Label.t
+    -> (Import.Report.t, Error.t) Lwt_result.t
+end
+
+(** Migrations in an application: {!App.Make} for the default set,
+    {!Sets.Make}'s [App] for typed sets. Every function runs as [?role]
+    (default {!Veins.Role.owner}). *)
+module type App_sig = sig
+  (** Runs the label's set:
+
+      + orders the set ({!order});
+      + takes the migration lock, upgrades the state table;
+      + refuses on any {!Refusal.t}: steps without SQL for the dialect,
+        an uninitialized database, a failed step (named with its UUID,
+        [last_error] and the repair statements), or out-of-order migrations
+        under [`Fail] not named in [~allow_out_of_order] (under [`Warn], and
+        for those named, they're logged and run; a name that isn't out of
+        order is ignored with a log line);
+      + runs the pending steps in order, each on its own, and stops at the
+        first failure, which is recorded as a failed row.
+
+      Logs the outcome; errors (also an unreachable database) are returned,
+      not raised. *)
+  val migrate
+    :  ?role:_ Entity.Role.t
+    -> ?allow_out_of_order:Namespace.t list
+    -> Entity.Label.t
+    -> (unit, Error.t) Lwt_result.t
+
+  (** What {!migrate} would do with the same arguments, without the lock and
+      without writing: works with a read-only login, so CI can point it at a
+      production database. *)
+  val dry_run
+    :  ?role:_ Entity.Role.t
+    -> ?allow_out_of_order:Namespace.t list
+    -> Entity.Label.t
+    -> (Dry_run.t, Error.t) Lwt_result.t
+
+  (** The label's status; only reads. Errors (an unreachable database) are
+      returned. *)
+  val ready : ?role:_ Entity.Role.t -> Entity.Label.t -> (Status.t, Error.t) Lwt_result.t
+
+  (** The label's report; only reads. Raises what the database raises. Why
+      [migrate] would refuse is in {!dry_run} and {!ready}. *)
+  val report : ?role:_ Entity.Role.t -> Entity.Label.t -> Report.t Lwt.t
+
+  (** The check at startup for one label, by [?policy]: [`Fail] (default)
+      returns any status but [Ready] as an error, [`Warn] logs it, [`Skip]
+      reads nothing (tests). Only reads. *)
+  val check
+    :  ?role:_ Entity.Role.t
+    -> ?policy:[ `Fail | `Warn | `Skip ]
+    -> Entity.Label.t
+    -> (unit, Status.t) Lwt_result.t
+
+  (** The startup utility: unless every label is clean ({!Status.Ready}),
+      logs each report and raises
+      [Error.Exn (Migration_not_clean [ label, status; … ])], so the
+      application doesn't start: pending steps, and anything [migrate] would
+      refuse ({!Status.Blocked}), out-of-order migrations of a [`Fail] set
+      included. Orphaned rows and out-of-order migrations under [`Warn] are
+      logged, not raised. [~skip:true] reads nothing (tests). Only reads.
+      Applications that must keep serving the other databases when one is
+      unclean use {!ready} or {!check} per database instead. *)
+  val ensure_clean
+    :  ?role:_ Entity.Role.t
+    -> ?skip:bool
+    -> Entity.Label.t list
+    -> unit Lwt.t
+
+  (** A migrate command for the application's own command line, given its
+      arguments ({!Command.parse}); prints to [?out] (default stdout) and
+      returns the exit code, the worst of every label (all run):
+      - [[]], [["up"]]: {!migrate}; 1 if any fails
+      - [["up"; "--allow-out-of-order"; ns; …]]: the same, allowing [ns]
+      - [["dry-run"]] (with the same flags): {!dry_run}; 1 if [migrate]
+        would refuse on any label
+      - [["status"]]: each label's {!Report.t}; 0
+      - [["check"]]: the dry run's output; 1 unless every label is
+        {!Status.Ready}
+      - anything else: the usage; 2
+
+      [up] and [dry-run] also allow the namespaces of the environment
+      variable [ALLOW_OUT_OF_ORDER] ({!Command.allowed_of_env}), so a CI
+      variable allows a migration for the preflight and the deploy alike. An
+      error that prevents the answer (an unreachable database) is 1. *)
+  val command
+    :  ?role:_ Entity.Role.t
+    -> ?out:Format.formatter
+    -> Entity.Label.t list
+    -> string list
+    -> int Lwt.t
+
+  (** {!command}, then [exit] with its code. *)
+  val command_exit
+    :  ?role:_ Entity.Role.t
+    -> ?out:Format.formatter
+    -> Entity.Label.t list
+    -> string list
+    -> 'a Lwt.t
+
+  module Import : Import_sig
+end
+
+(** The default set: the migrations of {!register}, out-of-order [`Fail]. *)
+module App : sig
+  module Make (_ : Pools_sig.Sig) : App_sig
+end
+
+(** Typed sets of migrations, e.g. a root database and tenants:
 
     {[
-    module Db = Veins.Pools.Make (MyCfg)
-    module M = Veins.Migration.Make (Db)
+    module Sets =
+      Veins.Migration.Sets.Make
+        (struct
+          type t =
+            [ `Root
+            | `Tenant
+            ]
+
+          let all = [ `Root; `Tenant ]
+
+          let name = function
+            | `Root -> "root"
+            | `Tenant -> "tenant"
+          ;;
+
+          let out_of_order = function
+            | `Root -> `Fail
+            | `Tenant -> `Warn
+          ;;
+        end)
+        (Db)
+
+    module Migrate = Sets.App (struct
+        let set_for label = if is_root label then `Root else `Tenant
+      end)
+
+    (* in a migration file *)
+    let () = Sets.register ~sets:[ `Tenant ] migration
     ]} *)
-module Make : functor (_ : Pools_sig.Sig) -> RunnerSig
+module Sets : sig
+  module type S = sig
+    type t
 
-(** Bridge from a counter-based migration engine, such as Sihl's
-    [core_migration_state]: one row per namespace with the number of steps
-    applied ([version]) and a [dirty] flag for a run that failed half way.
+    (** Every set; their names must differ. *)
+    val all : t list
 
-    {!Counter_state.Make.import} records the counted steps as applied in veins' state table
-    ({!RunnerSig.mark_applied}, by {!Id.derive}d ids, so the migrations need
-    steps without ids). {!Counter_state.Make.record} keeps the counter up to date, so an
-    older release on the previous engine can still be deployed.
+    val name : t -> string
+    val out_of_order : t -> out_of_order_policy
+  end
 
-    Deprecated from the start: remove it once every database ran the import
-    and no release on the previous engine will be deployed again. *)
-module Counter_state : sig
-  (** The counters read by {!Counter_state.Make.import}. *)
-  type state
+  (** Raises [Invalid_argument] if two sets have the same name. *)
+  module Make (S : S) (_ : Pools_sig.Sig) : sig
+    (** Register [migration] into [sets] (required, so a migration can't land
+        in every set by accident). As {!Veins.Migration.register}: at module
+        initialisation or later, and mind the linker.
 
-  module Make (_ : Pools_sig.Sig) : sig
-    (** [import db_label migrations] marks the steps the counter table
-        ([?table], default [core_migration_state]) counts for each of
-        [migrations] as applied. A missing table counts nothing. Any dirty
-        namespace is logged and returned instead, and nothing is marked.
+        Raises [Invalid_argument] if a migration of the same namespace is in
+        one of [sets] already. The same namespace in different sets is
+        fine. *)
+    val register : sets:S.t list -> t -> unit
 
-        Raises [Invalid_argument] if [table] is not a plain table name. *)
-    val import
-      :  ?role:_ Entity.Role.t
-      -> ?table:string
-      -> Entity.Label.t
-      -> t list
-      -> (state, [ `Dirty of string list ]) result Lwt.t
-    [@@alert
-      deprecated
-        "Counter_state bridges a counter-based migration table to veins; remove it once \
-         every database ran the import."]
+    (** The migrations of [set] in the order they run ({!order}). *)
+    val migrations : S.t -> t list
 
-    (** [record db_label state namespace ~applied ~failed] writes the counter
-        of [namespace] ([applied] steps, dirty if [failed]) when it differs
-        from [state], creating the table if [state] found none. *)
-    val record
-      :  ?role:_ Entity.Role.t
-      -> ?table:string
-      -> Entity.Label.t
-      -> state
-      -> Namespace.t
-      -> applied:int
-      -> failed:bool
-      -> unit Lwt.t
-    [@@alert
-      deprecated
-        "Counter_state bridges a counter-based migration table to veins; remove it once \
-         every database ran the import."]
+    module App (_ : sig
+        val set_for : Entity.Label.t -> S.t
+      end) : App_sig
   end
 end

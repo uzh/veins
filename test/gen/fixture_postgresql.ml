@@ -2,29 +2,27 @@
 
 open Veins
 
-(* Steps run in the order [migration] adds them. Once a step is deployed, never
-   change its id or [up], or remove it: append a new step instead. The runner
-   refuses to apply a step whose [up] SQL is still a TODO, and to revert a
-   migration while a [down] is: write it, or drop [~down] if the step can't be
-   reverted. *)
+(* Steps run in the order [migration] adds them, each on its own: write one
+   statement per step where possible. Once a step is deployed, never change its
+   id or SQL, or remove it: append a new step, or fix a mistake with a new
+   migration (roll-forward only), keeping the previous release working. The
+   runner refuses to apply a step whose SQL is still a TODO. Nothing references
+   this module: link its library with [(library_flags (-linkall))], or the
+   linker drops it and the migration never registers. *)
 
 let step_1 =
   let up = Migration.Sql.only Dialect.Postgresql {sql|TODO: forward SQL|sql} in
-  let down = Migration.Sql.only Dialect.Postgresql {sql|TODO: reverse SQL|sql} in
   Migration.Step.create
     ~id:(Migration.Id.create "00000000-0000-4000-8000-000000000001")
     ~label:"TODO: describe step 1"
-    ~down
     up
 ;;
 
 let step_2 =
   let up = Migration.Sql.only Dialect.Postgresql {sql|TODO: forward SQL|sql} in
-  let down = Migration.Sql.only Dialect.Postgresql {sql|TODO: reverse SQL|sql} in
   Migration.Step.create
     ~id:(Migration.Id.create "00000000-0000-4000-8000-000000000002")
     ~label:"TODO: describe step 2"
-    ~down
     up
 ;;
 
