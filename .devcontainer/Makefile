@@ -27,12 +27,9 @@ export MARIADB_URL POSTGRES_URL
 export MARIADB_READER_URL MARIADB_WRITER_URL MARIADB_MIGRATOR_URL
 export POSTGRES_READER_URL POSTGRES_WRITER_URL POSTGRES_MIGRATOR_URL
 
-# Override: run the full test suite against both live database containers.
-.PHONY: test
-test:
-	$(MAKE) -C $(ROOT) test
-
-# Forward every other target to the root Makefile unchanged.
-.PHONY: %
-%:
+# Forward the goals to the root Makefile (no goal: test, against both database
+# containers). They are phony here, so one named like a path (doc/) runs too.
+GOALS := $(or $(MAKECMDGOALS),test)
+.PHONY: $(GOALS)
+$(GOALS):
 	$(MAKE) -C $(ROOT) $@
