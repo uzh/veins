@@ -706,6 +706,56 @@ let test_on_failure () =
   Lwt.return_unit
 ;;
 
+(* A statement that gets no connection within [acquire_timeout] raises
+   [Acquire_timeout], which is no connection error: neither for
+   [is_connection_error] nor for [on_failure]. *)
+let timeout_reported : Pool_options.failure list ref = ref []
+
+module Timing_out_reporting =
+  Veins_mariadb.Plain.Make_with_options
+    (struct
+      let database = Config.database
+      let database_pool_size = 1
+    end)
+    (struct
+      let options =
+        Pool_options.
+          { default with
+            acquire_timeout = Some 0.1
+          ; on_failure =
+              Some
+                (fun failure ->
+                  timeout_reported := failure :: !timeout_reported;
+                  Lwt.return_unit)
+          }
+      ;;
+    end)
+
+let test_acquire_timeout_is_no_connection_error () =
+  with_server
+  @@ fun server ->
+  let module P = Timing_out_reporting in
+  let label = Label.create "veins_acquire_timeout" in
+  P.Pool.add (Database.create label (url server));
+  let%lwt raised =
+    expect "find" (fun () -> P.find (P.label_ctx label) select_one ()) CCFun.id
+  in
+  P.Pool.drop label;
+  (match[@warning "-4"] raised with
+   | Error.Exn (Error.Acquire_timeout (_ : string)) -> ()
+   | exn -> Alcotest.failf "expected Acquire_timeout, got %s" (Printexc.to_string exn));
+  Alcotest.(check bool) "is_connection_error" false (P.is_connection_error raised);
+  let reported = !timeout_reported in
+  timeout_reported := [];
+  Alcotest.(check int) "reported once" 1 (CCList.length reported);
+  CCList.iter
+    (fun { Pool_options.exn; connection_error; _ } ->
+       Alcotest.(check bool) "the raised exception" true (exn == raised);
+       Alcotest.(check bool) "failure.connection_error" false connection_error)
+    reported;
+  Lwt.return_unit
+;;
+
 (* [is_connection_error] answers as the pool's reconnect does. *)
 let test_is_connection_error () =
   let label = Label.create "veins_is_connection_error" in
@@ -733,6 +783,7 @@ let test_is_connection_error () =
     ; "connect failed", true, failed connect_failed
     ; "Caqti.Error.Exn", true, Caqti.Error.Exn (error 2013)
     ; "Connection_failed", true, Error.Exn (Error.Connection_failed "refused")
+    ; "Acquire_timeout", false, Error.Exn (Error.Acquire_timeout "no free connection")
     ; "duplicate key (1062)", false, failed (error 1062)
     ; "Database_not_registered", false, Error.Exn (Error.Database_not_registered "x")
     ; ( "Permission_denied"
@@ -761,6 +812,10 @@ let () =
            ; case "backoff" `Slow test_backoff
            ; case "on_failure" `Quick test_on_failure
            ; case "is_connection_error" `Quick test_is_connection_error
+           ; case
+               "acquire timeout is no connection error"
+               `Quick
+               test_acquire_timeout_is_no_connection_error
            ; case "Pool.use returns errors" `Quick test_use_returns_errors
            ; case
                "Pool.use timeout hides passwords"

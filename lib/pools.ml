@@ -478,7 +478,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
               ?request
               ?role
               (fst key)
-              (Error.Exn (Error.Connection_failed "Connection abandoned"))
+              (Error.Exn (Error.Acquire_timeout "Connection abandoned"))
           | Error _ as error -> Lwt.return error)
        | false ->
          abandoned := true;
@@ -489,7 +489,7 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
            ?role
            (fst key)
            (Error.Exn
-              (Error.Connection_failed
+              (Error.Acquire_timeout
                  (Format.asprintf
                     "No connection of pool '%s' became free within %gs"
                     (Key.show key)
@@ -711,7 +711,8 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
     let no_connection key ~fetching exn =
       match[@warning "-4"] exn with
       | Error.Failed { Error.error; _ } when fetching -> Some error
-      | Error.Exn (Error.Connection_failed message) -> Some (connect_failed key message)
+      | Error.Exn (Error.Connection_failed message | Error.Acquire_timeout message) ->
+        Some (connect_failed key message)
       | _ -> None
     ;;
 

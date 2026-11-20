@@ -51,8 +51,8 @@ type t =
   ; acquire_timeout : float option
     (** Seconds a statement waits for a free connection of an exhausted pool
         (connecting included) before it fails with
-        [Error.Exn (Connection_failed _)]. [None] (default) waits
-        indefinitely. *)
+        [Error.Exn (Acquire_timeout _)], which is not a connection error.
+        [None] (default) waits indefinitely. *)
   ; reconnect_backoff : float * float
     (** [(initial, max)] seconds a pool waits, once a reconnect failed,
         before it lets a single statement try again; the wait doubles with

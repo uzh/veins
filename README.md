@@ -430,6 +430,8 @@ pool backs off: statements fail right away with the last connection error, and a
 tries again. The wait doubles up to the maximum and resets once a statement reached the database.
 `Db.is_connection_error exn` tells whether what a statement raised is such an error (the driver's lost or refused
 connection, or `Error.Connection_failed`), e.g. to show "could not connect, try again later" instead of a failure.
+A statement that waited `acquire_timeout` for a connection raises `Error.Acquire_timeout` instead, which is no
+connection error: the pool is exhausted, not lost, and veins keeps it.
 `Pool.ping label` tells whether a database answers; `Pool.connect` only sets the pool up. `Veins.Connection.test url`
 checks a URL without a pool, and `Pool.test database` every URL of a database before (or after) it is registered: a
 failed test of the registered database sets its status to `ConnectionIssue`, the next successful one back to `Active`.

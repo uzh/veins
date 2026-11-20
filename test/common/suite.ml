@@ -902,6 +902,15 @@ module Make (D : Dialect) = struct
 
   (* Pools with a statement timeout and a single connection that statements
      wait for half a second at most. *)
+  let tuned_reported : Pool_options.failure list ref = ref []
+
+  let tuned_reports expected =
+    let got = !tuned_reported in
+    tuned_reported := [];
+    Alcotest.(check int) "reported once" expected (CCList.length got);
+    got
+  ;;
+
   module Tuned =
     Pools.Make_with_options
       (struct
@@ -919,6 +928,11 @@ module Make (D : Dialect) = struct
             ; acquire_timeout = Some 0.5
             ; max_idle_age = Some 0.2
             ; max_use_count = Some 50
+            ; on_failure =
+                Some
+                  (fun failure ->
+                    tuned_reported := failure :: !tuned_reported;
+                    Lwt.return_unit)
             }
         ;;
       end)
@@ -935,9 +949,20 @@ module Make (D : Dialect) = struct
           "exhausted pool"
           (fun () -> Tuned.find ctx ping ())
           (function
-            | Error.Exn (Error.Connection_failed _) -> ()
+            | Error.Exn (Error.Acquire_timeout _) as exn ->
+              Alcotest.(check bool)
+                "exhausted pool: no connection error"
+                false
+                (Tuned.is_connection_error exn);
+              CCList.iter
+                (fun { Pool_options.connection_error; _ } ->
+                   Alcotest.(check bool)
+                     "exhausted pool: failure.connection_error"
+                     false
+                     connection_error)
+                (tuned_reports 1)
             | exn ->
-              Alcotest.failf "expected Connection_failed, got %s" (Printexc.to_string exn)))
+              Alcotest.failf "expected Acquire_timeout, got %s" (Printexc.to_string exn)))
     in
     (* the abandoned request doesn't keep the connection *)
     let%lwt one = Tuned.find ctx ping () in
