@@ -583,6 +583,10 @@ connection (`Veins.Connection.fixed`) and its result comes back as it is, `(_, C
 connection drops the pool and a pool that waits to reconnect gives an `Error` right away, as for every statement.
 Only an unknown label or login raises. These errors aren't reported to `on_failure`.
 
+**Known issues.** What Caqti 3.1 and its drivers cost or get wrong, and what veins does about it (a round trip
+per borrowed MariaDB connection, blocking PostgreSQL connects, `static` requests with varying SQL, …), is in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
 ---
 
 ## Multiple databases

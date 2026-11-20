@@ -203,6 +203,8 @@ veins-gen --steps 3 --dialect postgresql "create orders table"   # options befor
 ## References
 
 - [README.md](README.md) — installation, quick-start, usage examples
+- [KNOWN_ISSUES.md](KNOWN_ISSUES.md) — Caqti / driver limits, veins' workarounds, upstream issues (filed
+  and drafts); update it when adding or dropping a workaround
 - [lib/pools_sig.mli](lib/pools_sig.mli) — full pool functor interface (`ConfigSig`, `Sig`, all query helpers)
 - [lib/migration.mli](lib/migration.mli) — migration types, sets, `App_sig`, step construction
 - [lib/veins.mli](lib/veins.mli) — the public modules, by section
