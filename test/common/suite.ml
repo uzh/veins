@@ -526,6 +526,38 @@ module Make (D : Dialect) = struct
     Lwt.return (Alcotest.(check int) "the write after the rollback was committed" 1 n)
   ;;
 
+  (* On MariaDB the commit is turning autocommit back on: the transaction's
+     rows and what the connection writes next are committed. *)
+  let test_commit_restores_autocommit () =
+    Single.Pool.initialize ();
+    with_table "autocommit_commit"
+    @@ fun table ->
+    let%lwt () =
+      Single.transaction_ctx ~role:owner root (fun ctx ->
+        Single.exec ctx (insert table) (1, 1))
+    in
+    let%lwt () =
+      Single.transaction
+        ~needs:Need.none
+        (Single.label_ctx ~role:owner root)
+        (fun (module C : Caqti_lwt.CONNECTION) ->
+           C.exec (Request.caqti (insert table)) (2, 2))
+    in
+    let%lwt () = Single.exec (Single.label_ctx ~role:owner root) (insert table) (3, 3) in
+    let%lwt n = Db.find (root_ctx ()) (count table) () in
+    let%lwt pool = Single.Pool.fetch root in
+    Single.Pool.clear ();
+    let rec wait attempts =
+      if Caqti_lwt_unix.Pool.size pool = 0 || attempts = 0
+      then Lwt.return_unit
+      else (
+        let%lwt () = Lwt_unix.sleep 0.05 in
+        wait (attempts - 1))
+    in
+    let%lwt () = wait 100 in
+    Lwt.return (Alcotest.(check int) "both transactions and the write after them" 3 n)
+  ;;
+
   let wait_closed pool =
     let rec wait attempts =
       if Caqti_lwt_unix.Pool.size pool = 0 || attempts = 0
@@ -664,6 +696,30 @@ module Make (D : Dialect) = struct
         Db.populate ~needs:Roles.write ctx table [ "id"; "val" ] T.(t2 int int) [ 5, 5 ])
     in
     check_count table 1
+  ;;
+
+  (* MariaDB inserts the rows in batches of 100: full batches only, then a
+     partial one after them; a failing row in a later batch leaves nothing. *)
+  let test_populate_batches () =
+    with_table "populate_batches"
+    @@ fun table ->
+    let ctx = root_ctx () in
+    let populate rows =
+      Db.populate ~needs:Roles.write ctx table [ "id"; "val" ] T.(t2 int int) rows
+    in
+    let range first last = CCList.range first last |> CCList.map (fun i -> i, i * 10) in
+    let%lwt () = populate (range 1 200) in
+    let%lwt () = populate (range 201 250) in
+    let%lwt () =
+      expect_exn
+        "duplicate row in the second batch"
+        (fun () -> populate (range 251 400 @ [ 1, 0 ]))
+        (function
+          | Error.Failed _ -> ()
+          | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))
+    in
+    let%lwt rows = Db.collect ctx (rows table) () in
+    Lwt.return (Alcotest.(check (list (pair int int))) "rows" (range 1 250) rows)
   ;;
 
   (* {1 Errors} *)
@@ -1152,13 +1208,63 @@ module Make (D : Dialect) = struct
 
   (* {1 Migrations} *)
 
-  module Runner = Migration.Make (Db)
+  (* A set of its own: what an application registered. Other tests'
+     migrations are rows outside it (orphaned). *)
+  module Single_set (P : sig
+      val policy : Migration.out_of_order_policy
+    end) =
+  struct
+    module S =
+      Migration.Sets.Make
+        (struct
+          type t = [ `Only ]
+
+          let all = [ `Only ]
+          let name `Only = "only"
+          let out_of_order `Only = P.policy
+        end)
+        (Db)
+
+    include S.App (struct
+        let set_for (_ : Label.t) = `Only
+      end)
+
+    let register migrations = CCList.iter (S.register ~sets:[ `Only ]) migrations
+  end
+
+  let source entries =
+    (module struct
+      let name = "veins_test"
+      let read (_ : Caqti_lwt.connection) = Lwt_result.return entries
+    end : Migration.Import.Source)
+  ;;
+
+  (* Every step of [migrations] applied, written as an import does; with
+     none, only creates or upgrades the state table. *)
+  let mark_applied migrations =
+    let module M = Single_set (struct
+        let policy = `Fail
+      end)
+    in
+    M.register migrations;
+    let entries =
+      CCList.map
+        (fun (m : Migration.t) ->
+           { Migration.Import.namespace = m.namespace
+           ; applied = CCList.length m.steps
+           ; failed = None
+           })
+        migrations
+    in
+    match%lwt M.Import.run ~source:(source entries) root with
+    | Ok (_ : Migration.Import.Report.t) -> Lwt.return_unit
+    | Error e -> Alcotest.failf "mark applied: %s" (Error.show e)
+  ;;
 
   (* The suite may share its database with an application: only ever touch
      the migration state of the suite's own namespaces. *)
   let forget_test_migrations () =
-    (* creates the state table if there is none *)
-    let%lwt (_ : (unit, Error.t) result) = Runner.run_all ~migrations:[] root () in
+    let%lwt () = mark_applied [] in
     Db.exec
       (root_ctx ())
       (direct
@@ -1170,25 +1276,43 @@ module Make (D : Dialect) = struct
       ()
   ;;
 
-  let test_migration () =
+  let connection_kind () =
+    Db.connection_ctx ~role:owner root (fun ctx ->
+      Db.query ~needs:Need.none ctx (fun (module C : Caqti_lwt.CONNECTION) ->
+        Lwt.return_ok (Dialect.kind C.dialect)))
+  ;;
+
+  module Default = Migration.App.Make (Db)
+
+  (* The default set: [Migration.register], step ids derived from the
+     positions, a step without FK checks. *)
+  let test_default_set () =
     let ns =
       Migration.Namespace.create (Format.asprintf "veins_test_mig_%d" (Random.int 100000))
     in
     let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_mig") () in
+    (* a row outside the set, so the database isn't uninitialized *)
+    let%lwt () =
+      mark_applied
+        [ Migration.(
+            create
+              (Namespace.create "veins_test_default_base")
+              ~written_at:(ptime_of_string "2000-01-01T00:00:00Z")
+            |> add_step (Step.create ~label:"base" (Sql.any "SELECT 1")))
+        ]
+    in
     let mig =
       Migration.(
         create ns ~written_at:(ptime_of_string "2024-01-01T00:00:00Z")
         |> add_step
              (Step.create
                 ~label:"create table"
-                ~down:(Sql.any "DROP TABLE IF EXISTS veins_t_mig")
                 (Sql.any "CREATE TABLE veins_t_mig (id INTEGER PRIMARY KEY)"))
         |> add_step
              (Step.create
                 ~label:"insert row without FK checks"
                 ~check_fk:false
-                ~down:(Sql.any "DELETE FROM veins_t_mig WHERE id = 42")
                 (Sql.any "INSERT INTO veins_t_mig (id) VALUES (42)")))
     in
     Alcotest.(check (list string))
@@ -1198,126 +1322,27 @@ module Make (D : Dialect) = struct
             Migration.Id.(value (derive ~namespace:(Migration.Namespace.value ns) ~index)))
          [ 0; 1 ])
       (CCList.map Migration.Id.value (Migration.step_ids mig));
-    Migration.register ~for_databases:(Migration.Database root) mig;
-    let ok name = function
-      | Ok () -> ()
+    Migration.register mig;
+    let ok name result =
+      match%lwt result with
+      | Ok () -> Lwt.return_unit
       | Error e -> Alcotest.failf "%s: %s" name (Error.show e)
     in
-    let applied () =
-      let%lwt statuses = Runner.status root () in
-      match
-        CCList.find_opt (fun (n, _, _) -> Migration.Namespace.equal n ns) statuses
-      with
-      | Some (_, applied, _) -> Lwt.return applied
-      | None -> Alcotest.failf "namespace %s not in status" (Migration.Namespace.show ns)
+    let%lwt () = ok "migrate" (Default.migrate root) in
+    let%lwt () = check_count "veins_t_mig" 1 in
+    let%lwt () = ok "idempotent" (Default.migrate root) in
+    let%lwt () =
+      match%lwt Default.ready root with
+      | Ok Migration.Status.Ready -> Lwt.return_unit
+      | Ok status -> Alcotest.failf "ready: %s" (Migration.Status.show status)
+      | Error e -> Alcotest.failf "ready: %s" (Error.show e)
     in
-    let%lwt () = Runner.run_all root () |> Lwt.map (ok "run_all") in
-    let%lwt n = applied () in
-    Alcotest.(check int) "applied" 2 n;
-    let%lwt () = Runner.run_all root () |> Lwt.map (ok "idempotent") in
-    let%lwt drifts = Runner.check root () in
-    Alcotest.(check int) "no drift" 0 (CCList.length drifts);
-    let%lwt () = Runner.down root mig |> Lwt.map (ok "down") in
-    let%lwt n = applied () in
-    Alcotest.(check int) "reverted" 0 n;
     let%lwt () = forget_test_migrations () in
     Db.exec (root_ctx ()) (drop_table "veins_t_mig") ()
   ;;
 
-  (* Importing another engine's state: the first step ran already (the table
-     exists), [mark_applied] records it, [up] runs only the rest. *)
-  let test_migration_import () =
-    let namespace = Format.asprintf "veins_test_import_%d" (Random.int 100000) in
-    let id index = Migration.Id.derive ~namespace ~index in
-    let mig =
-      Migration.(
-        create
-          (Namespace.create namespace)
-          ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
-        |> add_step
-             (Step.create
-                ~id:(id 0)
-                ~label:"create table"
-                (Sql.any "CREATE TABLE veins_t_import (id INTEGER PRIMARY KEY)"))
-        |> add_step
-             (Step.create
-                ~id:(id 1)
-                ~label:"insert row"
-                (Sql.any "INSERT INTO veins_t_import (id) VALUES (1)")))
-    in
-    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_import") () in
-    let%lwt () =
-      Db.exec
-        (root_ctx ())
-        (ddl "CREATE TABLE veins_t_import (id INTEGER PRIMARY KEY)")
-        ()
-    in
-    let%lwt () = Runner.mark_applied root mig ~steps:1 in
-    let%lwt () = Runner.mark_applied root mig ~steps:1 in
-    let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
-    Alcotest.(check (list (pair string int)))
-      "one step pending"
-      [ namespace, 1 ]
-      (CCList.map (fun (ns, n) -> Migration.Namespace.value ns, n) pending);
-    let%lwt () =
-      Runner.up root mig
-      |> Lwt.map (function
-        | Ok () -> ()
-        | Error e -> Alcotest.failf "up: %s" (Error.show e))
-    in
-    let%lwt rows = Db.find (root_ctx ()) (count "veins_t_import") () in
-    Alcotest.(check int) "only the second step ran" 1 rows;
-    let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
-    Alcotest.(check int) "nothing pending" 0 (CCList.length pending);
-    let%lwt () = forget_test_migrations () in
-    Db.exec (root_ctx ()) (drop_table "veins_t_import") ()
-  ;;
-
-  (* Instances of an application starting together: each step runs once. *)
-  let test_migration_runs_once () =
-    let namespace = Format.asprintf "veins_test_lock_%d" (Random.int 100000) in
-    let id index = Migration.Id.derive ~namespace ~index in
-    let mig =
-      Migration.(
-        create
-          (Namespace.create namespace)
-          ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
-        |> add_step
-             (Step.create
-                ~id:(id 0)
-                ~label:"create table"
-                (Sql.any "CREATE TABLE veins_t_lock (id INTEGER PRIMARY KEY)"))
-        |> add_step
-             (Step.create
-                ~id:(id 1)
-                ~label:"insert row"
-                (Sql.any "INSERT INTO veins_t_lock (id) VALUES (1)")))
-    in
-    let%lwt () = forget_test_migrations () in
-    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_lock") () in
-    let%lwt results =
-      Lwt.all
-        (CCList.init 4 (fun (_ : int) -> Runner.run_all ~migrations:[ mig ] root ()))
-    in
-    CCList.iter
-      (function
-        | Ok () -> ()
-        | Error e -> Alcotest.failf "concurrent run_all: %s" (Error.show e))
-      results;
-    let%lwt rows = Db.find (root_ctx ()) (count "veins_t_lock") () in
-    Alcotest.(check int) "the steps ran once" 1 rows;
-    let%lwt () = forget_test_migrations () in
-    Db.exec (root_ctx ()) (drop_table "veins_t_lock") ()
-  ;;
-
-  let connection_kind () =
-    Db.connection_ctx ~role:owner root (fun ctx ->
-      Db.query ~needs:Need.none ctx (fun (module C : Caqti_lwt.CONNECTION) ->
-        Lwt.return_ok (Dialect.kind C.dialect)))
-  ;;
-
-  (* A run with a step that has no SQL for the connection's dialect applies
-     nothing, not even the migrations before it. *)
+  (* A set with a step that has no SQL for the connection's dialect, or only
+     a placeholder, applies nothing, not even the migrations before it. *)
   let test_migration_dialects () =
     let%lwt kind = connection_kind () in
     let other : Dialect.kind =
@@ -1325,17 +1350,18 @@ module Make (D : Dialect) = struct
       | Dialect.Mariadb -> Dialect.Postgresql
       | Dialect.Postgresql -> Dialect.Mariadb
     in
-    let migration name step =
+    let migration name written_at step =
       let namespace = Format.asprintf "veins_test_%s_%d" name (Random.int 100000) in
       Migration.(
         create
           (Namespace.create namespace)
-          ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
+          ~written_at:(Migration.ptime_of_string written_at)
         |> add_step step)
     in
     let supported =
       migration
         "dialect_ok"
+        "2024-01-01T00:00:00Z"
         (Migration.Step.create
            ~label:"create table"
            (Migration.Sql.only
@@ -1345,6 +1371,7 @@ module Make (D : Dialect) = struct
     let unsupported =
       migration
         "dialect_other"
+        "2024-02-01T00:00:00Z"
         (Migration.Step.create
            ~label:"other dialect only"
            (Migration.Sql.only other "INSERT INTO veins_t_dialect (id) VALUES (1)"))
@@ -1352,6 +1379,7 @@ module Make (D : Dialect) = struct
     let placeholder =
       migration
         "dialect_todo"
+        "2024-03-01T00:00:00Z"
         (Migration.Step.create
            ~label:"left a TODO"
            (Migration.Sql.v
@@ -1359,176 +1387,977 @@ module Make (D : Dialect) = struct
               ~postgresql:"TODO: forward SQL"
               ()))
     in
-    let migrations = [ supported; unsupported; placeholder ] in
+    let module M = Single_set (struct
+        let policy = `Fail
+      end)
+    in
+    M.register [ supported; unsupported; placeholder ];
     let%lwt () = forget_test_migrations () in
     let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect") () in
-    let fails name result =
-      match result with
-      | Error (Error.Migration_failed (_ : string)) -> ()
-      | Error e -> Alcotest.failf "%s: unexpected error %s" name (Error.show e)
-      | Ok () -> Alcotest.failf "%s: succeeded" name
-    in
-    let%lwt () = Runner.verify ~migrations root () |> Lwt.map (fails "verify") in
-    let%lwt () = Runner.run_all ~migrations root () |> Lwt.map (fails "run_all") in
-    let%lwt () = Runner.up root unsupported |> Lwt.map (fails "up") in
-    let%lwt pending = Runner.pending ~migrations root () in
-    let%lwt () = Runner.up root placeholder |> Lwt.map (fails "up placeholder") in
-    Alcotest.(check int) "nothing applied" 3 (CCList.length pending);
-    let%lwt drifts = Runner.check ~migrations root () in
-    let unsupported_steps =
-      CCList.filter_map
-        (function
-          | Migration.Unsupported { steps; dialect; _ } when dialect = kind -> Some steps
-          | Migration.Unsupported _ | Migration.Pending _ | Migration.Orphaned _ -> None)
-        drifts
-    in
-    Alcotest.(check (list (list string)))
-      "check names the step"
-      [ [ "other dialect only" ]; [ "left a TODO" ] ]
-      unsupported_steps;
     let%lwt () =
-      Runner.run_all ~migrations:[ supported ] root ()
-      |> Lwt.map (function
-        | Ok () -> ()
-        | Error e -> Alcotest.failf "supported alone: %s" (Error.show e))
+      mark_applied
+        [ migration
+            "dialect_base"
+            "2000-01-01T00:00:00Z"
+            (Migration.Step.create ~label:"base" (Migration.Sql.any "SELECT 1"))
+        ]
     in
     let%lwt () =
-      Runner.verify ~migrations:[ supported ] root ()
-      |> Lwt.map (function
-        | Ok () -> ()
-        | Error e -> Alcotest.failf "verify supported: %s" (Error.show e))
+      match%lwt M.dry_run root with
+      | Ok { refusal = Some (Migration.Refusal.Missing_dialect missing); _ } ->
+        Lwt.return
+          (Alcotest.(check (list (list string)))
+             "the dry run names the steps"
+             [ [ "other dialect only" ]; [ "left a TODO" ] ]
+             (CCList.map snd missing))
+      | Ok dry -> Alcotest.failf "dry run: %s" (Migration.Dry_run.show dry)
+      | Error e -> Alcotest.failf "dry run: %s" (Error.show e)
     in
-    let unwritten_down =
-      migration
-        "dialect_down"
-        (Migration.Step.create
-           ~label:"down left a TODO"
-           ~down:
-             (Migration.Sql.v
-                ~mariadb:"TODO: reverse SQL"
-                ~postgresql:"TODO: reverse SQL"
-                ())
-           (Migration.Sql.only kind "CREATE TABLE veins_t_dialect_down (id INTEGER)"))
+    let%lwt () =
+      match%lwt M.migrate root with
+      | Error (Error.Migration_failed (_ : string)) -> Lwt.return_unit
+      | Error e -> Alcotest.failf "migrate: unexpected error %s" (Error.show e)
+      | Ok () -> Alcotest.fail "migrate: succeeded"
     in
-    let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect_down") () in
-    Lwt.finalize
-      (fun () ->
-         let%lwt () =
-           Runner.up root unwritten_down
-           |> Lwt.map (function
-             | Ok () -> ()
-             | Error e -> Alcotest.failf "up with a TODO down: %s" (Error.show e))
-         in
-         let%lwt () =
-           Runner.down root unwritten_down |> Lwt.map (fails "down placeholder")
-         in
-         let%lwt pending = Runner.pending ~migrations:[ unwritten_down ] root () in
-         Alcotest.(check int) "down reverted nothing" 0 (CCList.length pending);
-         (* the table [up] created is still there *)
-         Db.exec (root_ctx ()) (ddl "INSERT INTO veins_t_dialect_down (id) VALUES (1)") ())
-      (fun () ->
-         let%lwt () = forget_test_migrations () in
-         let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_dialect_down") () in
-         Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ())
+    let%lwt created =
+      Db.find
+        (root_ctx ())
+        (int_query
+           (Format.asprintf
+              "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = \
+               'veins_t_dialect'"))
+        ()
+    in
+    Alcotest.(check int) "nothing applied" 0 created;
+    let%lwt () =
+      match%lwt M.ready root with
+      | Ok (Migration.Status.Blocked (Migration.Refusal.Missing_dialect [ _; _ ], _)) ->
+        Lwt.return_unit
+      | Ok status -> Alcotest.failf "ready: %s" (Migration.Status.show status)
+      | Error e -> Alcotest.failf "ready: %s" (Error.show e)
+    in
+    let module Supported = Single_set (struct
+        let policy = `Fail
+      end)
+    in
+    Supported.register [ supported ];
+    let%lwt () =
+      match%lwt Supported.migrate root with
+      | Ok () -> Lwt.return_unit
+      | Error e -> Alcotest.failf "supported alone: %s" (Error.show e)
+    in
+    let%lwt () = forget_test_migrations () in
+    Db.exec (root_ctx ()) (drop_table "veins_t_dialect") ()
   ;;
 
-  (* The counter bridge, on a table of its own. Uses the deprecated API on
-     purpose. *)
-  module Counter_tests = struct
-    [@@@alert "-deprecated"]
+  (* {2 Migrations in an application} Each test runs its own set: a set is
+     what an application registered, so other tests' migrations are rows
+     outside it (orphaned). *)
+  module App_tests = struct
+    let state = Migration.state_table ()
 
-    module Counters = Migration.Counter_state.Make (Db)
-
-    let table = "veins_test_counters"
-
-    let set_counter namespace version dirty =
-      Db.exec
-        (root_ctx ())
-        (ddl
-           (Format.asprintf
-              "INSERT INTO %s (namespace, version, dirty) VALUES ('%s', %d, %s)"
-              table
-              namespace
-              version
-              (if dirty then "TRUE" else "FALSE")))
-        ()
+    let ok name result =
+      match%lwt result with
+      | Ok x -> Lwt.return x
+      | Error e -> Alcotest.failf "%s: %s" name (Error.show e)
     ;;
 
-    let counter namespace =
-      Db.find_opt
+    let fails name result =
+      match%lwt result with
+      | Ok _ -> Alcotest.failf "%s: succeeded" name
+      | Error (e : Error.t) -> Lwt.return (Error.show e)
+    ;;
+
+    let passes name result =
+      match%lwt result with
+      | Ok () -> Lwt.return_unit
+      | Error status -> Alcotest.failf "%s: %s" name (Migration.Status.show status)
+    ;;
+
+    let contains name ~sub s =
+      Alcotest.(check bool)
+        (Format.asprintf "%s: %S in %S" name sub s)
+        true
+        (CCString.mem ~sub s)
+    ;;
+
+    let unique name = Format.asprintf "veins_test_%s_%d" name (Random.int 1_000_000)
+
+    let migration name written_at steps =
+      CCList.fold_left
+        (fun m (label, sql) -> Migration.(add_step (Step.create ~label (Sql.any sql)) m))
+        (Migration.create
+           (Migration.Namespace.create name)
+           ~written_at:(Migration.ptime_of_string written_at))
+        steps
+    ;;
+
+    let dialect_query request_type sql =
+      Dialect.request Caqti.Template.Request.Direct request_type sql
+      |> Request.create ~needs:Roles.read
+    ;;
+
+    let table_exists name =
+      Db.find (root_ctx ()) (dialect_query T.(string -->! int) Dialect.table_exists) name
+      |> Lwt.map (fun n -> n > 0)
+    ;;
+
+    let column_exists column =
+      Db.find
         (root_ctx ())
-        (direct
-           T.(string -->? t2 int bool)
-           (Format.asprintf "SELECT version, dirty FROM %s WHERE namespace = ?" table)
-         |> Request.create ~needs:Roles.read)
+        (dialect_query T.(t2 string string -->! int) Dialect.column_exists)
+        (state, column)
+      |> Lwt.map (fun n -> n > 0)
+    ;;
+
+    (* id, uuid, status, last_error, whether run_at is set; of one namespace *)
+    let rows namespace =
+      Db.collect
+        (root_ctx ())
+        (dialect_query
+           T.(string -->* t2 (t3 int string string) (t2 (option string) int))
+           (fun kind ->
+              Format.asprintf
+                "SELECT id, %s, status, last_error, CASE WHEN run_at IS NULL THEN 0 ELSE \
+                 1 END FROM %s WHERE namespace = ? ORDER BY id"
+                (Dialect.uuid_select_fragment kind ~field:"uuid")
+                state))
         namespace
     ;;
 
-    let test () =
-      let namespace = Format.asprintf "veins_test_counter_%d" (Random.int 100000) in
-      let step label =
-        Migration.(
-          Step.create
-            ~label
-            (Sql.any "CREATE TABLE IF NOT EXISTS veins_t_counter (id INTEGER)"))
+    let status_of namespace =
+      let%lwt rows = rows namespace in
+      Lwt.return (CCList.map (fun ((_, _, status), _) -> status) rows)
+    ;;
+
+    let exec sql = Db.exec (root_ctx ()) (ddl sql) ()
+
+    (* An initialized database: a row of its own, so the suite never finds
+       the shared database "uninitialized". *)
+    let baseline () =
+      mark_applied
+        [ migration
+            "veins_test_baseline"
+            "2000-01-01T00:00:00Z"
+            [ "baseline", "SELECT 1" ]
+        ]
+    ;;
+
+    let fresh tables =
+      let%lwt () = forget_test_migrations () in
+      let%lwt () = baseline () in
+      Lwt_list.iter_s (fun table -> Db.exec (root_ctx ()) (drop_table table) ()) tables
+    ;;
+
+    let cleanup tables =
+      let%lwt () = forget_test_migrations () in
+      Lwt_list.iter_s (fun table -> Db.exec (root_ctx ()) (drop_table table) ()) tables
+    ;;
+
+    (* PostgreSQL keeps a table's index names when it is renamed, and index
+       names are unique per schema: rename them too. *)
+    let rename_table kind a b =
+      let%lwt () = exec (Format.asprintf "ALTER TABLE %s RENAME TO %s" a b) in
+      match (kind : Dialect.kind) with
+      | Dialect.Mariadb -> Lwt.return_unit
+      | Dialect.Postgresql ->
+        let suffix = "_vsaved" in
+        let%lwt indexes =
+          Db.collect
+            (root_ctx ())
+            (direct
+               T.(string -->* string)
+               "SELECT indexname FROM pg_indexes WHERE schemaname = ANY \
+                (current_schemas(false)) AND tablename = ?"
+             |> Request.create ~needs:Roles.read)
+            b
+        in
+        Lwt_list.iter_s
+          (fun index ->
+             let renamed =
+               match CCString.chop_suffix ~suf:suffix index with
+               | Some original -> original
+               | None -> index ^ suffix
+             in
+             exec (Format.asprintf "ALTER INDEX %s RENAME TO %s" index renamed))
+          indexes
+    ;;
+
+    (* Runs [f] without the suite database's state table, and puts it back. *)
+    let with_state_aside f =
+      let%lwt kind = connection_kind () in
+      let saved = state ^ "_vsaved" in
+      if%lwt table_exists saved
+      then Alcotest.failf "%s exists: a previous run left it, restore it by hand" saved
+      else (
+        let%lwt () = forget_test_migrations () in
+        let%lwt had = table_exists state in
+        let%lwt () = if had then rename_table kind state saved else Lwt.return_unit in
+        Lwt.finalize f (fun () ->
+          let%lwt () = Db.exec (root_ctx ()) (drop_table state) () in
+          if had then rename_table kind saved state else Lwt.return_unit))
+    ;;
+
+    let create_first_layout kind =
+      exec
+        (match (kind : Dialect.kind) with
+         | Dialect.Mariadb ->
+           Format.asprintf
+             "CREATE TABLE %s (id BINARY(16) NOT NULL, namespace VARCHAR(128) NOT NULL, \
+              label VARCHAR(256) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at \
+              DATETIME(3) NOT NULL, PRIMARY KEY (id))"
+             state
+         | Dialect.Postgresql ->
+           Format.asprintf
+             "CREATE TABLE %s (id UUID NOT NULL, namespace VARCHAR(128) NOT NULL, label \
+              VARCHAR(256) NOT NULL, created_at TIMESTAMPTZ NOT NULL, updated_at \
+              TIMESTAMPTZ NOT NULL, PRIMARY KEY (id))"
+             state)
+    ;;
+
+    (* The first [steps] rows, created in the reverse order of their UUIDs
+       (the old key), returned in the order they were created. *)
+    let insert_first_layout kind (mig : Migration.t) ~steps =
+      let ids =
+        CCList.take steps (Migration.step_ids mig)
+        |> CCList.map Migration.Id.value
+        |> CCList.sort (CCFun.flip CCString.compare)
       in
+      let%lwt () =
+        Lwt_list.iteri_s
+          (fun i id ->
+             exec
+               (Format.asprintf
+                  "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES \
+                   (%s, '%s', 'imported', '2020-01-%02d 00:00:00', CURRENT_TIMESTAMP)"
+                  state
+                  (Dialect.uuid_value_fragment kind ("'" ^ id ^ "'"))
+                  (Migration.Namespace.value mig.namespace)
+                  (i + 1)))
+          ids
+      in
+      Lwt.return ids
+    ;;
+
+    (* A fresh table has the current layout; one of the first layout is
+       upgraded once, by migrate and by Import.run alike, keeping its UUIDs;
+       a read-only role reads both. *)
+    let test_state_table () =
+      let%lwt kind = connection_kind () in
+      let namespace = unique "layout" in
       let mig =
-        Migration.(
-          create
-            (Namespace.create namespace)
-            ~written_at:(Migration.ptime_of_string "2024-01-01T00:00:00Z")
-          |> add_step (step "one")
-          |> add_step (step "two"))
+        migration
+          namespace
+          "2024-01-01T00:00:00Z"
+          [ "create", "CREATE TABLE veins_t_layout (id INTEGER)"
+          ; "one", "INSERT INTO veins_t_layout (id) VALUES (1)"
+          ; "two", "INSERT INTO veins_t_layout (id) VALUES (2)"
+          ]
       in
-      let%lwt () = forget_test_migrations () in
-      let%lwt () = Db.exec (root_ctx ()) (drop_table table) () in
-      let pending () =
-        let%lwt pending = Runner.pending ~migrations:[ mig ] root () in
-        Lwt.return (CCList.fold_left (fun n (_, k) -> n + k) 0 pending)
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
       in
-      let imported name =
-        Lwt.map (function
-          | Ok state -> state
-          | Error (`Dirty (_ : string list)) -> Alcotest.failf "%s: dirty" name)
+      M.register [ mig ];
+      (* the pending steps, as a read-only login sees them *)
+      let read_only () =
+        let%lwt report = M.report ~role:Roles.reader roles_label in
+        Lwt.return (CCList.flat_map snd report.pending)
       in
-      (* no table: nothing to import, [record] creates it *)
-      let%lwt state = Counters.import ~table root [ mig ] |> imported "no table" in
-      let%lwt n = pending () in
-      Alcotest.(check int) "no table, nothing marked" 2 n;
+      with_state_aside
+      @@ fun () ->
+      let%lwt () = mark_applied [] in
+      let%lwt columns =
+        Lwt_list.map_s column_exists [ "id"; "uuid"; "status"; "last_error"; "run_at" ]
+      in
+      Alcotest.(check (list bool))
+        "current layout"
+        [ true; true; true; true; true ]
+        columns;
       let%lwt () =
-        Counters.record ~table root state mig.Migration.namespace ~applied:0 ~failed:true
+        expect_exn
+          "a status that isn't one"
+          (fun () ->
+             exec
+               (Format.asprintf
+                  "INSERT INTO %s (uuid, namespace, label, status, created_at, \
+                   updated_at) VALUES (%s, 'veins_test_x', 'x', 'dirty', \
+                   CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                  state
+                  (Dialect.uuid_value_fragment
+                     kind
+                     "'00000000-0000-4000-8000-000000000000'")))
+          (fun (_ : exn) -> ())
       in
-      let%lwt row = counter namespace in
-      Alcotest.(check (option (pair int bool))) "table created" (Some (0, true)) row;
-      (* dirty: refused, nothing marked *)
-      let%lwt () =
-        match%lwt Counters.import ~table root [ mig ] with
-        | Error (`Dirty namespaces) ->
-          Lwt.return (Alcotest.(check (list string)) "dirty" [ namespace ] namespaces)
-        | Ok (_ : Migration.Counter_state.state) -> Alcotest.fail "dirty imported"
+      let upgrade name run =
+        let%lwt () = Db.exec (root_ctx ()) (drop_table state) () in
+        let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_layout") () in
+        let%lwt () = exec "CREATE TABLE veins_t_layout (id INTEGER)" in
+        let%lwt () = create_first_layout kind in
+        let%lwt created = insert_first_layout kind mig ~steps:2 in
+        let%lwt read = read_only () in
+        Alcotest.(check (list string)) (name ^ ": read the first layout") [ "two" ] read;
+        let%lwt uuid = column_exists "uuid" in
+        Alcotest.(check bool) (name ^ ": first layout") false uuid;
+        let%lwt () = run () in
+        let%lwt uuid = column_exists "uuid" in
+        Alcotest.(check bool) (name ^ ": upgraded") true uuid;
+        let%lwt upgraded = rows namespace in
+        Alcotest.(check (list string))
+          (name ^ ": UUIDs kept, ids in the order the rows were created")
+          created
+          (CCList.take 2 (CCList.map (fun ((_, uuid, _), _) -> uuid) upgraded));
+        Alcotest.(check (list string))
+          (name ^ ": imported rows applied")
+          [ "applied"; "applied" ]
+          (CCList.take 2 (CCList.map (fun ((_, _, status), _) -> status) upgraded));
+        Alcotest.(check int)
+          (name ^ ": ids")
+          (CCList.length upgraded)
+          (CCList.length
+             (CCList.sort_uniq
+                ~cmp:compare
+                (CCList.map (fun ((id, _, _), _) -> id) upgraded)));
+        Lwt.return upgraded
       in
-      (* one step counted: marked, the other pending *)
-      let%lwt () =
-        Db.exec (root_ctx ()) (ddl (Format.asprintf "DELETE FROM %s" table)) ()
+      let%lwt upgraded = upgrade "migrate" (fun () -> ok "migrate" (M.migrate root)) in
+      Alcotest.(check (list (pair (option string) int)))
+        "imported rows have no run_at, the new one has"
+        [ None, 0; None, 0; None, 1 ]
+        (CCList.map snd upgraded);
+      let%lwt () = ok "migrate again" (M.migrate root) in
+      let%lwt again = rows namespace in
+      Alcotest.(check int)
+        "a second run changes nothing"
+        (CCList.length upgraded)
+        (CCList.length again);
+      let%lwt read = read_only () in
+      Alcotest.(check (list string)) "read the current layout" [] read;
+      let%lwt (_ : _ list) =
+        upgrade "import" (fun () ->
+          let%lwt (_ : Migration.Import.Report.t) =
+            ok
+              "import"
+              (M.Import.run
+                 ~source:(Migration.Import.counter_state ~table:"veins_test_none" ())
+                 root)
+          in
+          Lwt.return_unit)
       in
-      let%lwt () = set_counter namespace 1 false in
-      let%lwt state = Counters.import ~table root [ mig ] |> imported "counted" in
-      let%lwt n = pending () in
-      Alcotest.(check int) "one step marked" 1 n;
-      let%lwt () =
-        Runner.up root mig
+      Db.exec (root_ctx ()) (drop_table "veins_t_layout") ()
+    ;;
+
+    (* The third step fails: the first two stay applied, the third is
+       failed, nothing after it ran, and the next runs refuse until the row
+       is repaired by hand, with the statements the report prints. *)
+    let test_failure_and_repair () =
+      let%lwt kind = connection_kind () in
+      let first = unique "fail" in
+      let second = unique "after_fail" in
+      let failing =
+        migration
+          first
+          "2024-01-01T00:00:00Z"
+          [ "create", "CREATE TABLE veins_t_fail (id INTEGER)"
+          ; "one", "INSERT INTO veins_t_fail (id) VALUES (1)"
+          ; "missing", "INSERT INTO veins_t_fail_missing (id) VALUES (2)"
+          ; "three", "INSERT INTO veins_t_fail (id) VALUES (3)"
+          ]
+      in
+      let later =
+        migration
+          second
+          "2024-02-01T00:00:00Z"
+          [ "nine", "INSERT INTO veins_t_fail (id) VALUES (9)" ]
+      in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register [ failing; later ];
+      let tables = [ "veins_t_fail"; "veins_t_fail_missing" ] in
+      let%lwt () = fresh tables in
+      let%lwt msg = fails "failing step" (M.migrate root) in
+      contains "the error" ~sub:"missing" msg;
+      let%lwt rows_after = rows first in
+      Alcotest.(check (list (pair string int)))
+        "two applied, one failed"
+        [ "applied", 1; "applied", 1; "failed", 1 ]
+        (CCList.map (fun ((_, _, status), (_, run)) -> status, run) rows_after);
+      let failed_id, failed_uuid, _ = fst (CCList.nth rows_after 2) in
+      Alcotest.(check bool)
+        "last_error"
+        true
+        (CCOption.is_some (fst (snd (CCList.nth rows_after 2))));
+      let%lwt later_rows = rows second in
+      Alcotest.(check int) "nothing after it ran" 0 (CCList.length later_rows);
+      let%lwt () = check_count "veins_t_fail" 1 in
+      let%lwt msg = fails "refused" (M.migrate root) in
+      contains "names the step" ~sub:failed_uuid msg;
+      contains "names the row" ~sub:(Format.asprintf "row %d" failed_id) msg;
+      let%lwt status = ok "ready" (M.ready root) in
+      Alcotest.(check bool)
+        "failed status"
+        true
+        (match status with
+         | Migration.Status.Blocked (Migration.Refusal.Failed [ _ ], _) -> true
+         | _ -> false);
+      let%lwt report = M.report root in
+      let shown = Migration.Report.show report in
+      let mark_applied =
+        Migration.Repair.mark_applied kind (Migration.Id.create failed_uuid)
+      in
+      contains "the report prints the repair" ~sub:mark_applied shown;
+      (* the admin inserts row 2 by hand and marks the step applied *)
+      let%lwt () = exec "INSERT INTO veins_t_fail (id) VALUES (2)" in
+      let%lwt () = exec mark_applied in
+      let%lwt () = ok "after the repair" (M.migrate root) in
+      let%lwt () = check_count "veins_t_fail" 4 in
+      let%lwt rows_after = rows first in
+      Alcotest.(check (list string))
+        "continued after the step"
+        [ "applied"; "applied"; "applied"; "applied" ]
+        (CCList.map (fun ((_, _, status), _) -> status) rows_after);
+      Alcotest.(check bool)
+        "last_error kept"
+        true
+        (CCOption.is_some (fst (snd (CCList.nth rows_after 2))));
+      (* undone by hand: the row deleted, the step runs again *)
+      let retry = unique "retry" in
+      let mig =
+        migration
+          retry
+          "2024-03-01T00:00:00Z"
+          [ "fill", "INSERT INTO veins_t_fail_missing (id) VALUES (1)" ]
+      in
+      M.register [ mig ];
+      let%lwt (_ : string) = fails "missing table" (M.migrate root) in
+      let%lwt uuid =
+        rows retry
         |> Lwt.map (function
+          | [ ((_, uuid, "failed"), _) ] -> uuid
+          | _ -> Alcotest.fail "one failed row")
+      in
+      let delete = Migration.Repair.delete kind (Migration.Id.create uuid) in
+      let%lwt () = exec delete in
+      let%lwt (_ : string) = fails "fails again" (M.migrate root) in
+      let%lwt statuses = status_of retry in
+      Alcotest.(check (list string)) "the row written again" [ "failed" ] statuses;
+      let%lwt () = exec "CREATE TABLE veins_t_fail_missing (id INTEGER)" in
+      let%lwt () = exec delete in
+      let%lwt () = ok "runs again" (M.migrate root) in
+      let%lwt statuses = status_of retry in
+      Alcotest.(check (list string)) "applied" [ "applied" ] statuses;
+      let%lwt () = check_count "veins_t_fail_missing" 1 in
+      cleanup tables
+    ;;
+
+    (* A database refusing the step's statement for lack of rights: the
+       failure is recorded like any other. Needs the per-role users. *)
+    let test_missing_rights () =
+      if not distinct_role_users then Alcotest.skip ();
+      let namespace = unique "denied" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register
+        [ migration
+            namespace
+            "2024-01-01T00:00:00Z"
+            [ "create", "CREATE TABLE veins_t_denied (id INTEGER)" ]
+        ];
+      let%lwt () = fresh [ "veins_t_denied" ] in
+      let%lwt (_ : string) = fails "denied" (M.migrate ~role:Roles.writer roles_label) in
+      let%lwt rows = rows namespace in
+      (match rows with
+       | [ ((_, _, "failed"), (Some error, 1)) ] ->
+         contains "the permission error" ~sub:"refused login 'writer'" error
+       | _ -> Alcotest.fail "one failed row with the error");
+      cleanup [ "veins_t_denied" ]
+    ;;
+
+    (* PostgreSQL runs a step in a transaction: a failing step leaves none
+       of its statements behind. *)
+    let test_failed_step_reverted () =
+      let%lwt kind = connection_kind () in
+      match kind with
+      | Dialect.Mariadb -> Lwt.return_unit
+      | Dialect.Postgresql ->
+        let namespace = unique "reverted" in
+        let module M = Single_set (struct
+            let policy = `Fail
+          end)
+        in
+        M.register
+          [ migration
+              namespace
+              "2024-01-01T00:00:00Z"
+              [ ( "half"
+                , "DO $$ BEGIN CREATE TABLE veins_t_reverted (id INTEGER); RAISE \
+                   EXCEPTION 'boom'; END $$" )
+              ]
+          ];
+        let%lwt () = fresh [ "veins_t_reverted" ] in
+        let%lwt (_ : string) = fails "boom" (M.migrate root) in
+        let%lwt exists = table_exists "veins_t_reverted" in
+        Alcotest.(check bool) "nothing left behind" false exists;
+        let%lwt statuses = status_of namespace in
+        Alcotest.(check (list string)) "failed" [ "failed" ] statuses;
+        cleanup [ "veins_t_reverted" ]
+    ;;
+
+    (* Instances starting together: the lock lets one run, the others find
+       nothing pending. *)
+    let test_concurrent () =
+      let namespace = unique "concurrent" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register
+        [ migration
+            namespace
+            "2024-01-01T00:00:00Z"
+            [ "create", "CREATE TABLE veins_t_concurrent (id INTEGER)"
+            ; "insert", "INSERT INTO veins_t_concurrent (id) VALUES (1)"
+            ]
+        ];
+      let%lwt () = fresh [ "veins_t_concurrent" ] in
+      let%lwt results = Lwt.all (CCList.init 3 (fun (_ : int) -> M.migrate root)) in
+      CCList.iter
+        (function
           | Ok () -> ()
-          | Error e -> Alcotest.failf "up: %s" (Error.show e))
+          | Error e -> Alcotest.failf "concurrent: %s" (Error.show e))
+        results;
+      let%lwt () = check_count "veins_t_concurrent" 1 in
+      cleanup [ "veins_t_concurrent" ]
+    ;;
+
+    let with_env name value f =
+      let previous = Sys.getenv_opt name in
+      Unix.putenv name value;
+      Lwt.finalize f (fun () ->
+        Unix.putenv name (CCOption.value ~default:"" previous);
+        Lwt.return_unit)
+    ;;
+
+    let quiet = Format.make_formatter (fun _ _ _ -> ()) ignore
+
+    (* Under `Fail an out-of-order migration is refused unless named; under
+       `Warn it runs. *)
+    let test_out_of_order () =
+      let name tag = unique ("ooo_" ^ tag) in
+      let a = name "a" in
+      let b = name "b" in
+      let c = name "c" in
+      let d = name "d" in
+      let e = name "e" in
+      let table ns = "veins_t_" ^ CCString.sub ns 11 (CCString.length ns - 11) in
+      let mig ns written_at =
+        migration
+          ns
+          written_at
+          [ "create", Format.asprintf "CREATE TABLE %s (id INTEGER)" (table ns) ]
+      in
+      let tables = CCList.map table [ a; b; c; d; e ] in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      let ns = Migration.Namespace.create in
+      M.register [ mig a "2024-01-01T00:00:00Z"; mig c "2024-03-01T00:00:00Z" ];
+      let%lwt () = fresh tables in
+      let%lwt () = ok "in order" (M.migrate root) in
+      M.register [ mig b "2024-02-01T00:00:00Z"; mig d "2024-02-15T00:00:00Z" ];
+      let%lwt msg = fails "out of order" (M.migrate root) in
+      contains "names it" ~sub:b msg;
+      contains "names the newest applied" ~sub:c msg;
+      let%lwt () =
+        expect_exn
+          "ensure_clean refuses what migrate refuses"
+          (fun () -> M.ensure_clean [ root ])
+          (function
+            | Error.Exn (Error.Migration_not_clean [ (_, status) ]) ->
+              contains "out of order" ~sub:"out of order" status
+            | exn -> Alcotest.failf "ensure_clean: %s" (Printexc.to_string exn))
+      in
+      let%lwt b_ran = table_exists (table b) in
+      Alcotest.(check bool) "nothing ran" false b_ran;
+      let%lwt dry = ok "dry run" (M.dry_run root) in
+      Alcotest.(check bool)
+        "the dry run refuses too"
+        true
+        (match dry.refusal with
+         | Some (Migration.Refusal.Out_of_order [ _; _ ]) -> true
+         | _ -> false);
+      let%lwt msg =
+        fails "one of two named" (M.migrate ~allow_out_of_order:[ ns b ] root)
+      in
+      contains "names the other" ~sub:d msg;
+      let%lwt () = ok "both named" (M.migrate ~allow_out_of_order:[ ns b; ns d ] root) in
+      let%lwt b_ran = table_exists (table b) in
+      Alcotest.(check bool) "it ran" true b_ran;
+      let%lwt () = ok "no flag needed afterwards" (M.migrate root) in
+      let%lwt () =
+        ok "a name that isn't out of order" (M.migrate ~allow_out_of_order:[ ns a ] root)
+      in
+      (* the CI variable, for the preflight and the deploy alike *)
+      M.register [ mig e "2024-02-20T00:00:00Z" ];
+      let%lwt code = M.command ~out:quiet [ root ] [ "dry-run" ] in
+      Alcotest.(check int) "dry-run refuses" 1 code;
+      let%lwt () =
+        with_env "ALLOW_OUT_OF_ORDER" (" ," ^ e) (fun () ->
+          let%lwt code = M.command ~out:quiet [ root ] [ "dry-run" ] in
+          Alcotest.(check int) "dry-run with the variable" 0 code;
+          let%lwt code = M.command ~out:quiet [ root ] [ "up" ] in
+          Alcotest.(check int) "up with the variable" 0 code;
+          Lwt.return_unit)
+      in
+      let%lwt e_ran = table_exists (table e) in
+      Alcotest.(check bool) "allowed by the variable" true e_ran;
+      (* `Warn: logged and run *)
+      let module W = Single_set (struct
+          let policy = `Warn
+        end)
       in
       let%lwt () =
-        Counters.record ~table root state mig.Migration.namespace ~applied:2 ~failed:false
+        Lwt_list.iter_s (fun t -> Db.exec (root_ctx ()) (drop_table t) ()) tables
       in
-      let%lwt row = counter namespace in
-      Alcotest.(check (option (pair int bool))) "counter updated" (Some (2, false)) row;
       let%lwt () = forget_test_migrations () in
-      let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_counter") () in
-      Db.exec (root_ctx ()) (drop_table table) ()
+      let%lwt () = baseline () in
+      W.register [ mig a "2024-01-01T00:00:00Z"; mig c "2024-03-01T00:00:00Z" ];
+      let%lwt () = ok "warn: in order" (W.migrate root) in
+      W.register [ mig b "2024-02-01T00:00:00Z" ];
+      let%lwt dry = ok "warn: dry run" (W.dry_run root) in
+      Alcotest.(check int) "listed" 1 (CCList.length dry.report.out_of_order);
+      Alcotest.(check bool) "not refused" true (CCOption.is_none dry.refusal);
+      let%lwt () = ok "warn: runs it" (W.migrate root) in
+      let%lwt b_ran = table_exists (table b) in
+      Alcotest.(check bool) "it ran" true b_ran;
+      let%lwt () = passes "warn: startup" (W.check root) in
+      cleanup tables
+    ;;
+
+    (* The dry run reads with a read-only login, writes nothing and takes no
+       lock: a migration holding the lock doesn't block it. *)
+    let test_dry_run () =
+      let first = unique "dry_a" in
+      let second = unique "dry_b" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register
+        [ migration
+            first
+            "2024-01-01T00:00:00Z"
+            [ "create", "CREATE TABLE veins_t_dry (id INTEGER)" ]
+        ];
+      let%lwt () = fresh [ "veins_t_dry" ] in
+      let%lwt () = ok "migrate" (M.migrate root) in
+      M.register
+        [ migration
+            second
+            "2024-02-01T00:00:00Z"
+            [ "insert", "INSERT INTO veins_t_dry (id) VALUES (1)" ]
+        ];
+      let lock =
+        Dialect.request Caqti.Template.Request.Direct T.(string -->! int) Dialect.try_lock
+        |> Request.create ~needs:Need.none
+      in
+      let unlock =
+        Dialect.request Caqti.Template.Request.Direct T.(string -->! int) Dialect.unlock
+        |> Request.create ~needs:Need.none
+      in
+      let lock_name = "veins_migration:" ^ state in
+      let%lwt dry =
+        Db.connection_ctx ~role:owner root (fun ctx ->
+          let%lwt locked = Db.find ctx lock lock_name in
+          Alcotest.(check int) "the lock is held" 1 locked;
+          Lwt.finalize
+            (fun () ->
+               Lwt.pick
+                 [ ok "dry run" (M.dry_run ~role:Roles.reader roles_label)
+                 ; (let%lwt () = Lwt_unix.sleep 10. in
+                    Alcotest.fail "the dry run waited for the lock")
+                 ])
+            (fun () ->
+               (* the lock belongs to the pooled connection's session *)
+               let%lwt (_ : int) = Db.find ctx unlock lock_name in
+               Lwt.return_unit))
+      in
+      Alcotest.(check (list string))
+        "pending"
+        [ second ]
+        (CCList.map (fun (ns, _) -> Migration.Namespace.value ns) dry.report.pending);
+      Alcotest.(check bool) "migrate would run" true (CCOption.is_none dry.refusal);
+      let%lwt () = check_count "veins_t_dry" 0 in
+      let%lwt statuses = status_of second in
+      Alcotest.(check (list string)) "nothing written" [] statuses;
+      let%lwt code = M.command ~out:quiet [ root ] [ "dry-run" ] in
+      Alcotest.(check int) "dry-run: migrate would run" 0 code;
+      cleanup [ "veins_t_dry" ]
+    ;;
+
+    (* [ensure_clean] raises for every unclean database and passes clean
+       ones, also with orphaned rows; [check] and [command] by their
+       policies and exit codes. *)
+    let test_startup () =
+      let%lwt kind = connection_kind () in
+      let other : Dialect.kind =
+        match kind with
+        | Dialect.Mariadb -> Dialect.Postgresql
+        | Dialect.Postgresql -> Dialect.Mariadb
+      in
+      let namespace = unique "startup" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register
+        [ migration
+            namespace
+            "2024-01-01T00:00:00Z"
+            [ "create", "CREATE TABLE veins_t_startup (id INTEGER)" ]
+        ];
+      let%lwt () = fresh [ "veins_t_startup" ] in
+      let not_clean name f =
+        expect_exn name f (function
+          | Error.Exn (Error.Migration_not_clean [ (label, (_ : string)) ]) ->
+            Alcotest.(check string) (name ^ ": the label") "root" label
+          | exn -> Alcotest.failf "%s: %s" name (Printexc.to_string exn))
+      in
+      let%lwt () = not_clean "pending" (fun () -> M.ensure_clean [ root ]) in
+      let%lwt () =
+        M.check ~policy:`Fail root
+        |> Lwt.map (function
+          | Error (Migration.Status.Pending _) -> ()
+          | Error status -> Alcotest.failf "check: %s" (Migration.Status.show status)
+          | Ok () -> Alcotest.fail "check passed")
+      in
+      let%lwt () = passes "check `Warn" (M.check ~policy:`Warn root) in
+      let%lwt code = M.command ~out:quiet [ root ] [ "check" ] in
+      Alcotest.(check int) "check: pending" 1 code;
+      let%lwt code = M.command ~out:quiet [ root ] [ "status" ] in
+      Alcotest.(check int) "status" 0 code;
+      let%lwt code = M.command ~out:quiet [ root ] [ "sideways" ] in
+      Alcotest.(check int) "usage" 2 code;
+      let%lwt code = M.command ~out:quiet [ root ] [ "up" ] in
+      Alcotest.(check int) "up" 0 code;
+      let%lwt () = M.ensure_clean [ root ] in
+      let%lwt () = M.ensure_clean ~role:Roles.reader [ roles_label ] in
+      let%lwt status = ok "ready, read-only" (M.ready ~role:Roles.reader roles_label) in
+      Alcotest.(check string) "ready" "up to date" (Migration.Status.show status);
+      let%lwt code = M.command ~out:quiet [ root ] [ "check" ] in
+      Alcotest.(check int) "check: clean" 0 code;
+      let%lwt code =
+        M.command ~out:quiet [ root; Label.create "veins_unregistered" ] [ "status" ]
+      in
+      Alcotest.(check int) "the worst code" 1 code;
+      let%lwt () = M.ensure_clean ~skip:true [ Label.create "veins_unregistered" ] in
+      (* orphaned rows don't count, a failed one neither *)
+      let%lwt () =
+        mark_applied
+          [ migration (unique "orphan") "2024-01-01T00:00:00Z" [ "x", "SELECT 1" ] ]
+      in
+      let%lwt () = M.ensure_clean [ root ] in
+      (* failed *)
+      let broken = unique "startup_failed" in
+      M.register
+        [ migration
+            broken
+            "2024-02-01T00:00:00Z"
+            [ "x", "INSERT INTO veins_t_nowhere (id) VALUES (1)" ]
+        ];
+      let%lwt (_ : string) = fails "failing" (M.migrate root) in
+      let%lwt () = not_clean "failed" (fun () -> M.ensure_clean [ root ]) in
+      let%lwt () =
+        M.check root
+        |> Lwt.map (function
+          | Error (Migration.Status.Blocked (Migration.Refusal.Failed [ _ ], _)) -> ()
+          | Error status ->
+            Alcotest.failf "check failed: %s" (Migration.Status.show status)
+          | Ok () -> Alcotest.fail "check passed a failed step")
+      in
+      let%lwt () =
+        exec (Format.asprintf "DELETE FROM %s WHERE namespace = '%s'" state broken)
+      in
+      let%lwt () = exec "CREATE TABLE veins_t_nowhere (id INTEGER)" in
+      let%lwt () = ok "repaired" (M.migrate root) in
+      (* unsupported *)
+      M.register
+        [ Migration.(
+            create
+              (Namespace.create (unique "startup_other"))
+              ~written_at:(ptime_of_string "2024-03-01T00:00:00Z")
+            |> add_step (Step.create ~label:"other dialect" (Sql.only other "SELECT 1")))
+        ];
+      let%lwt () = not_clean "unsupported" (fun () -> M.ensure_clean [ root ]) in
+      let%lwt status = ok "ready" (M.ready root) in
+      Alcotest.(check bool)
+        "unsupported"
+        true
+        (match status with
+         | Migration.Status.Blocked (Migration.Refusal.Missing_dialect _, _) -> true
+         | _ -> false);
+      let%lwt () = passes "skip" (M.check ~policy:`Skip root) in
+      cleanup [ "veins_t_startup"; "veins_t_nowhere" ]
+    ;;
+
+    (* An import that finds nothing still initializes the database. *)
+    let test_empty_import () =
+      let namespace = unique "imp_empty" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register
+        [ migration
+            namespace
+            "2024-01-01T00:00:00Z"
+            [ "insert", "INSERT INTO veins_t_empty_import (id) VALUES (1)" ]
+        ];
+      let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_empty_import") () in
+      let%lwt () =
+        with_state_aside
+        @@ fun () ->
+        let%lwt () = exec "CREATE TABLE veins_t_empty_import (id INTEGER)" in
+        let%lwt (_ : string) = fails "uninitialized" (M.migrate root) in
+        let%lwt report =
+          ok
+            "import"
+            (M.Import.run
+               ~source:(Migration.Import.counter_state ~table:"veins_test_none" ())
+               root)
+        in
+        Alcotest.(check int)
+          "nothing imported"
+          0
+          (CCList.length report.applied + CCList.length report.failed);
+        let%lwt () = ok "runs after the import" (M.migrate root) in
+        check_count "veins_t_empty_import" 1
+      in
+      Db.exec (root_ctx ()) (drop_table "veins_t_empty_import") ()
+    ;;
+
+    (* No veins rows but other tables: refused until the previous engine's
+       state is imported; dirty counters become failed rows. *)
+    let test_uninitialized_and_import () =
+      let table = "veins_test_counters" in
+      let applied = unique "imp_applied" in
+      let dirty = unique "imp_dirty" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      (* the previous engine ran [applied], failed [dirty] and never got to
+         [later] *)
+      let later = unique "imp_later" in
+      M.register
+        [ migration
+            applied
+            "2024-01-01T00:00:00Z"
+            [ "create", "CREATE TABLE veins_t_import (id INTEGER)" ]
+        ; migration
+            dirty
+            "2024-02-01T00:00:00Z"
+            [ "half", "INSERT INTO veins_t_import (id) VALUES (2)" ]
+        ; migration
+            later
+            "2024-03-01T00:00:00Z"
+            [ "more", "INSERT INTO veins_t_import (id) VALUES (3)" ]
+        ];
+      let%lwt () = Db.exec (root_ctx ()) (drop_table table) () in
+      let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_import") () in
+      let%lwt () =
+        with_state_aside
+        @@ fun () ->
+        (* the previous engine ran the first step and failed the other *)
+        let%lwt () = exec "CREATE TABLE veins_t_import (id INTEGER)" in
+        let%lwt () =
+          exec
+            (Format.asprintf
+               "CREATE TABLE %s (namespace VARCHAR(128) PRIMARY KEY, version INTEGER, \
+                dirty BOOLEAN NOT NULL)"
+               table)
+        in
+        let%lwt () =
+          exec
+            (Format.asprintf
+               "INSERT INTO %s (namespace, version, dirty) VALUES ('%s', 1, FALSE), \
+                ('%s', 0, TRUE), ('veins_test_unknown', 3, FALSE)"
+               table
+               applied
+               dirty)
+        in
+        let%lwt msg = fails "uninitialized" (M.migrate root) in
+        contains "says to import" ~sub:"import" msg;
+        let%lwt created = table_exists state in
+        Alcotest.(check bool) "a refused run creates no state table" false created;
+        let%lwt status = ok "ready" (M.ready root) in
+        Alcotest.(check bool)
+          (Format.asprintf "uninitialized, got %s" (Migration.Status.show status))
+          true
+          (match status with
+           | Migration.Status.Blocked (Migration.Refusal.Uninitialized, _) -> true
+           | _ -> false);
+        let%lwt () =
+          expect_exn
+            "ensure_clean"
+            (fun () -> M.ensure_clean [ root ])
+            (function
+              | Error.Exn (Error.Migration_not_clean _) -> ()
+              | exn -> Alcotest.failf "ensure_clean: %s" (Printexc.to_string exn))
+        in
+        let source = Migration.Import.counter_state ~table () in
+        let%lwt report = ok "import" (M.Import.run ~source root) in
+        Alcotest.(check (list (pair string int)))
+          "imported applied"
+          [ applied, 1 ]
+          (CCList.map (fun (ns, n) -> Migration.Namespace.value ns, n) report.applied);
+        Alcotest.(check (list string))
+          "imported failed"
+          [ dirty ]
+          (CCList.map (fun (ns, _) -> Migration.Namespace.value ns) report.failed);
+        Alcotest.(check (list string))
+          "unknown"
+          [ "veins_test_unknown" ]
+          (CCList.map Migration.Namespace.value report.unknown);
+        let%lwt imported = rows applied in
+        Alcotest.(check (list (pair string int)))
+          "applied, no run_at"
+          [ "applied", 0 ]
+          (CCList.map (fun ((_, _, status), (_, run)) -> status, run) imported);
+        let%lwt failed = rows dirty in
+        (match failed with
+         | [ ((_, _, "failed"), (Some error, _)) ] ->
+           Alcotest.(check string)
+             "last_error"
+             (table ^ ": marked dirty after 0 step(s)")
+             error
+         | _ -> Alcotest.fail "one failed row");
+        let%lwt again = ok "import again" (M.Import.run ~source root) in
+        Alcotest.(check int)
+          "idempotent"
+          0
+          (CCList.length again.applied + CCList.length again.failed);
+        let%lwt msg = fails "the dirty step blocks" (M.migrate root) in
+        contains "names it" ~sub:dirty msg;
+        (* the admin finished it by hand *)
+        let%lwt () = exec "INSERT INTO veins_t_import (id) VALUES (2)" in
+        let%lwt () =
+          exec
+            (Format.asprintf
+               "UPDATE %s SET status = 'applied' WHERE namespace = '%s'"
+               state
+               dirty)
+        in
+        let%lwt () = ok "the rest" (M.migrate root) in
+        check_count "veins_t_import" 2
+      in
+      let%lwt () = Db.exec (root_ctx ()) (drop_table table) () in
+      Db.exec (root_ctx ()) (drop_table "veins_t_import") ()
     ;;
   end
 
@@ -1628,6 +2457,7 @@ module Make (D : Dialect) = struct
       , [ case "roundtrip" `Quick test_roundtrip
         ; case "failed populate leaves nothing" `Quick test_failed_populate_leaves_nothing
         ; case "populate joins its transaction" `Quick test_populate_joins_transaction
+        ; case "populate in batches" `Quick test_populate_batches
         ; case
             "the connection's own interface is fixed"
             `Quick
@@ -1645,6 +2475,7 @@ module Make (D : Dialect) = struct
         ; case "nested transaction joins" `Quick test_nested_transaction_joins
         ; case "after_commit hooks" `Quick test_after_commit
         ; case "rollback restores autocommit" `Quick test_rollback_restores_autocommit
+        ; case "commit restores autocommit" `Quick test_commit_restores_autocommit
         ; case "without_fk_checks" `Quick test_without_fk_checks
         ] )
     ; ( "errors"
@@ -1675,11 +2506,21 @@ module Make (D : Dialect) = struct
         ; case "statements with needs join" `Quick test_plain_with_roles
         ] )
     ; ( "migrations"
-      , [ case "run_all, check, down" `Quick test_migration
-        ; case "import another engine's state" `Quick test_migration_import
-        ; case "concurrent runners apply once" `Quick test_migration_runs_once
+      , [ case "the default set" `Quick test_default_set
         ; case "steps without SQL for the dialect" `Quick test_migration_dialects
-        ; case "import a counter table" `Quick Counter_tests.test
+        ; case "state table layout and upgrade" `Quick App_tests.test_state_table
+        ; case "failure and repair by hand" `Quick App_tests.test_failure_and_repair
+        ; case "missing rights fail the step" `Quick App_tests.test_missing_rights
+        ; case
+            "a failed step leaves nothing (PostgreSQL)"
+            `Quick
+            App_tests.test_failed_step_reverted
+        ; case "concurrent migrate" `Quick App_tests.test_concurrent
+        ; case "out of order" `Quick App_tests.test_out_of_order
+        ; case "dry run" `Quick App_tests.test_dry_run
+        ; case "startup: ensure_clean, check, command" `Quick App_tests.test_startup
+        ; case "uninitialized and import" `Quick App_tests.test_uninitialized_and_import
+        ; case "an import of nothing" `Quick App_tests.test_empty_import
         ] )
     ]
   ;;

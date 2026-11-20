@@ -1,6 +1,7 @@
 #!/bin/sh
 # Compiles fixture.ml against veins, then every case in cases/, each of which
-# must fail with a type error naming the tag its role doesn't grant.
+# must fail with a type error naming the tag its role doesn't grant: `Write,
+# or the tag a first line "(* expect: `Tag *)" names.
 set -eu
 # CI forces colours, and their escape codes would break the grep below.
 export OCAML_COLOR=never
@@ -21,11 +22,13 @@ failed=0
 for case in "$@"; do
   name=$(basename "$case" .ml)
   cp "$case" "$out/$name.ml"
+  tag=$(sed -n '1s/^(\* expect: \(`[A-Za-z_]*\) \*)$/\1/p' "$case")
+  [ -n "$tag" ] || tag='`Write'
   output=$(compile "$out/$name.ml")
   if [ -f "$out/$name.cmo" ]; then
-    echo "FAIL $name: compiled, but its role doesn't grant what it runs"
+    echo "FAIL $name: compiled, but it uses $tag where it isn't allowed"
     failed=1
-  elif echo "$output" | grep -q 'does not allow tag(s) `Write'; then
+  elif echo "$output" | grep -qF "does not allow tag(s) $tag"; then
     echo "ok   $name"
   else
     echo "FAIL $name: unexpected error:"

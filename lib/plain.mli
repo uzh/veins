@@ -75,7 +75,7 @@ end
     logins and needs. *)
 module type Sig = sig
   (** The pools underneath, with roles. For what is written against
-      {!Veins.Pools_sig.Sig}, e.g. [Veins.Migration.Make (Db.With_roles)] (leave
+      {!Veins.Pools_sig.Sig}, e.g. [Veins.Migration.App.Make (Db.With_roles)] (leave
       its [?role] out: the default is the owner). *)
   module With_roles : Pools_sig.Sig
 

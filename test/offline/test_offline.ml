@@ -797,6 +797,54 @@ let test_is_connection_error () =
   Lwt.return_unit
 ;;
 
+(* The migration functions against an unreachable database: errors are
+   returned where the signature has room for them, and nothing claims the
+   database isn't migrated when it can't be read. *)
+module Migrate = Migration.App.Make (Db)
+
+let test_migrations_unreachable () =
+  with_server
+  @@ fun server ->
+  let label = Label.create "veins_migrate_unreachable" in
+  Db.Pool.add (Database.create label (url server));
+  let returns name result =
+    match%lwt result with
+    | Ok _ -> Alcotest.failf "%s: succeeded" name
+    | Error (Error.Connection_failed (_ : string)) -> Lwt.return_unit
+    | Error e -> Alcotest.failf "%s: %s" name (Error.show e)
+  in
+  let%lwt () = returns "migrate" (Migrate.migrate label) in
+  let%lwt () = returns "dry_run" (Migrate.dry_run label) in
+  let%lwt () = returns "ready" (Migrate.ready label) in
+  let%lwt warned = Migrate.check ~policy:`Warn label in
+  Alcotest.(check bool) "check `Warn continues" true (CCResult.is_ok warned);
+  let%lwt () =
+    expect
+      "check `Fail"
+      (fun () -> Migrate.check ~policy:`Fail label)
+      (function
+        | Error.Exn (Error.Connection_failed (_ : string)) -> ()
+        | exn -> Alcotest.failf "check `Fail: %s" (Printexc.to_string exn))
+  in
+  let%lwt () =
+    expect
+      "ensure_clean"
+      (fun () -> Migrate.ensure_clean [ label ])
+      (fun exn ->
+         Alcotest.(check bool)
+           (Format.asprintf "a connection error, got %s" (Printexc.to_string exn))
+           true
+           (Db.is_connection_error exn))
+  in
+  let quiet = Format.make_formatter (fun _ _ _ -> ()) ignore in
+  let%lwt code = Migrate.command ~out:quiet [ label ] [ "dry-run" ] in
+  Alcotest.(check int) "dry-run can't answer" 1 code;
+  let%lwt code = Migrate.command ~out:quiet [ label ] [ "status" ] in
+  Alcotest.(check int) "status can't answer" 1 code;
+  Db.Pool.drop label;
+  Lwt.return_unit
+;;
+
 let () =
   let open Alcotest_lwt in
   let case name speed f = test_case name speed (fun (_ : Lwt_switch.t) () -> f ()) in
@@ -817,6 +865,10 @@ let () =
                `Quick
                test_acquire_timeout_is_no_connection_error
            ; case "Pool.use returns errors" `Quick test_use_returns_errors
+           ; case
+               "migrations on an unreachable database"
+               `Slow
+               test_migrations_unreachable
            ; case
                "Pool.use timeout hides passwords"
                `Quick

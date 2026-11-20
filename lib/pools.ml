@@ -404,9 +404,9 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
      right away until its backoff is over; then one statement ([~probe]) gets a
      new pool to try, and the others keep failing until that one settled. *)
   let fetch_key ?(probe = true) key =
-    let () = log_pools () in
     let connected entry =
       Pools_tbl.replace pools key entry;
+      log_pools ();
       match entry.connection with
       | Open pool -> Lwt.return pool
       | Fail error -> raise (failed entry error)
@@ -463,37 +463,45 @@ module Make_with_options (Config : Pools_sig.ConfigSig) (Options : Pools_sig.Opt
                Lwt_result.return (Some result)))
           pool
       in
-      let served = Lwt.choose [ acquired; Lwt.map (fun (_ : _ result) -> ()) used ] in
-      let timer = Lwt_unix.sleep timeout in
-      (match%lwt
-         Lwt.choose [ Lwt.map (fun () -> true) served; Lwt.map (fun () -> false) timer ]
-       with
-       | true ->
-         Lwt.cancel timer;
-         (match%lwt used with
-          | Ok (Some result) -> Lwt.return result
-          | Ok None ->
-            fail
-              ?quiet
-              ?request
-              ?role
-              (fst key)
-              (Error.Exn (Error.Acquire_timeout "Connection abandoned"))
-          | Error _ as error -> Lwt.return error)
-       | false ->
-         abandoned := true;
-         Lwt.on_failure used (fun (_ : exn) -> ());
-         fail
-           ?quiet
-           ?request
-           ?role
-           (fst key)
-           (Error.Exn
-              (Error.Acquire_timeout
-                 (Format.asprintf
-                    "No connection of pool '%s' became free within %gs"
-                    (Key.show key)
-                    timeout))))
+      let result () =
+        match%lwt used with
+        | Ok (Some result) -> Lwt.return result
+        | Ok None ->
+          fail
+            ?quiet
+            ?request
+            ?role
+            (fst key)
+            (Error.Exn (Error.Acquire_timeout "Connection abandoned"))
+        | Error _ as error -> Lwt.return error
+      in
+      (* A connection that was idle and needs no check (PostgreSQL's is
+         local) is handed over at once: no timer to set and cancel. *)
+      if not (Lwt.is_sleeping acquired && Lwt.is_sleeping used)
+      then result ()
+      else (
+        let served = Lwt.choose [ acquired; Lwt.map (fun (_ : _ result) -> ()) used ] in
+        let timer = Lwt_unix.sleep timeout in
+        match%lwt
+          Lwt.choose [ Lwt.map (fun () -> true) served; Lwt.map (fun () -> false) timer ]
+        with
+        | true ->
+          Lwt.cancel timer;
+          result ()
+        | false ->
+          abandoned := true;
+          Lwt.on_failure used (fun (_ : exn) -> ());
+          fail
+            ?quiet
+            ?request
+            ?role
+            (fst key)
+            (Error.Exn
+               (Error.Acquire_timeout
+                  (Format.asprintf
+                     "No connection of pool '%s' became free within %gs"
+                     (Key.show key)
+                     timeout))))
   ;;
 
   module Pool = struct

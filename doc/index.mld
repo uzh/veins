@@ -8,8 +8,9 @@ Database connection pooling and schema migrations for OCaml 5, on Lwt and
 - {b Roles}: statements checked against typed roles at compile time, each
   role connecting as its own database user, or {!Veins.Plain} pools without
   roles for applications with one database user.
-- {b Migrations}: ordered up/down steps tracked one by one, with a global
-  registry and drift detection ({!Veins.Migration}).
+- {b Migrations}: roll-forward steps tracked one by one, in typed sets, with
+  failures recorded, a startup check and a read-only dry run for CI
+  ({!Veins.Migration}).
 - {b veins-gen}: a command line tool writing migration file boilerplate.
 
 {1 Installation}

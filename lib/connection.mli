@@ -14,10 +14,12 @@
     - [rollback] restoring [autocommit]: the driver turns it off to start a
       transaction and back on when committing, but not when rolling back, so
       later statements ran in a transaction that was never committed;
+    - [commit] in one round trip, by turning [autocommit] back on (which
+      commits), and rolling back when that fails;
     - [with_transaction] rolling back through that [rollback];
-    - [populate] inserting all rows or none, and joining the transaction it
-      is called in: the driver's returns after a failing row without rolling
-      back, and commits the transaction it is called in.
+    - [populate] inserting all rows or none, 100 per statement, and joining
+      the transaction it is called in: the driver's returns after a failing
+      row without rolling back, and commits the transaction it is called in.
 
     PostgreSQL connections are returned as they are.
 

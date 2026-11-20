@@ -4,6 +4,9 @@
  (names test_entity test_migration test_dialect)
  (package veins)
  (libraries veins caqti lwt alcotest containers uuidm)
+ ; tests match one expected error and read records of veins' modules unqualified
+ (flags
+  (:standard -w -4-40))
  (preprocess
   (pps lwt_ppx)))
 

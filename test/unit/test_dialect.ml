@@ -43,7 +43,7 @@ let test_one_request_per_dialect () =
     Dialect.request
       Caqti.Template.Request.Static
       Caqti.Templater.T.(string -->. unit)
-      (Dialect.delete_applied_step ~table:"t")
+      (Dialect.upsert_step_row ~table:"t")
   in
   let on_mariadb = render request mariadb in
   let on_postgresql = render request postgresql in

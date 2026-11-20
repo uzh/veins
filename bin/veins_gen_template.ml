@@ -86,17 +86,14 @@ let step ~dialects ~index ~id =
   Printf.sprintf
     {|let step_%d =
 %s
-%s
   Migration.Step.create
     ~id:(Migration.Id.create %S)
     ~label:"TODO: describe step %d"
-    ~down
     up
 ;;
 |}
     index
     (binding "up" (sql_block ~dialects "forward SQL"))
-    (binding "down" (sql_block ~dialects "reverse SQL"))
     id
     index
 ;;
@@ -118,21 +115,20 @@ let fill_comment ~width sentences =
 let header_comment dialects =
   let leave_out =
     match dialects with
-    | Both ->
-      [ "Leave out the SQL of a dialect the application never runs on, in [up] and \
-         [down] alike."
-      ]
+    | Both -> [ "Leave out the SQL of a dialect the application never runs on." ]
     | Only _ -> []
   in
   fill_comment
     ~width:80
-    ([ "Steps run in the order [migration] adds them. Once a step is deployed, never \
-        change its id or [up], or remove it: append a new step instead."
+    ([ "Steps run in the order [migration] adds them, each on its own: write one \
+        statement per step where possible. Once a step is deployed, never change its id \
+        or SQL, or remove it: append a new step, or fix a mistake with a new migration \
+        (roll-forward only), keeping the previous release working."
      ]
      @ leave_out
-     @ [ "The runner refuses to apply a step whose [up] SQL is still a TODO, and to \
-          revert a migration while a [down] is: write it, or drop [~down] if the step \
-          can't be reverted."
+     @ [ "The runner refuses to apply a step whose SQL is still a TODO. Nothing \
+          references this module: link its library with [(library_flags (-linkall))], or \
+          the linker drops it and the migration never registers."
        ])
 ;;
 

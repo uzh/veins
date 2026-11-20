@@ -42,7 +42,11 @@ type t =
   (** A role connects as a login the database has no URL for, and the
       database doesn't let logins share the owner's
       ([Database.create ~strict_logins:true]). *)
-  | Migration_failed of string (** A migration step returned an error. *)
+  | Migration_failed of string
+  (** A migration step failed, or the migrations refused to run. *)
+  | Migration_not_clean of (string * string) list
+  (** Databases whose migration state isn't clean, by label, with their
+      status ([Migration.App_sig.ensure_clean]). *)
   | Unsupported of string (** The driver doesn't support an operation. *)
 
 (** Raised for the errors of {!t}. *)
