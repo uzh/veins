@@ -9,6 +9,14 @@
     (* row_type : ((unit * string) * int) Caqti.Template.Row_type.t *)
     ]}
 
+    Build a request whose SQL changes with the parameters (a filter, an
+    [IN (?, ?, …)] of varying length) as [dynamic] or [direct], never
+    [static]: Caqti keeps a static request's prepared statement on the
+    connection as long as it lives, one per distinct SQL text, and MariaDB
+    refuses to prepare any statement once the server holds
+    [max_prepared_stmt_count] (16382 by default). Caqti releases dynamic
+    ones, least recently used first.
+
     @canonical Veins.Dynparam *)
 
 type t = Pack : 'a Caqti.Template.Row_type.t * 'a -> t

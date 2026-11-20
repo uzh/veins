@@ -526,6 +526,38 @@ module Make (D : Dialect) = struct
     Lwt.return (Alcotest.(check int) "the write after the rollback was committed" 1 n)
   ;;
 
+  (* On MariaDB the commit is turning autocommit back on: the transaction's
+     rows and what the connection writes next are committed. *)
+  let test_commit_restores_autocommit () =
+    Single.Pool.initialize ();
+    with_table "autocommit_commit"
+    @@ fun table ->
+    let%lwt () =
+      Single.transaction_ctx ~role:owner root (fun ctx ->
+        Single.exec ctx (insert table) (1, 1))
+    in
+    let%lwt () =
+      Single.transaction
+        ~needs:Need.none
+        (Single.label_ctx ~role:owner root)
+        (fun (module C : Caqti_lwt.CONNECTION) ->
+           C.exec (Request.caqti (insert table)) (2, 2))
+    in
+    let%lwt () = Single.exec (Single.label_ctx ~role:owner root) (insert table) (3, 3) in
+    let%lwt n = Db.find (root_ctx ()) (count table) () in
+    let%lwt pool = Single.Pool.fetch root in
+    Single.Pool.clear ();
+    let rec wait attempts =
+      if Caqti_lwt_unix.Pool.size pool = 0 || attempts = 0
+      then Lwt.return_unit
+      else (
+        let%lwt () = Lwt_unix.sleep 0.05 in
+        wait (attempts - 1))
+    in
+    let%lwt () = wait 100 in
+    Lwt.return (Alcotest.(check int) "both transactions and the write after them" 3 n)
+  ;;
+
   let wait_closed pool =
     let rec wait attempts =
       if Caqti_lwt_unix.Pool.size pool = 0 || attempts = 0
@@ -664,6 +696,30 @@ module Make (D : Dialect) = struct
         Db.populate ~needs:Roles.write ctx table [ "id"; "val" ] T.(t2 int int) [ 5, 5 ])
     in
     check_count table 1
+  ;;
+
+  (* MariaDB inserts the rows in batches of 100: full batches only, then a
+     partial one after them; a failing row in a later batch leaves nothing. *)
+  let test_populate_batches () =
+    with_table "populate_batches"
+    @@ fun table ->
+    let ctx = root_ctx () in
+    let populate rows =
+      Db.populate ~needs:Roles.write ctx table [ "id"; "val" ] T.(t2 int int) rows
+    in
+    let range first last = CCList.range first last |> CCList.map (fun i -> i, i * 10) in
+    let%lwt () = populate (range 1 200) in
+    let%lwt () = populate (range 201 250) in
+    let%lwt () =
+      expect_exn
+        "duplicate row in the second batch"
+        (fun () -> populate (range 251 400 @ [ 1, 0 ]))
+        (function
+          | Error.Failed _ -> ()
+          | exn -> Alcotest.failf "expected Failed, got %s" (Printexc.to_string exn))
+    in
+    let%lwt rows = Db.collect ctx (rows table) () in
+    Lwt.return (Alcotest.(check (list (pair int int))) "rows" (range 1 250) rows)
   ;;
 
   (* {1 Errors} *)
@@ -2401,6 +2457,7 @@ module Make (D : Dialect) = struct
       , [ case "roundtrip" `Quick test_roundtrip
         ; case "failed populate leaves nothing" `Quick test_failed_populate_leaves_nothing
         ; case "populate joins its transaction" `Quick test_populate_joins_transaction
+        ; case "populate in batches" `Quick test_populate_batches
         ; case
             "the connection's own interface is fixed"
             `Quick
@@ -2418,6 +2475,7 @@ module Make (D : Dialect) = struct
         ; case "nested transaction joins" `Quick test_nested_transaction_joins
         ; case "after_commit hooks" `Quick test_after_commit
         ; case "rollback restores autocommit" `Quick test_rollback_restores_autocommit
+        ; case "commit restores autocommit" `Quick test_commit_restores_autocommit
         ; case "without_fk_checks" `Quick test_without_fk_checks
         ] )
     ; ( "errors"

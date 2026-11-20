@@ -53,6 +53,13 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   step id are refused before a run applies anything, and the same namespace registered twice into the default set
   raises.
 - `veins-gen` no longer writes a `down`, and its files say how to link them (`-linkall`).
+- MariaDB: `populate` inserts its rows 100 per statement (was one statement per row); a failing row still leaves
+  none of them.
+- MariaDB: a commit takes one round trip (turning autocommit back on commits), the rollback one fewer (restoring
+  autocommit unprepared); a failed commit rolls back. A pool's state is logged at debug level when it changes, no
+  longer before every statement, and with `acquire_timeout` a statement that gets a free connection at once sets no
+  timer.
+- `Dynparam`'s documentation says to build requests whose SQL varies as `dynamic` or `direct`, not `static`.
 
 ### Removed
 
