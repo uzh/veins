@@ -144,7 +144,9 @@ upgrades, no statement timeout. `dry_run`, `ready`, `report`, `check` and `ensur
 login runs them; CI points `dry-run` at production).
 
 **Internal upgrades** (`internal_upgrades` in `Make_internal`) are veins' own changes to its state table: an ordered
-list, each detecting whether it's needed (`information_schema`), run on every `with_ctx`, never tracked in the table.
+list, each detecting whether it's needed (`information_schema`), run (`setup`) under the lock before anything writes the
+state: by `migrate` only once `Dry_run.decide` let it run (a refused run must not create the table, or an uninitialized
+database stops being one), and by `Import.run`. Never tracked in the table.
 A new change to the table is one more entry with its SQL in `dialect.ml`, plus a case in `read_rows` for the layout
 before it (reads run without the upgrades) and a test upgrading every older layout. The upgrade to the current
 layout is one-way.

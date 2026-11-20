@@ -31,10 +31,15 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
     raises `Error.Exn (Migration_not_clean _)` at startup unless every database is `Ready`.
   - `dry_run`: what `migrate` would do, read-only, without the lock (CI preflight with a read-only login).
   - `Migration.Import` with `Import.Source` and `counter_state`: imports another engine's state once per database
-    (`Import.run` of the application); a database with tables but no migration state is refused as uninitialized.
+    (`Import.run` of the application); a database with tables but no state table is refused as uninitialized, and
+    `migrate` doesn't create the state table when it refuses. An import creates it, also when it has nothing to import.
+    Veins doesn't write the previous engine's table: a rollback to a release that still runs that engine re-runs
+    every migration added since the switch, so roll forward.
+  - `Report.pending_counts` (pending steps per migration) and `Report.pending_total`.
 - 💥 The migration state table's new layout: numeric `id` primary key, the step's UUID in `uuid`, `status`
-  (`applied` / `failed`), `last_error`, `run_at`. Veins upgrades the table itself on every migration run, one way:
-  once a database ran this version, releases on an older veins version can't read the table.
+  (`applied` / `failed`), `last_error`, `run_at`. Veins upgrades the table itself when a migration run or an import
+  writes to it, numbering the rows by `created_at`, one way: once a database ran this version, releases on an older
+  veins version can't read the table.
 - 💥 `Error.Migration_not_clean`.
 
 ### Changed

@@ -313,9 +313,16 @@ module Report : sig
       (** Pending steps without SQL for the dialect (their labels), by
           migration. *)
     ; uninitialized : bool
-      (** No row in the state table, but other tables: import the previous
-          engine's state first ({!Import}). *)
+      (** No state table, but other tables: import the previous engine's
+          state first ({!Import}, which creates the state table, also when
+          it has nothing to import). *)
     }
+
+  (** The number of pending steps per migration, in the order they'd run. *)
+  val pending_counts : t -> (Namespace.t * int) list
+
+  (** The number of pending steps. *)
+  val pending_total : t -> int
 
   (** Several lines; failed steps with the repair statements ({!Repair}). *)
   val pp : Format.formatter -> t -> unit
@@ -332,8 +339,9 @@ module Refusal : sig
     (** Pending steps without SQL for the dialect (their labels), by
         migration. *)
     | Uninitialized
-    (** No row in the state table, but other tables: import the previous
-        engine's state first ({!Import}). *)
+    (** No state table, but other tables: import the previous engine's
+        state first ({!Import}, which creates the state table, also when
+        it has nothing to import). *)
     | Failed of Row.t list
     (** Failed steps of the set: repair them by hand ({!Repair}). *)
     | Out_of_order of Out_of_order.t list
@@ -358,14 +366,17 @@ module Dry_run : sig
     ; refusal : Refusal.t option (** [None]: [migrate] would run. *)
     }
 
-  (** [of_state ~label ~set ~out_of_order ~dialect ~other_tables ~rows migrations] decides as [migrate] does, from the state table's [rows]
-      and whether the database has [other_tables]. *)
+  (** [of_state ~label ~set ~out_of_order ~dialect ~state_table ~other_tables ~rows migrations]
+      decides as [migrate] does, from whether the state table exists
+      ([state_table]), its [rows] and whether the database has
+      [other_tables]. *)
   val of_state
     :  ?allow_out_of_order:Namespace.t list
     -> label:Entity.Label.t
     -> set:string
     -> out_of_order:out_of_order_policy
     -> dialect:Dialect.kind
+    -> state_table:bool
     -> other_tables:bool
     -> rows:Row.t list
     -> migration list
@@ -494,15 +505,17 @@ module type App_sig = sig
   (** Runs the label's set:
 
       + orders the set ({!order});
-      + takes the migration lock, upgrades the state table;
+      + takes the migration lock;
       + refuses on any {!Refusal.t}: steps without SQL for the dialect,
         an uninitialized database, a failed step (named with its UUID,
         [last_error] and the repair statements), or out-of-order migrations
         under [`Fail] not named in [~allow_out_of_order] (under [`Warn], and
         for those named, they're logged and run; a name that isn't out of
         order is ignored with a log line);
+      + creates or upgrades the state table;
       + runs the pending steps in order, each on its own, and stops at the
-        first failure, which is recorded as a failed row.
+        first failure, which is recorded as a failed row (a lost connection
+        is not: the step stays pending).
 
       Logs the outcome; errors (also an unreachable database) are returned,
       not raised. *)
@@ -531,7 +544,9 @@ module type App_sig = sig
 
   (** The check at startup for one label, by [?policy]: [`Fail] (default)
       returns any status but [Ready] as an error, [`Warn] logs it, [`Skip]
-      reads nothing (tests). Only reads. *)
+      reads nothing (tests). Only reads. A state it can't read (an
+      unreachable database) is logged; [`Warn] continues, [`Fail] raises
+      [Error.Exn] ([Connection_failed] when unreachable). *)
   val check
     :  ?role:_ Entity.Role.t
     -> ?policy:[ `Fail | `Warn | `Skip ]
@@ -544,7 +559,9 @@ module type App_sig = sig
       application doesn't start: pending steps, and anything [migrate] would
       refuse ({!Status.Blocked}), out-of-order migrations of a [`Fail] set
       included. Orphaned rows and out-of-order migrations under [`Warn] are
-      logged, not raised. [~skip:true] reads nothing (tests). Only reads.
+      logged, not raised. A state it can't read raises [Error.Exn]
+      ([Connection_failed] when the database is unreachable). [~skip:true]
+      reads nothing (tests). Only reads.
       Applications that must keep serving the other databases when one is
       unclean use {!ready} or {!check} per database instead. *)
   val ensure_clean

@@ -218,6 +218,7 @@ let dry_run
       ?allow_out_of_order
       ?(policy = `Fail)
       ?(dialect = Dialect.Mariadb)
+      ?(state_table = true)
       ?(other_tables = true)
       rows
       migrations
@@ -228,6 +229,7 @@ let dry_run
     ~set:"root"
     ~out_of_order:policy
     ~dialect
+    ~state_table
     ~other_tables
     ~rows
     migrations
@@ -249,8 +251,13 @@ let c = mig "c" "2024-03-01T00:00:00Z"
 
 let test_dry_run_refusals () =
   let check name expected t = Alcotest.(check string) name expected (refusal_name t) in
-  check "fresh, empty database" "none" (dry_run ~other_tables:false [] [ a; b ]);
-  check "tables, no state" "uninitialized" (dry_run [] [ a; b ]);
+  check
+    "fresh, empty database"
+    "none"
+    (dry_run ~state_table:false ~other_tables:false [] [ a; b ]);
+  check "tables, no state" "uninitialized" (dry_run ~state_table:false [] [ a; b ]);
+  (* an import that found nothing, or every row deleted by hand *)
+  check "tables, empty state table" "none" (dry_run [] [ a; b ]);
   check "applied in order" "none" (dry_run [ row a 0; row a 1 ] [ a; b; c ]);
   check "twice in the set" "duplicates" (dry_run [] [ a; a ]);
   check
@@ -330,6 +337,14 @@ let test_dry_run_rows () =
     (CCList.map
        (fun (ns, labels) -> Migration.Namespace.value ns, labels)
        pending.report.pending);
+  let more = dry_run [] [ a; b ] in
+  Alcotest.(check (list (pair string int)))
+    "pending counts"
+    [ "a", 2; "b", 1 ]
+    (CCList.map
+       (fun (ns, n) -> Migration.Namespace.value ns, n)
+       (Migration.Report.pending_counts more.report));
+  Alcotest.(check int) "pending total" 3 (Migration.Report.pending_total more.report);
   Alcotest.(check string)
     "status"
     "2 pending step(s): a (1), b (1)"

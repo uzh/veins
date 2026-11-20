@@ -134,9 +134,10 @@ val primary_key_name : kind -> string
 
 (** Upgrades a table of the first layout ([id] the step's UUID and primary
     key, no [status], [last_error], [run_at]) to the current one: [id]
-    becomes [uuid], a new numeric [id] the primary key, every row [applied].
-    One statement on MariaDB; on PostgreSQL several, to run in one
-    transaction. [primary_key] is the name of the table's primary key
+    becomes [uuid], a new numeric [id] the primary key, numbered by
+    [created_at] (then [uuid]), every row [applied]. Several statements, in
+    one transaction on PostgreSQL; on MariaDB the last one switches the
+    layout, and the ones before it can run again. [primary_key] is the name of the table's primary key
     constraint ({!primary_key_name}), used on PostgreSQL only. *)
 val upgrade_migration_table : kind -> table:string -> primary_key:string -> string list
 
@@ -149,8 +150,7 @@ val select_state_rows : kind -> table:string -> string
 val select_state_rows_v1 : kind -> table:string -> string
 
 (** Writes a step's row, or updates the one it has (on [uuid]): status,
-    run_at and updated_at are replaced, last_error only by a value that isn't
-    [NULL]. Parameters: uuid, namespace, label, status, last_error, run_at,
+    last_error, run_at and updated_at are replaced. Parameters: uuid, namespace, label, status, last_error, run_at,
     created_at, updated_at. *)
 val upsert_step_row : kind -> table:string -> string
 

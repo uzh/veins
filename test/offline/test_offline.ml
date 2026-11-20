@@ -816,6 +816,16 @@ let test_migrations_unreachable () =
   let%lwt () = returns "migrate" (Migrate.migrate label) in
   let%lwt () = returns "dry_run" (Migrate.dry_run label) in
   let%lwt () = returns "ready" (Migrate.ready label) in
+  let%lwt warned = Migrate.check ~policy:`Warn label in
+  Alcotest.(check bool) "check `Warn continues" true (CCResult.is_ok warned);
+  let%lwt () =
+    expect
+      "check `Fail"
+      (fun () -> Migrate.check ~policy:`Fail label)
+      (function
+        | Error.Exn (Error.Connection_failed (_ : string)) -> ()
+        | exn -> Alcotest.failf "check `Fail: %s" (Printexc.to_string exn))
+  in
   let%lwt () =
     expect
       "ensure_clean"

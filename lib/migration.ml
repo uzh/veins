@@ -325,11 +325,9 @@ let duplicates_message = function
                [ part "namespaces" namespaces; part "step ids" ids ])))
 ;;
 
-let id_set ids =
-  let tbl = Hashtbl.create (max 1 (CCList.length ids)) in
-  CCList.iter (fun id -> Hashtbl.replace tbl id ()) ids;
-  tbl
-;;
+module Id_set = CCSet.Make (CCString)
+
+let id_set = Id_set.of_list
 
 let applied_set rows =
   id_set
@@ -338,7 +336,7 @@ let applied_set rows =
        rows)
 ;;
 
-let is_in = Hashtbl.mem
+let is_in set id = Id_set.mem id set
 
 (* The labels of the pending steps of every migration that has no SQL for
    [kind], or only a placeholder. Steps with a row (applied or failed) are
@@ -454,8 +452,9 @@ module Make_internal (Db : Pools_sig.Sig) = struct
   ;;
 
   (* Veins' own changes to its state table, oldest first. Each one detects
-     whether it is needed; they run on every [with_ctx], before anything
-     reads the state. *)
+     whether it is needed; they run under the lock before anything writes
+     the state ([migrate] once it decided to run, [Import.run]). Reads
+     handle every layout, so deciding needs none of them. *)
   let internal_upgrades =
     [ (fun ctx ->
         match%lwt layout ctx with
@@ -476,8 +475,8 @@ module Make_internal (Db : Pools_sig.Sig) = struct
   ;;
 
   (* Reading the state must work for a role that may not create tables or
-     upgrade it: a missing table means nothing ran. *)
-  let read_rows ctx =
+     upgrade it: whether the state table exists, and its rows. *)
+  let read_state ctx =
     let read sql =
       let%lwt rows = Db.collect ctx (state_request T.(unit -->* row_type) sql) () in
       Lwt.return
@@ -494,10 +493,12 @@ module Make_internal (Db : Pools_sig.Sig) = struct
            rows)
     in
     match%lwt layout ctx with
-    | Missing -> Lwt.return []
-    | First -> read Dialect.select_state_rows_v1
-    | Current -> read Dialect.select_state_rows
+    | Missing -> Lwt.return (false, [])
+    | First -> Lwt.map (fun rows -> true, rows) (read Dialect.select_state_rows_v1)
+    | Current -> Lwt.map (fun rows -> true, rows) (read Dialect.select_state_rows)
   ;;
+
+  let read_rows ctx = Lwt.map snd (read_state ctx)
 
   let write_row
         ?(if_missing = false)
@@ -581,7 +582,9 @@ module Make_internal (Db : Pools_sig.Sig) = struct
   ;;
 
   (* Runs one step with its row. A failure leaves a [failed] row (written
-     after the step's transaction rolled back) and is returned. *)
+     after the step's transaction rolled back) and is returned. A lost
+     connection says nothing about the step: it is raised, no row written,
+     and the step stays pending for the next run. *)
   let run_step ctx kind namespace ({ Resolved.id; label; up; check_fk; _ } : Resolved.t) =
     Log.debug (fun m -> m "Applying step '%s' (%s)" label (Id.show id));
     Lwt.catch
@@ -598,39 +601,41 @@ module Make_internal (Db : Pools_sig.Sig) = struct
                ~run_at:(Some (now ())))
          in
          Lwt_result.return ())
-      (fun exn ->
-         let error = Printexc.to_string exn in
-         let msg =
-           Format.asprintf
-             "Step '%s' (%s) of migration '%s' failed: %s"
-             label
-             (Id.show id)
-             (Namespace.show namespace)
-             error
-         in
-         Log.err (fun m -> m "%s" msg);
-         Lwt.catch
-           (fun () ->
-              let%lwt () =
-                write_row
-                  ctx
-                  ~namespace
-                  ~id
-                  ~label
-                  ~status:Row_status.Failed
-                  ~last_error:(Some error)
-                  ~run_at:(Some (now ()))
-              in
-              Lwt_result.fail (Error.Migration_failed msg))
-           (fun exn ->
-              let msg =
-                Format.asprintf
-                  "%s; recording the failure failed too: %s"
-                  msg
-                  (Printexc.to_string exn)
-              in
-              Log.err (fun m -> m "%s" msg);
-              Lwt_result.fail (Error.Migration_failed msg)))
+      (function
+        | exn when Db.is_connection_error exn -> Lwt.reraise exn
+        | exn ->
+          let error = Printexc.to_string exn in
+          let msg =
+            Format.asprintf
+              "Step '%s' (%s) of migration '%s' failed: %s"
+              label
+              (Id.show id)
+              (Namespace.show namespace)
+              error
+          in
+          Log.err (fun m -> m "%s" msg);
+          Lwt.catch
+            (fun () ->
+               let%lwt () =
+                 write_row
+                   ctx
+                   ~namespace
+                   ~id
+                   ~label
+                   ~status:Row_status.Failed
+                   ~last_error:(Some error)
+                   ~run_at:(Some (now ()))
+               in
+               Lwt_result.fail (Error.Migration_failed msg))
+            (fun exn ->
+               let msg =
+                 Format.asprintf
+                   "%s; recording the failure failed too: %s"
+                   msg
+                   (Printexc.to_string exn)
+               in
+               Log.err (fun m -> m "%s" msg);
+               Lwt_result.fail (Error.Migration_failed msg)))
   ;;
 
   (* Stops at the first failure. *)
@@ -690,7 +695,25 @@ module Make_internal (Db : Pools_sig.Sig) = struct
     | None -> f ()
     | Some (_ : float) as timeout ->
       let%lwt () = set None in
-      Lwt.finalize f (fun () -> set timeout)
+      Lwt.try_bind
+        f
+        (fun result ->
+           let%lwt () = set timeout in
+           Lwt.return result)
+        (fun exn ->
+           (* the run's error matters, not the restore's on what is likely
+              the same broken connection *)
+           let%lwt () =
+             Lwt.catch
+               (fun () -> set timeout)
+               (fun restore ->
+                  Log.warn (fun m ->
+                    m
+                      "Restoring the statement timeout failed: %s"
+                      (Printexc.to_string restore));
+                  Lwt.return_unit)
+           in
+           Lwt.reraise exn)
   ;;
 
   let lock_name () = "veins_migration:" ^ table ()
@@ -744,12 +767,10 @@ module Make_internal (Db : Pools_sig.Sig) = struct
     Db.connection_ctx ~role db_label f
   ;;
 
+  (* The caller runs [setup] before it writes the state. *)
   let with_ctx ?(role = Entity.Role.owner) db_label f =
     Db.connection_ctx ~role db_label (fun ctx ->
-      without_statement_timeout ctx (fun () ->
-        with_lock ctx (fun () ->
-          let%lwt () = setup ctx in
-          f ctx)))
+      without_statement_timeout ctx (fun () -> with_lock ctx (fun () -> f ctx)))
   ;;
 end
 
@@ -789,8 +810,12 @@ module Report = struct
     ; uninitialized : bool
     }
 
-  let pending_steps (t : t) =
-    CCList.fold_left (fun n (_, steps) -> n + CCList.length steps) 0 t.pending
+  let pending_counts (t : t) =
+    CCList.map (fun (namespace, labels) -> namespace, CCList.length labels) t.pending
+  ;;
+
+  let pending_total t =
+    CCList.fold_left (fun n (_, count) -> n + count) 0 (pending_counts t)
   ;;
 
   let pp f (t : t) =
@@ -808,7 +833,7 @@ module Report = struct
        else if not (CCList.is_empty t.unsupported)
        then "pending steps without SQL for the dialect"
        else if not (CCList.is_empty t.pending)
-       then Format.asprintf "%d pending step(s)" (pending_steps t)
+       then Format.asprintf "%d pending step(s)" (pending_total t)
        else "up to date");
     CCList.iter
       (fun (namespace, labels) ->
@@ -973,6 +998,7 @@ module Dry_run = struct
         ~set
         ~out_of_order:policy
         ~dialect
+        ~state_table
         ~other_tables
         ~rows
         migrations
@@ -1043,7 +1069,7 @@ module Dry_run = struct
       ; failed
       ; orphaned
       ; unsupported = missing
-      ; uninitialized = CCList.is_empty rows && other_tables
+      ; uninitialized = (not state_table) && other_tables
       }
     in
     let refusal =
@@ -1064,6 +1090,7 @@ module Dry_run = struct
         ~set
         ~out_of_order
         ~dialect
+        ~state_table
         ~other_tables
         ~rows
         migrations
@@ -1075,6 +1102,7 @@ module Dry_run = struct
          ~set
          ~out_of_order
          ~dialect
+         ~state_table
          ~other_tables
          ~rows
          migrations)
@@ -1104,16 +1132,13 @@ module Status = struct
       Format.fprintf
         f
         "%d pending step(s): %s"
-        (Report.pending_steps report)
+        (Report.pending_total report)
         (CCString.concat
            ", "
            (CCList.map
-              (fun (namespace, labels) ->
-                 Format.asprintf
-                   "%s (%d)"
-                   (Namespace.show namespace)
-                   (CCList.length labels))
-              report.Report.pending))
+              (fun (namespace, count) ->
+                 Format.asprintf "%s (%d)" (Namespace.show namespace) count)
+              (Report.pending_counts report)))
     | Blocked (refusal, _) -> Format.fprintf f "blocked, %s" (Refusal.summary refusal)
   ;;
 
@@ -1431,20 +1456,23 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
 
   let analyse ?allow_out_of_order ctx label =
     let set, policy, migrations = Set.set_for label in
-    let%lwt rows = Runner.read_rows ctx in
+    let%lwt state_table, rows = Runner.read_state ctx in
     let%lwt other_tables =
-      if CCList.is_empty rows then Runner.other_tables ctx else Lwt.return false
+      if state_table then Lwt.return false else Runner.other_tables ctx
     in
-    Lwt.return
-      (Dry_run.decide
-         ?allow_out_of_order
-         ~label
-         ~set
-         ~out_of_order:policy
-         ~dialect:(Runner.kind_of ctx)
-         ~other_tables
-         ~rows
-         (migrations ()))
+    let dry_run, ordered =
+      Dry_run.decide
+        ?allow_out_of_order
+        ~label
+        ~set
+        ~out_of_order:policy
+        ~dialect:(Runner.kind_of ctx)
+        ~state_table
+        ~other_tables
+        ~rows
+        (migrations ())
+    in
+    Lwt.return (dry_run, ordered, rows)
   ;;
 
   let log_out_of_order ~policy ~allow_out_of_order (dry_run : Dry_run.t) =
@@ -1481,7 +1509,9 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
       @@ fun () ->
       Runner.with_ctx ?role label
       @@ fun ctx ->
-      let%lwt dry_run, ordered = analyse ~allow_out_of_order ctx label in
+      (* decided before the upgrades: a refused run doesn't create the state
+         table, so an uninitialized database stays one until imported *)
+      let%lwt dry_run, ordered, rows = analyse ~allow_out_of_order ctx label in
       let (_ : string), policy, (_ : unit -> t list) = Set.set_for label in
       match dry_run.Dry_run.refusal with
       | Some refusal ->
@@ -1490,7 +1520,7 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
              (Refusal.show ~dialect:dry_run.Dry_run.report.Report.dialect refusal))
       | None ->
         log_out_of_order ~policy ~allow_out_of_order dry_run;
-        let%lwt rows = Runner.read_rows ctx in
+        let%lwt () = Runner.setup ctx in
         Runner.run_pending ctx dry_run.Dry_run.report.Report.dialect rows ordered
     in
     (match result with
@@ -1507,7 +1537,9 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
     @@ fun () ->
     Runner.with_read_ctx ?role label
     @@ fun ctx ->
-    let%lwt dry_run, (_ : t list) = analyse ?allow_out_of_order ctx label in
+    let%lwt dry_run, (_ : t list), (_ : row list) =
+      analyse ?allow_out_of_order ctx label
+    in
     Lwt_result.return dry_run
   ;;
 
@@ -1515,7 +1547,7 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
   let read ?role label =
     Runner.with_read_ctx ?role label
     @@ fun ctx ->
-    let%lwt dry_run, (_ : t list) = analyse ctx label in
+    let%lwt dry_run, (_ : t list), (_ : row list) = analyse ctx label in
     Lwt.return dry_run
   ;;
 
@@ -1527,33 +1559,47 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
       Lwt_result.return (Status.of_dry_run dry_run))
   ;;
 
-  (* Logs the state of a label read at startup; [None] when it is ready. *)
+  (* Logs the state of a label read at startup; [None] when it is ready.
+     What prevents reading it (an unreachable database) is logged and
+     returned. *)
   let startup_status ~level ?role label =
-    let%lwt dry_run = read ?role label in
-    let report = dry_run.Dry_run.report in
-    match Status.of_dry_run dry_run with
-    | Status.Ready ->
-      if
-        not
-          (CCList.is_empty report.Report.out_of_order
-           && CCList.is_empty report.Report.orphaned)
-      then Log.info (fun m -> m "%a" Report.pp report);
-      Lwt.return_none
-    | (Status.Pending _ | Status.Blocked _) as status ->
-      Log.msg level (fun m -> m "%a" Dry_run.pp dry_run);
-      Lwt.return_some status
+    match%lwt as_result label (fun () -> Lwt_result.ok (read ?role label)) with
+    | Error error ->
+      Log.msg level (fun m ->
+        m
+          "Reading the migration state of '%s' failed: %a"
+          (Entity.Label.show label)
+          Error.pp
+          error);
+      Lwt_result.fail error
+    | Ok dry_run ->
+      let report = dry_run.Dry_run.report in
+      (match Status.of_dry_run dry_run with
+       | Status.Ready ->
+         if
+           not
+             (CCList.is_empty report.Report.out_of_order
+              && CCList.is_empty report.Report.orphaned)
+         then Log.info (fun m -> m "%a" Report.pp report);
+         Lwt_result.return None
+       | (Status.Pending _ | Status.Blocked _) as status ->
+         Log.msg level (fun m -> m "%a" Dry_run.pp dry_run);
+         Lwt_result.return (Some status))
   ;;
 
   let check ?role ?(policy = `Fail) label =
     match policy with
     | `Skip -> Lwt_result.return ()
     | `Warn ->
-      let%lwt (_ : Status.t option) = startup_status ~level:Logs.Warning ?role label in
+      let%lwt (_ : (Status.t option, Error.t) result) =
+        startup_status ~level:Logs.Warning ?role label
+      in
       Lwt_result.return ()
     | `Fail ->
       (match%lwt startup_status ~level:Logs.Error ?role label with
-       | None -> Lwt_result.return ()
-       | Some status -> Lwt_result.fail status)
+       | Ok None -> Lwt_result.return ()
+       | Ok (Some status) -> Lwt_result.fail status
+       | Error error -> raise (Error.Exn error))
   ;;
 
   let ensure_clean ?role ?(skip = false) labels =
@@ -1565,9 +1611,12 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
           (fun label ->
              let%lwt status = startup_status ~level:Logs.Error ?role label in
              Lwt.return
-               (CCOption.map
-                  (fun status -> Entity.Label.value label, Status.show status)
-                  status))
+               (match status with
+                | Ok status ->
+                  CCOption.map
+                    (fun status -> Entity.Label.value label, Status.show status)
+                    status
+                | Error error -> raise (Error.Exn error)))
           labels
       in
       match unclean with
@@ -1662,6 +1711,7 @@ module Make_app (Db : Pools_sig.Sig) (Set : Set_for) : App_sig = struct
       Runner.with_ctx ?role label
       @@ fun ctx ->
       let (_ : string), (_ : out_of_order_policy), migrations = Set.set_for label in
+      let%lwt () = Runner.setup ctx in
       let%lwt entries = Db.query ~needs:Entity.Need.none ctx Source.read in
       let%lwt rows = Runner.read_rows ctx in
       let report, to_insert =

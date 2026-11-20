@@ -1559,17 +1559,28 @@ module Make (D : Dialect) = struct
              state)
     ;;
 
+    (* The first [steps] rows, created in the reverse order of their UUIDs
+       (the old key), returned in the order they were created. *)
     let insert_first_layout kind (mig : Migration.t) ~steps =
-      Lwt_list.iter_s
-        (fun id ->
-           exec
-             (Format.asprintf
-                "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES \
-                 (%s, '%s', 'imported', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                state
-                (Dialect.uuid_value_fragment kind ("'" ^ Migration.Id.value id ^ "'"))
-                (Migration.Namespace.value mig.namespace)))
-        (CCList.take steps (Migration.step_ids mig))
+      let ids =
+        CCList.take steps (Migration.step_ids mig)
+        |> CCList.map Migration.Id.value
+        |> CCList.sort (CCFun.flip CCString.compare)
+      in
+      let%lwt () =
+        Lwt_list.iteri_s
+          (fun i id ->
+             exec
+               (Format.asprintf
+                  "INSERT INTO %s (id, namespace, label, created_at, updated_at) VALUES \
+                   (%s, '%s', 'imported', '2020-01-%02d 00:00:00', CURRENT_TIMESTAMP)"
+                  state
+                  (Dialect.uuid_value_fragment kind ("'" ^ id ^ "'"))
+                  (Migration.Namespace.value mig.namespace)
+                  (i + 1)))
+          ids
+      in
+      Lwt.return ids
     ;;
 
     (* A fresh table has the current layout; one of the first layout is
@@ -1627,7 +1638,7 @@ module Make (D : Dialect) = struct
         let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_layout") () in
         let%lwt () = exec "CREATE TABLE veins_t_layout (id INTEGER)" in
         let%lwt () = create_first_layout kind in
-        let%lwt () = insert_first_layout kind mig ~steps:2 in
+        let%lwt created = insert_first_layout kind mig ~steps:2 in
         let%lwt read = read_only () in
         Alcotest.(check (list string)) (name ^ ": read the first layout") [ "two" ] read;
         let%lwt uuid = column_exists "uuid" in
@@ -1636,15 +1647,10 @@ module Make (D : Dialect) = struct
         let%lwt uuid = column_exists "uuid" in
         Alcotest.(check bool) (name ^ ": upgraded") true uuid;
         let%lwt upgraded = rows namespace in
-        (* the new ids follow the old primary key on MariaDB *)
         Alcotest.(check (list string))
-          (name ^ ": UUIDs kept")
-          (CCList.sort
-             CCString.compare
-             (CCList.map Migration.Id.value (CCList.take 2 (Migration.step_ids mig))))
-          (CCList.sort
-             CCString.compare
-             (CCList.take 2 (CCList.map (fun ((_, uuid, _), _) -> uuid) upgraded)));
+          (name ^ ": UUIDs kept, ids in the order the rows were created")
+          created
+          (CCList.take 2 (CCList.map (fun ((_, uuid, _), _) -> uuid) upgraded));
         Alcotest.(check (list string))
           (name ^ ": imported rows applied")
           [ "applied"; "applied" ]
@@ -2143,6 +2149,42 @@ module Make (D : Dialect) = struct
       cleanup [ "veins_t_startup"; "veins_t_nowhere" ]
     ;;
 
+    (* An import that finds nothing still initializes the database. *)
+    let test_empty_import () =
+      let namespace = unique "imp_empty" in
+      let module M = Single_set (struct
+          let policy = `Fail
+        end)
+      in
+      M.register
+        [ migration
+            namespace
+            "2024-01-01T00:00:00Z"
+            [ "insert", "INSERT INTO veins_t_empty_import (id) VALUES (1)" ]
+        ];
+      let%lwt () = Db.exec (root_ctx ()) (drop_table "veins_t_empty_import") () in
+      let%lwt () =
+        with_state_aside
+        @@ fun () ->
+        let%lwt () = exec "CREATE TABLE veins_t_empty_import (id INTEGER)" in
+        let%lwt (_ : string) = fails "uninitialized" (M.migrate root) in
+        let%lwt report =
+          ok
+            "import"
+            (M.Import.run
+               ~source:(Migration.Import.counter_state ~table:"veins_test_none" ())
+               root)
+        in
+        Alcotest.(check int)
+          "nothing imported"
+          0
+          (CCList.length report.applied + CCList.length report.failed);
+        let%lwt () = ok "runs after the import" (M.migrate root) in
+        check_count "veins_t_empty_import" 1
+      in
+      Db.exec (root_ctx ()) (drop_table "veins_t_empty_import") ()
+    ;;
+
     (* No veins rows but other tables: refused until the previous engine's
        state is imported; dirty counters become failed rows. *)
     let test_uninitialized_and_import () =
@@ -2195,6 +2237,8 @@ module Make (D : Dialect) = struct
         in
         let%lwt msg = fails "uninitialized" (M.migrate root) in
         contains "says to import" ~sub:"import" msg;
+        let%lwt created = table_exists state in
+        Alcotest.(check bool) "a refused run creates no state table" false created;
         let%lwt status = ok "ready" (M.ready root) in
         Alcotest.(check bool)
           (Format.asprintf "uninitialized, got %s" (Migration.Status.show status))
@@ -2418,6 +2462,7 @@ module Make (D : Dialect) = struct
         ; case "dry run" `Quick App_tests.test_dry_run
         ; case "startup: ensure_clean, check, command" `Quick App_tests.test_startup
         ; case "uninitialized and import" `Quick App_tests.test_uninitialized_and_import
+        ; case "an import of nothing" `Quick App_tests.test_empty_import
         ] )
     ]
   ;;

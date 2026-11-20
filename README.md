@@ -329,10 +329,11 @@ Registration can happen at module initialisation or later: a set is read when it
 (`Migration.order`). A migration that depends on another is written after it; when that isn't so, out-of-order
 detection (below) says so.
 
-**`migrate`** orders the set, takes the migration lock, upgrades the state table if needed, then refuses if a
-pending step has no SQL for the dialect, if the database is uninitialized (no migration state, but other tables:
-import first, see below), if a step has failed, or if a migration is out of order under `` `Fail ``. Otherwise it runs
-the pending steps in order, each on its own, and stops at the first failure. Errors, also an unreachable database,
+**`migrate`** orders the set, takes the migration lock, then refuses if a pending step has no SQL for the dialect,
+if the database is uninitialized (no state table, but other tables: import first, see below), if a step has failed, or
+if a migration is out of order under `` `Fail ``. Otherwise it creates or upgrades the state table if needed, runs the
+pending steps in order, each on its own, and stops at the first failure (a lost connection leaves no `failed` row: the
+step stays pending). Errors, also an unreachable database,
 are returned, not raised.
 
 **`command`** is the application's migrate command, given its arguments; it prints, runs every label and returns the
@@ -420,8 +421,9 @@ place.
 
 #### Importing another engine's state
 
-A database migrated by another engine has tables but no veins rows, so `migrate` refuses it as uninitialized. Import
-its state once per database, from a command of the application's own (it needs the application's migrations):
+A database migrated by another engine has tables but no veins state table, so `migrate` refuses it as uninitialized.
+Import its state once per database (the import creates the state table, also when it has nothing to import), from a
+command of the application's own (it needs the application's migrations):
 
 ```ocaml
 Migrate.Import.run ~source:(Migration.Import.counter_state ()) root
@@ -434,12 +436,22 @@ under the migration lock, never refuses, only writes rows for steps that have no
 doesn't know and counters larger than a migration's steps. Other engines fit the same `Import.Source` (entries of
 namespace, applied count, failure).
 
+An application that keeps another engine beside veins (one that creates its tables first, on a new database too) runs
+the import once per new database before `migrate`: with nothing to import, it only creates the state table, which is
+what tells `migrate` the database is veins'.
+
+**Rolling back across the switch.** Veins doesn't write the previous engine's table. Rolled back to a release that
+still runs that engine, the application re-runs every migration added since the switch, and the previous engine's
+counters don't know the steps veins ran. Roll forward instead: fix a mistake with a new migration, also right after the
+switch.
+
 #### The state table
 
 `veins_migration_state` (or the plain table name in `VEINS_MIGRATION_TABLE`) has one row per step: a numeric `id`,
 the step's `uuid`, `namespace`, `label`, `status` (`applied` / `failed`), `last_error`, `run_at`, `created_at` and
-`updated_at`. A step without a row is pending. Veins upgrades the table itself, under the migration lock, on every
-`migrate` and import; reads without the upgrade (a read-only login first) understand every older layout.
+`updated_at`. A step without a row is pending. Veins upgrades the table itself, under the migration lock, when a
+`migrate` runs steps and on every import; reads without the upgrade (a read-only login first) understand every older
+layout.
 
 The upgrade to this layout is **one-way**: a release on an older veins version can't read the table any more, so
 once a database ran this veins version, no release older than that may be deployed on it.
