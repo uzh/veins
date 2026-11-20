@@ -63,12 +63,12 @@ if git rev-parse -q --verify "refs/tags/${NEW_VERSION}" > /dev/null; then
   exit 1
 fi
 
-if ! grep -q '^## \[unreleased\]' CHANGELOG.md; then
-  echo "CHANGELOG.md has no '## [unreleased]' section to release."
+if ! grep -qi '^## \[unreleased\]' CHANGELOG.md; then
+  echo "CHANGELOG.md has no '## [Unreleased]' section to release."
   exit 1
 fi
 
-if ! awk '/^## / { if (found) exit; found = /^## \[unreleased\]/; next }
+if ! awk '/^## / { if (found) exit; found = tolower($0) ~ /^## \[unreleased\]/; next }
           found && !/^To be released as / && /[^[:space:]]/ { ok = 1 }
           END { exit !ok }' CHANGELOG.md; then
   echo "CHANGELOG.md's unreleased section is empty: document the changes first."
@@ -96,7 +96,7 @@ perl -pi -e \
 DATE=$(date +%Y-%m-%d)
 NEW_VERSION="$NEW_VERSION" DATE="$DATE" REPO_URL="$REPO_URL" perl -0pi -e '
   s{^## \[unreleased\]\([^)]*\)\n(?:\nTo be released as [^\n]*\n)?}
-   {## [unreleased]($ENV{REPO_URL}/tree/HEAD)\n\n## [$ENV{NEW_VERSION}]($ENV{REPO_URL}/tree/$ENV{NEW_VERSION}) - $ENV{DATE}\n}m
+   {## [Unreleased]($ENV{REPO_URL}/tree/HEAD)\n\n## [$ENV{NEW_VERSION}]($ENV{REPO_URL}/tree/$ENV{NEW_VERSION}) - $ENV{DATE}\n}mi
 ' ./CHANGELOG.md
 
 git add dune-project veins.opam CHANGELOG.md
