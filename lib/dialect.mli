@@ -68,8 +68,9 @@ val set_fk_checks : kind -> bool -> string option
     come from the source code, and never pass user input. *)
 val is_identifier : string -> bool
 
-(** Counts the tables of the given name in the connection's database (its
-    schema search path on PostgreSQL). Parameter: the table name. *)
+(** Counts the tables of the given name in the connection's database (on
+    PostgreSQL, the one table the name resolves to on the search path, as an
+    unqualified statement would). Parameter: the table name. *)
 val table_exists : kind -> string
 
 (** Lists the base tables (no views) of the connection's database (its schema
@@ -125,11 +126,13 @@ val uuid_value_fragment : kind -> string -> string
 val create_migration_table : kind -> table:string -> string
 
 (** Counts the columns of the given name in a table of the connection's
-    database. Parameters: the table name, the column name. *)
+    database (on PostgreSQL, the table the name resolves to). Parameters: the
+    table name, the column name. *)
 val column_exists : kind -> string
 
-(** The name of a table's primary key constraint (no row without one).
-    Parameter: the table name. *)
+(** The name of a table's primary key constraint (no row without one; on
+    PostgreSQL, of the table the name resolves to). Parameter: the table
+    name. *)
 val primary_key_name : kind -> string
 
 (** Upgrades a table of the first layout ([id] the step's UUID and primary

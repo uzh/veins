@@ -8,7 +8,11 @@ module Log = (val Logs.src_log src : Logs.LOG)
 module Id = struct
   type t = string
 
-  let create s = s
+  let create s =
+    match Uuidm.of_string s with
+    | Some uuid -> Uuidm.to_string uuid
+    | None -> invalid_arg (Format.asprintf "Migration.Id.create: not a UUID: %S" s)
+  ;;
 
   (* Fixed namespace for {!derive}; never change it, derived ids are stored. *)
   let derive_namespace =
@@ -584,7 +588,8 @@ module Make_internal (Db : Pools_sig.Sig) = struct
   (* Runs one step with its row. A failure leaves a [failed] row (written
      after the step's transaction rolled back) and is returned. A lost
      connection says nothing about the step: it is raised, no row written,
-     and the step stays pending for the next run. *)
+     and the step stays pending for the next run, as when the run is
+     cancelled ([Lwt.Canceled]). *)
   let run_step ctx kind namespace ({ Resolved.id; label; up; check_fk; _ } : Resolved.t) =
     Log.debug (fun m -> m "Applying step '%s' (%s)" label (Id.show id));
     Lwt.catch
@@ -603,6 +608,7 @@ module Make_internal (Db : Pools_sig.Sig) = struct
          Lwt_result.return ())
       (function
         | exn when Db.is_connection_error exn -> Lwt.reraise exn
+        | Lwt.Canceled -> Lwt.reraise Lwt.Canceled
         | exn ->
           let error = Printexc.to_string exn in
           let msg =
@@ -691,6 +697,16 @@ module Make_internal (Db : Pools_sig.Sig) = struct
         (fun (module Connection : Caqti_lwt.CONNECTION) ->
            Connection.set_statement_timeout timeout)
     in
+    (* the run's outcome matters, not the restore's on what is likely the
+       same broken connection: a migration that committed stays reported *)
+    let restore timeout =
+      Lwt.catch
+        (fun () -> set timeout)
+        (fun restore ->
+           Log.warn (fun m ->
+             m "Restoring the statement timeout failed: %s" (Printexc.to_string restore));
+           Lwt.return_unit)
+    in
     match Db.options.Pool_options.statement_timeout with
     | None -> f ()
     | Some (_ : float) as timeout ->
@@ -698,21 +714,10 @@ module Make_internal (Db : Pools_sig.Sig) = struct
       Lwt.try_bind
         f
         (fun result ->
-           let%lwt () = set timeout in
+           let%lwt () = restore timeout in
            Lwt.return result)
         (fun exn ->
-           (* the run's error matters, not the restore's on what is likely
-              the same broken connection *)
-           let%lwt () =
-             Lwt.catch
-               (fun () -> set timeout)
-               (fun restore ->
-                  Log.warn (fun m ->
-                    m
-                      "Restoring the statement timeout failed: %s"
-                      (Printexc.to_string restore));
-                  Lwt.return_unit)
-           in
+           let%lwt () = restore timeout in
            Lwt.reraise exn)
   ;;
 
@@ -1239,13 +1244,13 @@ module Import = struct
              else report.Report.too_large
            in
            let new_applied =
-             CCList.take (max 0 applied) steps
+             CCList.take (CCInt.max 0 applied) steps
              |> CCList.filter (fun ({ Resolved.id; _ } : Resolved.t) ->
                not (is_in existing id))
              |> CCList.map (fun step -> row namespace step Row_status.Applied None)
            in
            let new_failed =
-             match failed, CCList.nth_opt steps (max 0 applied) with
+             match failed, CCList.nth_opt steps (CCInt.max 0 applied) with
              | Some message, Some step when not (is_in existing step.Resolved.id) ->
                [ row
                    namespace
@@ -1779,6 +1784,12 @@ module Sets = struct
     let registry : (t * string list) list ref = ref []
 
     let register ~sets (migration : migration) =
+      if CCList.is_empty sets
+      then
+        invalid_arg
+          (Format.asprintf
+             "Migration.Sets.register: '%s' is registered into no set"
+             (Namespace.show migration.namespace));
       let names = CCList.sort_uniq ~cmp:CCString.compare (CCList.map S.name sets) in
       CCList.iter
         (fun name ->

@@ -69,6 +69,9 @@ val ptime_of_string : string -> Ptime.t
 module Id : sig
   type t
 
+  (** A UUID, in any case, stored as its lowercase dashed form.
+
+      Raises [Invalid_argument] if the string is not a UUID. *)
   val create : string -> t
 
   (** [derive ~namespace ~index] is a stable UUID (v5) for the step at
@@ -658,9 +661,9 @@ module Sets : sig
         in every set by accident). As {!Veins.Migration.register}: at module
         initialisation or later, and mind the linker.
 
-        Raises [Invalid_argument] if a migration of the same namespace is in
-        one of [sets] already. The same namespace in different sets is
-        fine. *)
+        Raises [Invalid_argument] if [sets] is empty, or if a migration of
+        the same namespace is in one of [sets] already. The same namespace in
+        different sets is fine. *)
     val register : sets:S.t list -> t -> unit
 
     (** The migrations of [set] in the order they run ({!order}). *)

@@ -20,6 +20,17 @@ let test_derived_ids_are_stable () =
     (CCString.equal id (derive ~namespace:"other" ~index:0))
 ;;
 
+let test_id_create () =
+  Alcotest.(check string)
+    "normalised"
+    "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+    (Migration.Id.value (Migration.Id.create "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0"));
+  Alcotest.check_raises
+    "not a UUID"
+    (Invalid_argument "Migration.Id.create: not a UUID: \"step-1\"")
+    (fun () -> ignore (Migration.Id.create "step-1"))
+;;
+
 let test_step_ids_given_or_derived () =
   let namespace = "202610121032" in
   let given = Migration.Id.create "00000000-0000-0000-0000-000000000001" in
@@ -183,6 +194,10 @@ let test_register_duplicates () =
     (Invalid_argument
        "Migration.Sets.register: 'tenant' is registered twice in set tenant")
     (fun () -> Sets.register ~sets:[ `Tenant ] (mig "tenant" "2024-03-01T00:00:00Z"));
+  Alcotest.check_raises
+    "no set"
+    (Invalid_argument "Migration.Sets.register: 'nowhere' is registered into no set")
+    (fun () -> Sets.register ~sets:[] (mig "nowhere" "2024-03-01T00:00:00Z"));
   Alcotest.(check (list string))
     "root"
     [ "shared"; "tenant" ]
@@ -491,6 +506,7 @@ let () =
     "Veins Migration"
     [ ( "id"
       , [ Alcotest.test_case "derived ids are stable" `Quick test_derived_ids_are_stable
+        ; Alcotest.test_case "create checks UUIDs" `Quick test_id_create
         ; Alcotest.test_case
             "step ids given or derived"
             `Quick

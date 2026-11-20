@@ -128,8 +128,8 @@ module Fixed_mariadb (C : Caqti_lwt.CONNECTION) : Caqti_lwt.CONNECTION = struct
 
   let populate ~table ~columns row_type rows =
     let size =
-      let width = max 1 (Caqti.Template.Row_type.length row_type) in
-      max 1 (min populate_batch_rows (max_placeholders / width))
+      let width = CCInt.max 1 (Caqti.Template.Row_type.length row_type) in
+      CCInt.max 1 (CCInt.min populate_batch_rows (max_placeholders / width))
     in
     let full = insert_rows table columns row_type size in
     let insert () =

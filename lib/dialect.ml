@@ -67,9 +67,7 @@ let table_exists dialect =
   | Mariadb ->
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND \
      table_name = ?"
-  | Postgresql ->
-    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ANY \
-     (current_schemas(false)) AND table_name = LOWER(?)"
+  | Postgresql -> "SELECT COUNT(*) FROM pg_class WHERE oid = to_regclass(?)"
 ;;
 
 let list_tables dialect =
@@ -156,8 +154,8 @@ let column_exists dialect =
     "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND \
      table_name = ? AND column_name = ?"
   | Postgresql ->
-    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ANY \
-     (current_schemas(false)) AND table_name = LOWER(?) AND column_name = LOWER(?)"
+    "SELECT COUNT(*) FROM pg_attribute WHERE attrelid = to_regclass(?) AND attname = \
+     LOWER(?) AND attnum > 0 AND NOT attisdropped"
 ;;
 
 let primary_key_name dialect =
@@ -166,9 +164,8 @@ let primary_key_name dialect =
     "SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema \
      = DATABASE() AND table_name = ? AND constraint_type = 'PRIMARY KEY'"
   | Postgresql ->
-    "SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema \
-     = ANY (current_schemas(false)) AND table_name = LOWER(?) AND constraint_type = \
-     'PRIMARY KEY'"
+    "SELECT conname::text FROM pg_constraint WHERE conrelid = to_regclass(?) AND contype \
+     = 'p'"
 ;;
 
 let upgrade_migration_table dialect ~table ~primary_key =
