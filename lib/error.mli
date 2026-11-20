@@ -16,6 +16,11 @@
 type t =
   | Connection_failed of string
   (** A connection attempt failed, e.g. bad URL or server unreachable. *)
+  | Acquire_timeout of string
+  (** No connection of the pool became free within
+      [Pool_options.acquire_timeout]: the pool is exhausted (or still
+      connecting), but veins neither drops nor reconnects it, so this is not a
+      connection error ([Pools_sig.Sig.is_connection_error] is [false]). *)
   | Database_not_registered of string
   (** The label was never registered with [Pool.initialize] or [Pool.add]. *)
   | Permission_denied of

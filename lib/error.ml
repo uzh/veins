@@ -1,5 +1,6 @@
 type t =
   | Connection_failed of string
+  | Acquire_timeout of string
   | Database_not_registered of string
   | Permission_denied of
       { label : string
@@ -19,6 +20,7 @@ exception Exn of t
 
 let show : t -> string = function
   | Connection_failed msg -> "Connection failed: " ^ msg
+  | Acquire_timeout msg -> "No free connection: " ^ msg
   | Database_not_registered label -> "Database not registered: " ^ label
   | Permission_denied { label; login; role; needs; message } ->
     Format.asprintf

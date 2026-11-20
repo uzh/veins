@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 - API documentation on GitHub Pages: <https://uzh.github.io/veins/>, published from `main` by CI, with a package
   landing page (`doc/index.mld`).
+- `is_connection_error : exn -> bool` in `Pools_sig.Sig` and `Plain.Sig`: whether what a statement raised means the
+  database is unreachable, decided by the driver as when veins drops a pool (also a connection lost mid-statement,
+  not only a failed connect).
+- 💥 `Error.Acquire_timeout`: what a statement raises when no connection of its pool became free within
+  `acquire_timeout` (was `Error.Connection_failed`), so an exhausted pool isn't taken for an outage:
+  `is_connection_error` and `failure.connection_error` are `false` for it. `Pool.use` still returns a
+  `` `Connect_failed `` for it.
+- `Pool_options.failure.connection_error`: the same answer for `on_failure`, which can't call the pool module it
+  configures.
 
 ## [0.2.0](https://github.com/uzh/veins/tree/0.2.0) - 2026-11-19
 

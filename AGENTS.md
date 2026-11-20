@@ -86,7 +86,8 @@ libraries' `Pools.Make_with_options` / `Plain.Make_with_options` take `database`
 
 `on_failure` is called where veins raises a statement's error (`fail`: `statement_error`, `statement_pool`,
 `use_pool`), never where an error only passes through (`settle`'s `exception` arms), so each is reported once;
-`Pool.ping` passes `~quiet:true`. Raise new statement errors through `fail`.
+`Pool.ping` passes `~quiet:true`. Raise new statement errors through `fail`. `is_connection_error` (`Pools_sig.Sig`, and `failure.connection_error`)
+answers for what a statement raised with the driver's `is_connection_error` that drops pools: keep the two in step.
 
 A connection error drops only the pool it happened on (`settle` / `disconnect_entry ~pool`), then the pool backs
 off: `fetch_key` fails fast until `retry_at`, then hands the new pool to one statement (`probe`) until that

@@ -4,6 +4,7 @@ type failure =
   ; request : string option
   ; params : string option
   ; exn : exn
+  ; connection_error : bool
   }
 
 type t =

@@ -22,6 +22,7 @@ module type Sig = sig
   module With_roles : Pools_sig.Sig
 
   val options : Pool_options.t
+  val is_connection_error : exn -> bool
 
   module Pool : sig
     val initialize : ?additional_pools:Entity.Database.t list -> unit -> unit
@@ -124,6 +125,7 @@ module Make (Db : Pools_sig.Sig) = struct
   module With_roles = Db
 
   let options = Db.options
+  let is_connection_error = Db.is_connection_error
 
   module Pool = struct
     let initialize = Db.Pool.initialize

@@ -82,6 +82,9 @@ module type Sig = sig
   (** The options the pools were made with. *)
   val options : Pool_options.t
 
+  (** As [Pools_sig.Sig.is_connection_error]. *)
+  val is_connection_error : exn -> bool
+
   (** {1 Pool lifecycle}
 
       As [Pools_sig.Sig.Pool], always for the database's own URL. *)
