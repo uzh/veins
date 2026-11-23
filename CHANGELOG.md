@@ -2,9 +2,23 @@
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/) and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [Unreleased](https://github.com/uzh/veins/tree/HEAD)
+## [Unreleased]
 
-## [0.3.0](https://github.com/uzh/veins/tree/0.3.0) - 2026-11-20
+### Added
+
+- Releases go to opam with [dune-release](https://github.com/tarides/dune-release): `make opam-release` on the
+  release tag, `make release-check` before (README, "Release a new version").
+- `x-maintenance-intent: ["(latest)"]` in the opam file (needs dune 3.18).
+
+### Changed
+
+- The MariaDB / PostgreSQL integration suites are skipped when `MARIADB_URL` / `POSTGRES_URL` is unset (there are no
+  devcontainer defaults any more; the devcontainer sets the variables), so the package's tests pass without a
+  database. The typing tests' `ocamlfind` is a test dependency.
+- `CHANGELOG.md` headings are `## [X.Y.Z] - date` with the links as references, which dune-release reads.
+- The opam description matches what veins does, `bug-reports` points to the issues.
+
+## [0.3.0] - 2026-11-20
 
 ### Added
 
@@ -74,7 +88,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 - 💥 `Migration.Counter_state` (`import`, `record`): veins no longer writes counter tables; reading one is
   `Migration.Import.counter_state`'s job.
 
-## [0.2.0](https://github.com/uzh/veins/tree/0.2.0) - 2026-11-19
+## [0.2.0] - 2026-11-19
 
 Entries marked 💥 break existing code. The context design (`Veins.Ctx`) is Reynir Björnsson's database
 refactoring in [uzh/z-pool-tool#647](https://github.com/uzh/z-pool-tool/pull/647); the reconnect fixes come
@@ -158,7 +172,7 @@ from #624, #637 and #657 there.
 - `Url.pp` / `Url.show` mask `password` and `sslpassword` query parameters.
 - PostgreSQL URLs get `connect_timeout=5`, so an unresponsive server no longer freezes the process.
 
-## [0.1.0](https://github.com/uzh/veins/tree/d5451cd340c4c06efad73a91654abfca33c890c3) - 2026-04-27
+## [0.1.0] - 2026-04-27
 
 The start of using the changelog. Preparations for our pilot version 0.1.0.
 
@@ -176,3 +190,7 @@ The start of using the changelog. Preparations for our pilot version 0.1.0.
 - The test suites run with `dune test`.
 - CI connects to its service containers on `127.0.0.1`.
 - The PostgreSQL init script used MariaDB syntax.
+
+[0.3.0]: https://github.com/uzh/veins/tree/0.3.0
+[0.2.0]: https://github.com/uzh/veins/tree/0.2.0
+[0.1.0]: https://github.com/uzh/veins/tree/d5451cd340c4c06efad73a91654abfca33c890c3

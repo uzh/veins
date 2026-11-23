@@ -1,4 +1,4 @@
-.PHONY: all build test clean fmt fmt-check doc lint-opam watch help version version-patch version-minor version-major
+.PHONY: all build test clean fmt fmt-check doc lint-opam watch help version version-patch version-minor version-major release-check opam-release
 
 OPAM_EXEC := opam exec --
 
@@ -55,6 +55,20 @@ version-minor:
 
 version-major:
 	./scripts/bump-version.sh --major
+
+## Check what dune-release checks before a release: lint, build and tests of the package, the CHANGELOG
+release-check:
+	$(OPAM_EXEC) dune-release check
+
+## Publish the tagged HEAD on opam, once CI created its GitHub release: builds the archive, uploads it to the
+## release and opens the pull request on opam-repository (the docs are published by CI, not by dune-release);
+## first checks that HEAD is tagged and that the tag's section is the first of CHANGELOG.md
+opam-release:
+	./scripts/check-release-tag.sh
+	$(OPAM_EXEC) dune-release distrib
+	$(OPAM_EXEC) dune-release publish distrib
+	$(OPAM_EXEC) dune-release opam pkg
+	$(OPAM_EXEC) dune-release opam submit
 
 help:
 	@grep -E '^##' Makefile | sed 's/^## //'

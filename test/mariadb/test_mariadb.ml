@@ -3,15 +3,13 @@
 
 module Suite = Suite.Make (struct
     let env = "MARIADB"
-    let default_url = "mariadb://admin:password@database-mariadb/development"
     let default_port = 3306
 
     module Db = Veins.Pools.Make (struct
         let database () =
           Veins.Database.create
             (Veins.Label.create "root")
-            (Veins.Url.create
-               (Suite.env_opt "MARIADB_URL" |> CCOption.value ~default:default_url))
+            (Veins.Url.create (Suite.require_url "MARIADB"))
         ;;
 
         let database_pool_size = 5

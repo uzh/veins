@@ -3,15 +3,13 @@
 
 module Suite = Suite.Make (struct
     let env = "POSTGRES"
-    let default_url = "postgresql://root:root@database-postgres/development"
     let default_port = 5432
 
     module Db = Veins.Pools.Make (struct
         let database () =
           Veins.Database.create
             (Veins.Label.create "root")
-            (Veins.Url.create
-               (Suite.env_opt "POSTGRES_URL" |> CCOption.value ~default:default_url))
+            (Veins.Url.create (Suite.require_url "POSTGRES"))
         ;;
 
         let database_pool_size = 5

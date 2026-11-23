@@ -630,22 +630,41 @@ The init scripts (`.devcontainer/init-*/01.sql`) create a `test` database and on
 (`veins_reader`, `veins_writer`, `veins_migrator`); they only run when the database volume is created, so remove
 the `db-mariadb` / `db-postgres` volumes after changing them.
 
-Environment variables used by the test suite (defaults match the devcontainer):
+Environment variables used by the test suite (the devcontainer sets them):
 
-| Variable                                         | Default                                                     |
+| Variable                                         | Unset                                                       |
 |--------------------------------------------------|-------------------------------------------------------------|
-| `MARIADB_URL`                                    | `mariadb://admin:password@database-mariadb/development`     |
-| `POSTGRES_URL`                                   | `postgresql://root:root@database-postgres/development`      |
+| `MARIADB_URL`                                    | the MariaDB integration suite is skipped                    |
+| `POSTGRES_URL`                                   | the PostgreSQL integration suite is skipped                 |
 | `MARIADB_{READER,WRITER,MIGRATOR}_URL`           | `MARIADB_URL` (a single all-rights user)                    |
 | `POSTGRES_{READER,WRITER,MIGRATOR}_URL`          | `POSTGRES_URL` (a single all-rights user)                   |
 
+The suites skip without their URL so that the package's tests pass where there is no database (opam-repository's
+CI, `dune-release`).
+
 ## Release a new version
 
-1. Document the changes under `## [unreleased]` in `CHANGELOG.md`.
+1. Document the changes under `## [Unreleased]` in `CHANGELOG.md` (add the heading on top of the releases if it
+   isn't there).
 1. On an up-to-date, clean `main`, run `make version-{patch|minor|major}`, or `make version V=X.Y.Z` to release a
    version already set in `dune-project`. This sets the version in `dune-project` and `veins.opam`, turns the
-   unreleased section into `## [X.Y.Z](…) - date` under a new empty one, commits and tags `X.Y.Z`.
-1. Push the commit and the tag: `git push && git push origin X.Y.Z`.
+   unreleased section into `## [X.Y.Z] - date` and adds its link, checks that this is now the first section
+   (`scripts/check-release-tag.sh X.Y.Z`, or it undoes its changes), commits and tags `X.Y.Z`.
+1. Push the commit and the tag: `git push && git push origin X.Y.Z`. CI runs on the tag; when every job passes, the
+   `release` job checks that the tag matches the package version and creates the GitHub release with that
+   version's `CHANGELOG.md` section as its notes.
+1. With the tag checked out, run `make opam-release`. It first checks that HEAD is tagged and that the tag's
+   section is the first one of `CHANGELOG.md` and isn't empty (`scripts/check-release-tag.sh`), then
+   [dune-release](https://github.com/tarides/dune-release) builds the archive `veins-X.Y.Z.tbz` (and builds and
+   tests it), uploads it to the GitHub release, and opens the pull request on
+   [opam-repository](https://github.com/ocaml/opam-repository). The documentation stays with CI's GitHub Pages,
+   so it runs `dune-release publish distrib`, never a plain `dune-release` / `publish`, which would push the docs
+   to a `gh-pages` branch.
 
-CI runs on the tag; when every job passes, the `release` job checks that the tag matches the package version and
-creates the GitHub release with that version's `CHANGELOG.md` section as its notes.
+`make release-check` runs dune-release's checks (lint, build and tests of the package, the change log) before a
+release. dune-release reads the version from the first heading of `CHANGELOG.md`, so a release's heading stays
+`## [X.Y.Z] - date` with its link as a reference at the bottom.
+
+Once per machine: `opam install dune-release`, then `dune-release config` with your GitHub user and your fork of
+opam-repository (`dune-release opam submit` pushes the package's branch there), and a GitHub token with `repo`
+scope in `~/.config/dune/github.token`.

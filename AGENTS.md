@@ -15,9 +15,13 @@ make doc            # odoc → _build/default/_doc/_html/veins/ (CI publishes it
 make lint-opam      # opam lint *.opam
 make watch          # dune build @all --watch
 make deps           # opam install . --deps-only --with-test
+make release-check  # dune-release check (lint, build + tests of the package, CHANGELOG)
+make opam-release   # on the release tag: dune-release distrib, publish distrib, opam pkg, opam submit
 ```
 
 Integration tests require live MariaDB and PostgreSQL containers. All suites are `tests` stanzas, so `dune test` runs them.
+A suite whose `MARIADB_URL` / `POSTGRES_URL` is unset is skipped (`Suite.require_url`), so the package's tests pass
+without a database (opam-repository's CI, dune-release); the devcontainer sets the URLs.
 Run a single suite with `dune build @test/unit/runtest` (or `test/mariadb`, `test/postgresql`).
 Inside the devcontainer, use the `.devcontainer/Makefile` which pre-sets the correct URLs:
 
@@ -185,6 +189,8 @@ pool.
   build requests with `Dialect.request`.
 - **`;;` terminators** are used after top-level `let` bindings in `lib/` (conventional profile, margin 90). See [.ocamlformat](.ocamlformat).
 - **opam files are generated** — edit `dune-project`, never `.opam` files directly.
+- **`CHANGELOG.md` headings** are `## [Unreleased]` and `## [X.Y.Z] - date`, links as references at the bottom:
+  dune-release reads the version from the first heading (`scripts/bump-version.sh` writes them on release).
 - **`include_subdirs unqualified`** is set on `lib/dune`; subdirectories that define their own library (mariadb/, postgresql/) must start their `dune` file with `(include_subdirs no)`.
 
 ## Generating Migrations

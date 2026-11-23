@@ -12,7 +12,6 @@ module type Dialect = sig
   (** Prefix of the environment variables, e.g. ["MARIADB"]. *)
   val env : string
 
-  val default_url : string
   val default_port : int
 
   (** Offset of [NOW()] from UTC in seconds, as an int. *)
@@ -32,6 +31,17 @@ let env_opt var =
   match Sys.getenv_opt var with
   | Some value when not (CCString.is_empty value) -> Some value
   | _ -> None
+;;
+
+(* Without [<env>_URL] the suite is skipped: opam's sandbox and dune-release's
+   check build and test the package without a database. *)
+let require_url env =
+  let var = env ^ "_URL" in
+  match env_opt var with
+  | Some url -> url
+  | None ->
+    Format.printf "%s is not set: skipping the integration tests.@." var;
+    exit 0
 ;;
 
 let expect_exn name f check =
@@ -56,7 +66,7 @@ module Make (D : Dialect) = struct
 
   module Db = D.Db
 
-  let url = env_opt (D.env ^ "_URL") |> CCOption.value ~default:D.default_url
+  let url = require_url D.env
   let role_url role = env_opt (Format.asprintf "%s_%s_URL" D.env role)
 
   (* Every login connects as the all-rights user unless the per-role URLs are
