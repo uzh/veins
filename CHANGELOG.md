@@ -2,7 +2,7 @@
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/) and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-11-23
 
 ### Added
 
@@ -191,6 +191,7 @@ The start of using the changelog. Preparations for our pilot version 0.1.0.
 - CI connects to its service containers on `127.0.0.1`.
 - The PostgreSQL init script used MariaDB syntax.
 
+[0.3.1]: https://github.com/uzh/veins/tree/0.3.1
 [0.3.0]: https://github.com/uzh/veins/tree/0.3.0
 [0.2.0]: https://github.com/uzh/veins/tree/0.2.0
 [0.1.0]: https://github.com/uzh/veins/tree/d5451cd340c4c06efad73a91654abfca33c890c3
