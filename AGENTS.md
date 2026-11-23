@@ -16,7 +16,7 @@ make lint-opam      # opam lint *.opam
 make watch          # dune build @all --watch
 make deps           # opam install . --deps-only --with-test
 make release-check  # dune-release check (lint, build + tests of the package, CHANGELOG)
-make opam-release   # on the release tag: dune-release distrib, publish distrib, opam pkg, opam submit
+make opam-release   # on the release tag: dune-release distrib, publish, opam pkg, opam submit
 ```
 
 Integration tests require live MariaDB and PostgreSQL containers. All suites are `tests` stanzas, so `dune test` runs them.

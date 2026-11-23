@@ -401,7 +401,7 @@ reason: a failed step, an uninitialized database, steps without SQL for the dial
 raises `Error.Exn (Migration_not_clean _)`, so the application doesn't start. Rows outside the set (orphaned) and
 out-of-order migrations of a `` `Warn `` set are logged, not raised. `~skip:true` reads nothing, for tests. An
 application that must keep serving the other databases when one isn't ready (tenants) uses `ready` or
-`check ~policy:(`Fail | `Warn | `Skip)` per database instead, e.g. `Pending` → maintenance until migrated,
+`check ~policy:(`Fail | `Warn |`Skip)` per database instead, e.g. `Pending` → maintenance until migrated,
 `Blocked` → maintenance until repaired. `report` gives the full picture.
 
 #### Dry run in CI
@@ -653,13 +653,15 @@ CI, `dune-release`).
 1. Push the commit and the tag: `git push && git push origin X.Y.Z`. CI runs on the tag; when every job passes, the
    `release` job checks that the tag matches the package version and creates the GitHub release with that
    version's `CHANGELOG.md` section as its notes.
-1. With the tag checked out, run `make opam-release`. It first checks that HEAD is tagged and that the tag's
+1. **OPAM Repository Release**
+    - _DevContainer_: when using devcontainer, make sure your local `ocaml/opam-repository` is mapped into the
+    container, e.g. in `.devcontainer/docker-compose.yml`: `/<path to project>/opam-repository:/home/opam/opam-repository:cached`
+    - With the tag checked out, run `make opam-release`. It first checks that HEAD is  tagged and that the tag's
    section is the first one of `CHANGELOG.md` and isn't empty (`scripts/check-release-tag.sh`), then
    [dune-release](https://github.com/tarides/dune-release) builds the archive `veins-X.Y.Z.tbz` (and builds and
    tests it), uploads it to the GitHub release, and opens the pull request on
-   [opam-repository](https://github.com/ocaml/opam-repository). The documentation stays with CI's GitHub Pages,
-   so it runs `dune-release publish distrib`, never a plain `dune-release` / `publish`, which would push the docs
-   to a `gh-pages` branch.
+   [opam-repository](https://github.com/ocaml/opam-repository). The documentation stays with CI's GitHub Pages:
+   dune-release 2 publishes only the archive.
 
 `make release-check` runs dune-release's checks (lint, build and tests of the package, the change log) before a
 release. dune-release reads the version from the first heading of `CHANGELOG.md`, so a release's heading stays

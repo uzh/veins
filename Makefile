@@ -66,7 +66,7 @@ release-check:
 opam-release:
 	./scripts/check-release-tag.sh
 	$(OPAM_EXEC) dune-release distrib
-	$(OPAM_EXEC) dune-release publish distrib
+	$(OPAM_EXEC) dune-release publish
 	$(OPAM_EXEC) dune-release opam pkg
 	$(OPAM_EXEC) dune-release opam submit
 
