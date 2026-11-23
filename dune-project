@@ -1,4 +1,4 @@
-(lang dune 3.17)
+(lang dune 3.18)
 
 (implicit_transitive_deps false)
 
@@ -21,13 +21,15 @@
 
 (documentation "https://uzh.github.io/veins/")
 
-(bug_reports "https://github.com/uzh/veins")
+(bug_reports "https://github.com/uzh/veins/issues")
+
+(maintenance_intent "(latest)")
 
 (package
  (name veins)
  (synopsis "Database connection pooling and migration library for OCaml")
  (description
-  "Veins provides a database connection pooling library with support for MariaDB and PostgreSQL via functors. It includes migration handling with up/down tracking, transaction management with setup/cleanup hooks, auto-reconnect on connection drop, and a clean label-based interface. The driver libraries veins.mariadb and veins.postgresql are installed when their Caqti driver (caqti-driver-mariadb, caqti-driver-postgresql) is. The veins-gen tool generates migration file boilerplate.")
+  "Veins provides connection pools for MariaDB and PostgreSQL over Caqti and Lwt: a pool per database and login that reconnects with backoff after a connection error, transactions with after-commit hooks, and roles whose permissions are checked at compile time. Its roll-forward migrations track every step in the database, refuse an unsafe run before it starts and offer a read-only dry run. The driver libraries veins.mariadb and veins.postgresql are installed when their Caqti driver (caqti-driver-mariadb, caqti-driver-postgresql) is. The veins-gen tool generates migration file boilerplate.")
  (depends
   (alcotest
    (and
@@ -61,6 +63,7 @@
    (>= 2.1.0))
   (ocaml
    (>= 5.0.0))
+  (ocamlfind :with-test)
   (ocaml-lsp-server :with-dev-setup)
   (mtime
    (>= 2.0.0))

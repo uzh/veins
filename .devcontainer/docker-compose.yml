@@ -10,6 +10,15 @@ services:
       - opam-5.5.2-2.6:/home/opam/.opam:cached
       - ${HOME}/.claude:/home/opam/.claude
     env_file: [.env]
+    environment:
+      MARIADB_URL: mariadb://admin:password@database-mariadb/development
+      MARIADB_READER_URL: mariadb://veins_reader:reader@database-mariadb/development
+      MARIADB_WRITER_URL: mariadb://veins_writer:writer@database-mariadb/development
+      MARIADB_MIGRATOR_URL: mariadb://veins_migrator:migrator@database-mariadb/development
+      POSTGRES_URL: postgresql://root:root@database-postgres/development
+      POSTGRES_READER_URL: postgresql://veins_reader:reader@database-postgres/development
+      POSTGRES_WRITER_URL: postgresql://veins_writer:writer@database-postgres/development
+      POSTGRES_MIGRATOR_URL: postgresql://veins_migrator:migrator@database-postgres/development
     depends_on:
       database-mariadb:
         condition: service_healthy

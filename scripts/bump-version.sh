@@ -92,12 +92,21 @@ perl -pi -e \
   "s/^version: \".*\"/version: \"$NEW_VERSION\"/" \
   ./veins.opam
 
-# CHANGELOG.md: the unreleased section becomes the release, a new empty one goes on top
+# CHANGELOG.md: the unreleased section becomes the release (dune-release reads the version from the first
+# heading, so no empty unreleased section stays on top), its link goes on top of the link references
 DATE=$(date +%Y-%m-%d)
 NEW_VERSION="$NEW_VERSION" DATE="$DATE" REPO_URL="$REPO_URL" perl -0pi -e '
-  s{^## \[unreleased\]\([^)]*\)\n(?:\nTo be released as [^\n]*\n)?}
-   {## [Unreleased]($ENV{REPO_URL}/tree/HEAD)\n\n## [$ENV{NEW_VERSION}]($ENV{REPO_URL}/tree/$ENV{NEW_VERSION}) - $ENV{DATE}\n}mi
+  s{^## \[unreleased\](?:\([^)]*\))?\n(?:\nTo be released as [^\n]*\n)?}
+   {## [$ENV{NEW_VERSION}] - $ENV{DATE}\n}mi;
+  s{^(?=\[[0-9][^\]]*\]: )}{[$ENV{NEW_VERSION}]: $ENV{REPO_URL}/tree/$ENV{NEW_VERSION}\n}m
+    or s{\n*\z}{\n\n[$ENV{NEW_VERSION}]: $ENV{REPO_URL}/tree/$ENV{NEW_VERSION}\n};
 ' ./CHANGELOG.md
+
+if ! ./scripts/check-release-tag.sh "$NEW_VERSION"; then
+  echo "CHANGELOG.md: the unreleased section didn't become ${NEW_VERSION}'s, nothing committed."
+  git checkout -- dune-project veins.opam CHANGELOG.md
+  exit 1
+fi
 
 git add dune-project veins.opam CHANGELOG.md
 
@@ -113,3 +122,4 @@ echo
 echo "To publish:"
 echo "  git push"
 echo "  git push origin ${NEW_VERSION}"
+echo "Once CI created the GitHub release: make opam-release"
