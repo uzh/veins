@@ -1,7 +1,8 @@
 #!/bin/sh
 # Compiles fixture.ml against veins, then every case in cases/, each of which
 # must fail with a type error naming the tag its role doesn't grant: `Write,
-# or the tag a first line "(* expect: `Tag *)" names.
+# or the tag a first line "(* expect: `Tag *)" names. OCaml 5.2 quotes the tag
+# in that message ("`Write"), later versions don't.
 set -eu
 # CI forces colours, and their escape codes would break the grep below.
 export OCAML_COLOR=never
@@ -28,7 +29,8 @@ for case in "$@"; do
   if [ -f "$out/$name.cmo" ]; then
     echo "FAIL $name: compiled, but it uses $tag where it isn't allowed"
     failed=1
-  elif echo "$output" | grep -qF "does not allow tag(s) $tag"; then
+  elif echo "$output" | grep -qF -e "does not allow tag(s) $tag" \
+    -e "does not allow tag(s) \"$tag\""; then
     echo "ok   $name"
   else
     echo "FAIL $name: unexpected error:"

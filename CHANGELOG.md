@@ -2,6 +2,12 @@
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/) and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- The typing tests failed on OCaml 5.2, whose type errors quote the variant tag (`"`Write"`).
+
 ## [0.3.1] - 2026-11-23
 
 ### Added
@@ -191,6 +197,7 @@ The start of using the changelog. Preparations for our pilot version 0.1.0.
 - CI connects to its service containers on `127.0.0.1`.
 - The PostgreSQL init script used MariaDB syntax.
 
+[Unreleased]: https://github.com/uzh/veins/compare/0.3.1...HEAD
 [0.3.1]: https://github.com/uzh/veins/tree/0.3.1
 [0.3.0]: https://github.com/uzh/veins/tree/0.3.0
 [0.2.0]: https://github.com/uzh/veins/tree/0.2.0
